@@ -98,6 +98,7 @@ import { networkInterfaces } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as helpers from "./http-bridge-web/helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(EXT_DIR, "http-bridge-web");
@@ -360,16 +361,9 @@ pi.on("session_info_changed", (event: any) => {
 	 * This replicates pi's _expandSkillCommand + expandPromptTemplate logic so that
 	 * /skill:name and /template commands work via HTTP.
 	 */
-	function stripFrontmatter(content: string): string {
-		const fmMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
-		return fmMatch ? content.slice(fmMatch[0].length) : content;
-	}
-
 	function expandSkillCommand(text: string): string {
-		if (!text.startsWith("/skill:")) return text;
-		const spaceIndex = text.indexOf(" ");
-		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const { isSkill, skillName, args } = helpers.parseSkillCommand(text);
+		if (!isSkill) return text;
 
 		const commands = pi.getCommands();
 		const skill = commands.find((c) => c.name === `skill:${skillName}`);
@@ -380,7 +374,7 @@ pi.on("session_info_changed", (event: any) => {
 
 		try {
 			const content = readFileSync(filePath, "utf-8");
-			const body = stripFrontmatter(content).trim();
+			const body = helpers.stripFrontmatter(content).trim();
 			const baseDir = dirname(filePath);
 			const skillBlock = `<skill name="${skillName}" location="${filePath}">\nReferences are relative to ${baseDir}.\n\n${body}\n</skill>`;
 			return args ? `${skillBlock}\n\n${args}` : skillBlock;
@@ -390,10 +384,8 @@ pi.on("session_info_changed", (event: any) => {
 	}
 
 	function expandPromptTemplate(text: string): string {
-		if (!text.startsWith("/")) return text;
-		const spaceIndex = text.indexOf(" ");
-		const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const { isTemplate, templateName, args } = helpers.parsePromptTemplate(text);
+		if (!isTemplate) return text;
 
 		const commands = pi.getCommands();
 		const template = commands.find((c) => c.source === "prompt" && c.name === templateName);
@@ -404,7 +396,7 @@ pi.on("session_info_changed", (event: any) => {
 
 		try {
 			const content = readFileSync(filePath, "utf-8");
-			const body = stripFrontmatter(content).trim();
+			const body = helpers.stripFrontmatter(content).trim();
 			return args ? `${body}\n\n${args}` : body;
 		} catch {
 			return text;
@@ -530,43 +522,7 @@ pi.on("session_info_changed", (event: any) => {
 		});
 	}
 
-	function extractText(messages: any[]): string {
-		const texts: string[] = [];
-		for (const msg of messages) {
-			if (msg.role !== "assistant") continue;
-			const blocks = Array.isArray(msg.content) ? msg.content : [];
-			for (const block of blocks) {
-				if (block?.type === "text") texts.push(block.text);
-			}
-		}
-		return texts.join("\n\n");
-	}
-
-	function extractToolCalls(messages: any[]): string[] {
-		const calls: string[] = [];
-		for (const msg of messages) {
-			if (msg.role !== "assistant") continue;
-			const blocks = Array.isArray(msg.content) ? msg.content : [];
-			for (const block of blocks) {
-				if (block?.type === "toolCall") {
-					calls.push(`${block.name}(${JSON.stringify(block.arguments).slice(0, 200)})`);
-				}
-			}
-		}
-		return calls;
-	}
-
-	function extractThinking(messages: any[]): string {
-		const parts: string[] = [];
-		for (const msg of messages) {
-			if (msg.role !== "assistant") continue;
-			const blocks = Array.isArray(msg.content) ? msg.content : [];
-			for (const block of blocks) {
-				if (block?.type === "thinking") parts.push(block.thinking);
-			}
-		}
-		return parts.join("\n\n");
-	}
+	const { extractText, extractToolCalls, extractThinking } = helpers;
 
 	/**
 	 * Read the session JSONL file and extract message history.
@@ -575,81 +531,8 @@ pi.on("session_info_changed", (event: any) => {
 	async function readSessionHistory(filePath: string | undefined, limit: number = 0, offset: number = 0): Promise<{ history: any[]; total: number }> {
 		if (!filePath || !existsSync(filePath)) return { history: [], total: 0 };
 		const data = await readFile(filePath, "utf-8");
-		const allHistory: any[] = [];
-		for (const line of data.split("\n")) {
-			const trimmed = line.trim();
-			if (!trimmed) continue;
-			let obj: any;
-			try {
-				obj = JSON.parse(trimmed);
-			} catch {
-				continue;
-			}
-			if (obj.type !== "message") continue;
-			const msg = obj.message;
-			if (!msg) continue;
-			const role = msg.role;
-			const content = msg.content;
-
-			// Skip system messages
-			if (role === "system") continue;
-
-			const entry: any = {
-				id: obj.id,
-				timestamp: obj.timestamp,
-				role,
-			};
-
-			if (typeof content === "string") {
-				entry.text = content;
-			} else if (Array.isArray(content)) {
-				const texts: string[] = [];
-				const toolCalls: any[] = [];
-				const thinking: string[] = [];
-				for (const part of content) {
-					if (part.type === "text" && part.text) {
-						texts.push(part.text);
-					} else if (part.type === "thinking" && part.thinking) {
-						thinking.push(part.thinking);
-					} else if (part.type === "toolCall") {
-						toolCalls.push({
-							id: part.id,
-							name: part.name,
-							arguments: part.arguments,
-						});
-					}
-				}
-				if (texts.length) entry.text = texts.join("");
-				if (thinking.length) entry.thinking = thinking.join("");
-				if (toolCalls.length) entry.toolCalls = toolCalls;
-			}
-
-			// For toolResult messages, extract the result text
-			if (role === "toolResult") {
-				entry.toolCallId = msg.toolCallId;
-				entry.toolName = msg.toolName;
-				entry.isError = msg.isError;
-				if (Array.isArray(content)) {
-					entry.text = content.map((c: any) => c.text || "").join("");
-				} else if (typeof content === "string") {
-					entry.text = content;
-				}
-			}
-
-			// Skip entries with no useful content
-			if (!entry.text && !entry.toolCalls && !entry.thinking) continue;
-
-			allHistory.push(entry);
-		}
-		const total = allHistory.length;
-		if (limit > 0) {
-			// offset counts from the tail: offset=0 → last `limit` items,
-			// offset=50 → items[-(limit+50):-50]
-			const start = Math.max(0, total - offset - limit);
-			const end = Math.max(0, total - offset);
-			return { history: allHistory.slice(start, end), total };
-		}
-		return { history: allHistory, total };
+		const allHistory = helpers.parseHistoryData(data);
+		return helpers.paginateHistory(allHistory, limit, offset);
 	}
 
 	function listAllSessions(): any[] {
@@ -674,16 +557,15 @@ pi.on("session_info_changed", (event: any) => {
 	// ── Static file serving ───────────────────────────────────────────
 
 	async function serveStatic(path: string, res: any): Promise<boolean> {
-		// Normalize and prevent path traversal
-		const safePath = normalize(path).replace(/^(\.\.[/\\])+/, "");
-		const filePath = join(WEB_DIR, safePath);
-
-		// Ensure the resolved path is still within WEB_DIR
-		if (!filePath.startsWith(WEB_DIR)) {
+		const check = helpers.isPathSafe(path, WEB_DIR);
+		if (!check.safe) {
 			res.writeHead(403, { "Content-Type": "text/plain" });
-			res.end("Forbidden");
+			res.end(check.reason);
 			return true;
 		}
+
+		const safePath = normalize(path).replace(/^(\.\.[/\\])+/, "");
+		const filePath = join(WEB_DIR, safePath);
 
 		if (!existsSync(filePath)) {
 			res.writeHead(404, { "Content-Type": "text/plain" });
@@ -709,33 +591,8 @@ pi.on("session_info_changed", (event: any) => {
 
 	// ── Prompt parsing ────────────────────────────────────────────────
 
-	function parsePromptBody(
-		body: string,
-		contentType: string,
-	): { message: string; timeoutMs: number; includeFull: boolean; stream: boolean } | { error: string } {
-		let message: string;
-		let timeoutMs = 300000;
-		let includeFull = false;
-		let stream = false;
-
-		if (contentType.includes("application/json")) {
-			try {
-				const parsed = JSON.parse(body);
-				message = parsed.message;
-				if (typeof parsed.timeout === "number") timeoutMs = parsed.timeout;
-				if (parsed.full === true) includeFull = true;
-				if (parsed.stream === true) stream = true;
-				if (!message || typeof message !== "string") {
-					return { error: "Missing or invalid 'message' field" };
-				}
-			} catch {
-				return { error: "Invalid JSON body" };
-			}
-		} else {
-			message = body;
-		}
-
-		return { message, timeoutMs, includeFull, stream };
+	function parsePromptBody(body: string, contentType: string) {
+		return helpers.parsePromptBody(body, contentType);
 	}
 
 	// ── Send message (shared logic) ───────────────────────────────────

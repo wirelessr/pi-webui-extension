@@ -2,6 +2,8 @@
  * API client — thin wrappers over fetch for the HTTP bridge endpoints.
  */
 
+import { parseSseBuffer } from "./sse-parser.js";
+
 export async function getStatus() {
   const res = await fetch("/api/status");
   return res.json();
@@ -97,21 +99,10 @@ export async function sendPromptStream(message, onEvent) {
 
     buffer += decoder.decode(value, { stream: true });
 
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const rawEvent = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-
-      if (rawEvent.startsWith(":")) continue; // heartbeat
-
-      for (const line of rawEvent.split("\n")) {
-        if (!line.startsWith("data: ")) continue;
-        try {
-          onEvent(JSON.parse(line.slice(6)));
-        } catch {
-          // Ignore parse errors
-        }
-      }
+    const { events, rest } = parseSseBuffer(buffer);
+    buffer = rest;
+    for (const event of events) {
+      onEvent(event);
     }
   }
 }
