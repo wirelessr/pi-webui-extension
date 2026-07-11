@@ -35,6 +35,71 @@ export function allPidsReplaced(currentSessions, prevPids) {
   return currentSessions.every((s) => !prevPids.has(s.pid));
 }
 
+/**
+ * Decide what to do after reload-all polling completes.
+ * @param {boolean} pollSucceeded - whether allPidsReplaced returned true within retry budget
+ * @returns {"reloadPage" | "loadList"}
+ */
+export function reloadAllOutcome(pollSucceeded) {
+  return pollSucceeded ? "reloadPage" : "loadList";
+}
+
+/**
+ * Core reload-all behavior with injectable side effects.
+ * @param {object} opts
+ * @param {Array} opts.sessions - current session list
+ * @param {function} opts.confirmFn - returns boolean (user confirms)
+ * @param {function} opts.reloadSessionFn - (url) => Promise, called per session
+ * @param {function} opts.sessionUrlFn - (session) => string
+ * @param {function} opts.refreshSessionsFn - () => Promise<Array>, returns updated session list
+ * @param {function} opts.pollUntilFn - (fn, interval, max) => Promise<boolean>
+ * @param {function} opts.renderFn - () => void
+ * @param {function} opts.loadFn - () => Promise
+ * @param {function} opts.reloadPageFn - () => void (window.location.reload)
+ * @returns {Promise<{action: string, reason: string}>}
+ */
+export async function doReloadAll(opts) {
+  const {
+    sessions,
+    confirmFn,
+    reloadSessionFn,
+    sessionUrlFn,
+    refreshSessionsFn,
+    pollUntilFn,
+    renderFn,
+    loadFn,
+    reloadPageFn,
+  } = opts;
+
+  if (sessions.length === 0) return { action: "noop", reason: "no sessions" };
+  if (!confirmFn(`Reload all ${sessions.length} session(s)?`)) {
+    return { action: "noop", reason: "user cancelled" };
+  }
+
+  const prevPids = new Set(sessions.map((s) => s.pid));
+
+  await Promise.allSettled(
+    sessions.map((s) => reloadSessionFn(sessionUrlFn(s))),
+  );
+
+  const result = await pollUntilFn(async () => {
+    const all = await refreshSessionsFn();
+    if (allPidsReplaced(all, prevPids)) {
+      renderFn();
+      return true;
+    }
+    return false;
+  }, 1000, 15);
+
+  const outcome = reloadAllOutcome(result);
+  if (outcome === "loadList") {
+    await loadFn();
+    return { action: "loadList", reason: "poll timed out" };
+  }
+  reloadPageFn();
+  return { action: "reloadPage", reason: "all PIDs replaced" };
+}
+
 export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   let sessions = [];
   const qr = createQrCode();
@@ -236,30 +301,17 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   // ── Reload all ──────────────────────────────────────
 
   async function handleReloadAll() {
-    if (sessions.length === 0) return;
-    if (!confirm(`Reload all ${sessions.length} session(s)?`)) return;
-
-    const prevPids = new Set(sessions.map((s) => s.pid));
-
-    await Promise.allSettled(
-      sessions.map((s) => reloadSession(sessionUrl(s))),
-    );
-
-    // Poll until all old PIDs are replaced
-    const result = await pollUntil(async () => {
-      const all = await refreshSessions();
-      if (allPidsReplaced(all, prevPids)) {
-        render();
-        return true;
-      }
-      return false;
-    }, 1000, 15);
-    if (!result) {
-      await load();
-    } else {
-      // Reload succeeded — refresh page to load fresh state from new process
-      window.location.reload();
-    }
+    await doReloadAll({
+      sessions,
+      confirmFn: (msg) => confirm(msg),
+      reloadSessionFn: reloadSession,
+      sessionUrlFn: sessionUrl,
+      refreshSessionsFn: refreshSessions,
+      pollUntilFn: pollUntil,
+      renderFn: render,
+      loadFn: load,
+      reloadPageFn: () => window.location.reload(),
+    });
   }
 
   // ── Close ───────────────────────────────────────────

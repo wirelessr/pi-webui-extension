@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { allPidsReplaced, pickRedirectTarget } from "../http-bridge-web/sessions.js";
+import { allPidsReplaced, doReloadAll, pickRedirectTarget, reloadAllOutcome } from "../http-bridge-web/sessions.js";
 
 const SESSIONS = [
   { pid: 100, port: 7331, url: "http://192.168.1.130:7331" },
@@ -96,5 +96,106 @@ describe("allPidsReplaced", () => {
       { pid: 200, port: 7332 },
     ];
     assert.equal(allPidsReplaced(current, prevPids), false);
+  });
+});
+
+describe("reloadAllOutcome", () => {
+  test("returns reloadPage when poll succeeded", () => {
+    assert.equal(reloadAllOutcome(true), "reloadPage");
+  });
+
+  test("returns loadList when poll failed (timeout)", () => {
+    assert.equal(reloadAllOutcome(false), "loadList");
+  });
+});
+
+describe("doReloadAll", () => {
+  const makeSessions = (pids) => pids.map((pid, i) => ({ pid, port: 7331 + i, url: `http://localhost:${7331 + i}` }));
+
+  const makeOpts = (overrides = {}) => ({
+    sessions: makeSessions([100, 200]),
+    confirmFn: () => true,
+    reloadSessionFn: async () => {},
+    sessionUrlFn: (s) => s.url,
+    refreshSessionsFn: async () => makeSessions([101, 201]),
+    pollUntilFn: async (fn) => fn(),
+    renderFn: () => {},
+    loadFn: async () => {},
+    reloadPageFn: () => {},
+    ...overrides,
+  });
+
+  test("no sessions → noop", async () => {
+    const opts = makeOpts({ sessions: [] });
+    const result = await doReloadAll(opts);
+    assert.equal(result.action, "noop");
+    assert.equal(result.reason, "no sessions");
+  });
+
+  test("user cancels confirm → noop", async () => {
+    const opts = makeOpts({ confirmFn: () => false });
+    const result = await doReloadAll(opts);
+    assert.equal(result.action, "noop");
+    assert.equal(result.reason, "user cancelled");
+  });
+
+  test("all PIDs replaced → reloadPage", async () => {
+    let reloaded = false;
+    const opts = makeOpts({
+      reloadPageFn: () => { reloaded = true; },
+    });
+    const result = await doReloadAll(opts);
+    assert.equal(result.action, "reloadPage");
+    assert.equal(result.reason, "all PIDs replaced");
+    assert.equal(reloaded, true);
+  });
+
+  test("poll times out (PIDs not replaced) → loadList", async () => {
+    let loaded = false;
+    const opts = makeOpts({
+      refreshSessionsFn: async () => makeSessions([100, 200]), // same PIDs
+      pollUntilFn: async () => false, // poll always fails
+      loadFn: async () => { loaded = true; },
+    });
+    const result = await doReloadAll(opts);
+    assert.equal(result.action, "loadList");
+    assert.equal(result.reason, "poll timed out");
+    assert.equal(loaded, true);
+  });
+
+  test("calls reloadSessionFn for each session", async () => {
+    const reloadedUrls = [];
+    const opts = makeOpts({
+      reloadSessionFn: async (url) => { reloadedUrls.push(url); },
+    });
+    await doReloadAll(opts);
+    assert.deepEqual(reloadedUrls, ["http://localhost:7331", "http://localhost:7332"]);
+  });
+
+  test("partial PID replacement → loadList (poll fails)", async () => {
+    const opts = makeOpts({
+      refreshSessionsFn: async () => makeSessions([101, 200]), // one replaced, one not
+      pollUntilFn: async (fn) => fn(), // run once, returns false
+    });
+    const result = await doReloadAll(opts);
+    assert.equal(result.action, "loadList");
+  });
+
+  test("render called when poll succeeds", async () => {
+    let rendered = false;
+    const opts = makeOpts({
+      renderFn: () => { rendered = true; },
+    });
+    await doReloadAll(opts);
+    assert.equal(rendered, true);
+  });
+
+  test("reloadSessionFn errors are swallowed (allSettled)", async () => {
+    const opts = makeOpts({
+      reloadSessionFn: async () => { throw new Error("connection refused"); },
+    });
+    const result = await doReloadAll(opts);
+    // Should not throw — allSettled catches errors
+    assert.equal(result.action, "reloadPage");
   });
 });
