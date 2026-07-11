@@ -243,7 +243,12 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       }
       return false;
     }, 1000, 15);
-    if (!result) await load();
+    if (!result) {
+      await load();
+    } else {
+      // Reload succeeded — refresh page to load fresh state from new process
+      window.location.reload();
+    }
   }
 
   // ── Close ───────────────────────────────────────────
