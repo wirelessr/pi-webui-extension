@@ -683,6 +683,16 @@ export default function (pi: ExtensionAPI) {
 				p.resolve(messages);
 				return;
 			}
+		} else {
+			// agent_end fired but our turn wasn't active — either a TUI turn
+			// or we missed the input event. Log for diagnosis.
+			if (sse || pending) {
+				console.error("[http-bridge] agent_end received but ourTurnActive=false", {
+					hasSse: !!sse,
+					hasPending: !!pending,
+					waitingForExtensionInput,
+				});
+			}
 		}
 
 		ourTurnActive = false;
@@ -765,8 +775,8 @@ export default function (pi: ExtensionAPI) {
 	function writeSseSafe(res: any, data: any): void {
 		try {
 			res.write(`data: ${JSON.stringify(data)}\n\n`);
-		} catch {
-			// Connection might be closed
+		} catch (err) {
+			console.error("[http-bridge] writeSseSafe failed:", err);
 		}
 	}
 
@@ -774,8 +784,9 @@ export default function (pi: ExtensionAPI) {
 		if (!sse) return;
 		try {
 			sse.res.write(`data: ${JSON.stringify(data)}\n\n`);
-		} catch {
-			// Connection might be closed
+		} catch (err) {
+			console.error("[http-bridge] writeSse failed, closing stream:", err);
+			closeSse();
 		}
 	}
 
@@ -785,8 +796,8 @@ export default function (pi: ExtensionAPI) {
 		clearTimeout(sse.timeout);
 		try {
 			sse.res.end();
-		} catch {
-			// Already closed
+		} catch (err) {
+			console.error("[http-bridge] closeSse res.end failed:", err);
 		}
 		sse = null;
 	}
@@ -1120,13 +1131,15 @@ export default function (pi: ExtensionAPI) {
 			if (sse) {
 				try {
 					sse.res.write(": heartbeat\n\n");
-				} catch {
-					// Connection closed
+				} catch (err) {
+					console.error("[http-bridge] heartbeat write failed:", err);
+					closeSse();
 				}
 			}
 		}, 15000);
 
 		const timeout = setTimeout(() => {
+			console.error("[http-bridge] SSE response timeout, aborting agent");
 			try { sessionCtx?.abort(); } catch {}
 			sendSseError("Agent response timeout");
 		}, timeoutMs);
@@ -1138,6 +1151,7 @@ export default function (pi: ExtensionAPI) {
 
 		inputWatchdog = setTimeout(() => {
 			if (waitingForExtensionInput) {
+				console.error("[http-bridge] input watchdog: agent did not start processing message");
 				waitingForExtensionInput = false;
 				ourTurnActive = false;
 				sendSseError("Agent did not start processing the message (input event not received)");
@@ -1212,6 +1226,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				res.end();
 			} catch (err: any) {
+				console.error("[http-bridge] request handler error:", err);
 				if (!res.headersSent) {
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: err.message }));
