@@ -8,12 +8,12 @@
     "lint": "biome check http-bridge-web/ index.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.0.0"
+    "@biomejs/biome": "2.5.3"
   },
   "dependencies": {
-    "@hono/swagger-ui": "^0.6.1",
-    "@hono/zod-openapi": "^1.4.0",
-    "hono": "^4.12.29",
-    "zod": "^4.4.3"
+    "@hono/swagger-ui": "0.6.1",
+    "@hono/zod-openapi": "1.4.0",
+    "hono": "4.12.29",
+    "zod": "4.4.3"
   }
 }
