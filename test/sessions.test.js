@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { allPidsReplaced, doReloadAll, pickRedirectTarget, reloadAllOutcome } from "../http-bridge-web/sessions.js";
+import { allPidsReplaced, doCloseSession, doNewSession, doReloadAll, doRenameSession, pickRedirectTarget, reloadAllOutcome } from "../http-bridge-web/sessions.js";
 
 const SESSIONS = [
   { pid: 100, port: 7331, url: "http://192.168.1.130:7331" },
@@ -197,5 +197,212 @@ describe("doReloadAll", () => {
     const result = await doReloadAll(opts);
     // Should not throw — allSettled catches errors
     assert.equal(result.action, "reloadPage");
+  });
+});
+
+// ── doNewSession ──────────────────────────────────────
+
+describe("doNewSession", () => {
+  const makeOpts = (overrides = {}) => ({
+    prevCount: 1,
+    newSessionFn: async () => {},
+    refreshSessionsFn: async () => SESSIONS,
+    pollUntilFn: async (fn) => fn(),
+    renderFn: () => {},
+    ...overrides,
+  });
+
+  test("new session detected → rendered", async () => {
+    let rendered = false;
+    const opts = makeOpts({
+      prevCount: 2,
+      refreshSessionsFn: async () => SESSIONS, // 3 sessions > prevCount 2
+      renderFn: () => { rendered = true; },
+    });
+    const result = await doNewSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(rendered, true);
+  });
+
+  test("poll timeout → showError", async () => {
+    const opts = makeOpts({
+      prevCount: 3, // same as SESSIONS.length, no growth
+      pollUntilFn: async () => false,
+    });
+    const result = await doNewSession(opts);
+    assert.equal(result.action, "showError");
+    assert.match(result.reason, /not detected/);
+  });
+
+  test("newSessionFn throws → showError with message", async () => {
+    const opts = makeOpts({
+      newSessionFn: async () => { throw new Error("spawn failed"); },
+    });
+    const result = await doNewSession(opts);
+    assert.equal(result.action, "showError");
+    assert.match(result.reason, /spawn failed/);
+  });
+});
+
+// ── doCloseSession ────────────────────────────────────
+
+describe("doCloseSession", () => {
+  const TARGET_SESSION = SESSIONS[1]; // pid 200
+
+  const makeOpts = (overrides = {}) => ({
+    sessions: SESSIONS,
+    session: TARGET_SESSION,
+    confirmFn: () => true,
+    killSessionFn: async () => {},
+    sessionUrlFn: (s) => s.url,
+    getCurrentPortFn: () => 7331, // not the target session's port
+    refreshSessionsFn: async () => SESSIONS.filter((s) => s.pid !== 200),
+    pollUntilFn: async (fn) => fn(),
+    renderFn: () => {},
+    loadFn: async () => {},
+    redirectFn: () => {},
+    ...overrides,
+  });
+
+  test("user cancels confirm → noop", async () => {
+    const opts = makeOpts({ confirmFn: () => false });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "noop");
+  });
+
+  test("only one session → showError", async () => {
+    const opts = makeOpts({
+      sessions: [{ pid: 100, port: 7331 }],
+      session: { pid: 100, port: 7331 },
+    });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "showError");
+    assert.match(result.reason, /last session/);
+  });
+
+  test("close non-current → poll until gone → rendered", async () => {
+    let rendered = false;
+    const opts = makeOpts({
+      renderFn: () => { rendered = true; },
+    });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(rendered, true);
+  });
+
+  test("close current session → redirect to other", async () => {
+    let redirectUrl = null;
+    const opts = makeOpts({
+      session: SESSIONS[0], // pid 100, port 7331
+      getCurrentPortFn: () => 7331,
+      redirectFn: (url) => { redirectUrl = url; },
+    });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "redirect");
+    assert.equal(redirectUrl, "http://192.168.1.130:7332");
+  });
+
+  test("close current session, no other available → showError", async () => {
+    const opts = makeOpts({
+      sessions: [{ pid: 100, port: 7331 }],
+      session: { pid: 100, port: 7331 },
+      getCurrentPortFn: () => 7331,
+    });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "showError");
+  });
+
+  test("killSessionFn throws → showError", async () => {
+    const opts = makeOpts({
+      killSessionFn: async () => { throw new Error("kill failed"); },
+    });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "showError");
+    assert.match(result.reason, /kill failed/);
+  });
+
+  test("poll timeout → loadList", async () => {
+    let loaded = false;
+    const opts = makeOpts({
+      refreshSessionsFn: async () => SESSIONS, // session still there
+      pollUntilFn: async () => false,
+      loadFn: async () => { loaded = true; },
+    });
+    const result = await doCloseSession(opts);
+    assert.equal(result.action, "loadList");
+    assert.equal(loaded, true);
+  });
+});
+
+// ── doRenameSession ───────────────────────────────────
+
+describe("doRenameSession", () => {
+  const SESSION = { pid: 100, port: 7331, url: "http://localhost:7331", sessionName: "old-name", sessionId: "abc123" };
+
+  const makeOpts = (overrides = {}) => ({
+    session: SESSION,
+    newName: "new-name",
+    currentName: "old-name",
+    renameSessionFn: async () => {},
+    sessionUrlFn: (s) => s.url,
+    refreshSessionsFn: async () => [{ ...SESSION, sessionName: "new-name" }],
+    pollUntilFn: async (fn) => fn(),
+    renderFn: () => {},
+    ...overrides,
+  });
+
+  test("name unchanged → rendered (no API call)", async () => {
+    let called = false;
+    const opts = makeOpts({
+      newName: "old-name",
+      renameSessionFn: async () => { called = true; },
+    });
+    const result = await doRenameSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(result.reason, "no change");
+    assert.equal(called, false);
+  });
+
+  test("empty name → rendered (no API call)", async () => {
+    let called = false;
+    const opts = makeOpts({
+      newName: "",
+      renameSessionFn: async () => { called = true; },
+    });
+    const result = await doRenameSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(called, false);
+  });
+
+  test("rename succeeds → name updated", async () => {
+    let rendered = false;
+    const opts = makeOpts({
+      renderFn: () => { rendered = true; },
+    });
+    const result = await doRenameSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(result.reason, "name updated");
+    assert.equal(rendered, true);
+  });
+
+  test("poll timeout → still renders", async () => {
+    let rendered = false;
+    const opts = makeOpts({
+      pollUntilFn: async () => false,
+      renderFn: () => { rendered = true; },
+    });
+    const result = await doRenameSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.match(result.reason, /timed out/);
+    assert.equal(rendered, true);
+  });
+
+  test("renameSessionFn throws → showError", async () => {
+    const opts = makeOpts({
+      renameSessionFn: async () => { throw new Error("name too long"); },
+    });
+    const result = await doRenameSession(opts);
+    assert.equal(result.action, "showError");
+    assert.match(result.reason, /name too long/);
   });
 });
