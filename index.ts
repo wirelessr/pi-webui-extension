@@ -618,7 +618,8 @@ export default function (pi: ExtensionAPI) {
 		// stderr is redirected to a log file inside the sh command itself,
 		// because Node's stdio pipe breaks when the spawner exits.
 		const logFile = sessionLogPath(actualPort);
-		spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc --session "${sessionPath}" 2>>"${logFile}"`], {
+		const nameArg = sessionName ? ` --name "${sessionName.replace(/"/g, "\\\"")}"` : "";
+		spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc${nameArg} --session "${sessionPath}" 2>>"${logFile}"`], {
 			detached: true,
 			stdio: "ignore",
 		});
