@@ -165,8 +165,7 @@ import { createSessionsView } from "./sessions.js";
       ? `${ctx.percent.toFixed(1)}%/${formatTokens(ctx.contextWindow)}`
       : `?/${formatTokens(ctx.contextWindow)}`;
     parts.push(ctxStr);
-    if (data.model) parts.push(data.model);
-    $statsDisplay.textContent = parts.join(" ");
+    $statsDisplay.textContent = parts.join(" \u00b7 ");
   }
 
   // ── Init ──────────────────────────────────────────
