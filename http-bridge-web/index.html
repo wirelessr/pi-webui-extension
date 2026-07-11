@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>pi bridge</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>bridge</text></svg>">
+</head>
+<body>
+  <div id="app" data-active-view="chat">
+    <header id="topbar">
+      <div class="brand">
+        <span class="logo">pi bridge</span>
+        <span id="session-name" class="session-name"></span>
+      </div>
+      <div class="status-area">
+        <span id="busy-indicator" class="status idle">idle</span>
+        <span id="port-display" class="port"></span>
+      </div>
+    </header>
+
+    <div id="main-layout">
+      <!-- Left sidebar: sessions -->
+      <aside id="sidebar-left" class="sidebar" data-view="sessions">
+        <div class="sidebar-header">
+          <span>sessions</span>
+          <button id="refresh-sessions" class="icon-btn" title="Refresh">&#8635;</button>
+        </div>
+        <div id="sessions-list" class="sidebar-list"></div>
+      </aside>
+
+      <!-- Center: chat -->
+      <main id="chat" class="chat" data-view="chat">
+        <div id="messages"></div>
+        <div id="scroll-bottom" class="hidden">
+          <button class="ghost-btn">scroll to bottom</button>
+        </div>
+      </main>
+
+      <!-- Right sidebar: commands -->
+      <aside id="sidebar-right" class="sidebar" data-view="commands">
+        <div class="sidebar-header">
+          <span id="commands-title">commands</span>
+          <span id="commands-count" class="count-badge"></span>
+        </div>
+        <div id="commands-list" class="sidebar-list"></div>
+      </aside>
+    </div>
+
+    <!-- Mobile bottom navigation -->
+    <nav id="mobile-nav">
+      <button class="nav-btn active" data-target="sessions">
+        <span class="nav-icon">&#9776;</span>
+        <span class="nav-label">sessions</span>
+      </button>
+      <button class="nav-btn active" data-target="chat">
+        <span class="nav-icon">&#9993;</span>
+        <span class="nav-label">chat</span>
+      </button>
+      <button class="nav-btn active" data-target="commands">
+        <span class="nav-icon">/</span>
+        <span class="nav-label">commands</span>
+      </button>
+    </nav>
+
+    <footer id="input-area">
+      <div class="input-row">
+        <textarea id="message-input" placeholder="Send a message...  Type / to filter commands" rows="1" autofocus></textarea>
+        <button id="send-btn" class="send-btn">Send</button>
+      </div>
+      <div class="input-hint">
+        <span>Enter to send, Shift+Enter for newline</span>
+        <label class="checkbox-label">
+          <input type="checkbox" id="auto-scroll" checked> auto-scroll
+        </label>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/qrcode-lib.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
