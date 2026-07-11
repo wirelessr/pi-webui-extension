@@ -647,7 +647,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Session spawn helper ─────────────────────────────────────────
 
 	function sessionLogPath(pid: number): string {
-		return join(dataDir, `session-${pid}.stderr.log`);
+		return join(BRIDGE_DIR, `session-${pid}.stderr.log`);
 	}
 
 	function spawnNewSession(cwd?: string): { pid: number } {
