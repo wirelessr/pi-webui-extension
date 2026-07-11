@@ -737,6 +737,16 @@ pi.on("session_info_changed", (event: any) => {
 			const url = (req.url || "/").split("?")[0];
 			const method = req.method || "GET";
 
+			// CORS: allow cross-origin from any session's WebUI
+			res.setHeader("Access-Control-Allow-Origin", "*");
+			res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+			if (method === "OPTIONS") {
+				res.writeHead(204);
+				res.end();
+				return;
+			}
+
 			// ── API routes ───────────────────────────────────────────
 			if (url === "/api/status" && method === "GET") {
 				res.writeHead(200, { "Content-Type": "application/json" });
@@ -873,6 +883,58 @@ pi.on("session_info_changed", (event: any) => {
 				const killed = killSession(pid);
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ ok: killed, pid }));
+				return;
+			}
+			if (url === "/api/rename-session" && method === "POST") {
+				let body = "";
+				for await (const chunk of req) body += chunk;
+				let name: string | undefined;
+				if (body) {
+					try {
+						name = JSON.parse(body).name;
+					} catch {
+						// ignore
+					}
+				}
+				if (!name || typeof name !== "string") {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Missing or invalid name" }));
+					return;
+				}
+				try {
+					pi.setSessionName(name);
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ ok: true, name }));
+				} catch (err: any) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: err.message }));
+				}
+				return;
+			}
+			if (url === "/api/reload" && method === "POST") {
+				try {
+					const sessionPath = sessionFile;
+					if (!sessionPath) {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: "No session file to resume" }));
+						return;
+					}
+					// Self-respawn: spawn new process, then exit
+					spawn("sh", ["-c", `sleep 1 && pi --mode rpc --session "${sessionPath}"`], {
+						detached: true,
+						stdio: "ignore",
+					});
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ ok: true }));
+					// Clean up discovery file before exiting
+					if (discoveryFile) {
+						try { unlinkSync(discoveryFile); } catch {}
+					}
+					process.exit(0);
+				} catch (err: any) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: err.message }));
+				}
 				return;
 			}
 

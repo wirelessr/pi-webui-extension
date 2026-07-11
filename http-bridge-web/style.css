@@ -223,6 +223,18 @@ body {
   white-space: nowrap;
 }
 
+.rename-input {
+  font-weight: 600;
+  font-size: 13px;
+  background: var(--bg-surface, #1a1a2e);
+  border: 1px solid var(--accent, #7c6cf0);
+  border-radius: 4px;
+  color: var(--text, #e0e0e0);
+  padding: 2px 6px;
+  width: 100%;
+  outline: none;
+}
+
 .session-item .item-meta {
   font-family: var(--mono);
   font-size: 10px;

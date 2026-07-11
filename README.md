@@ -62,6 +62,7 @@ Each pi session is a separate process with its own extension instance. There is 
 | `POST` | `/api/prompt` | Send message to agent |
 | `POST` | `/api/new-session` | Spawn a new pi session in RPC mode |
 | `POST` | `/api/kill-session` | Terminate a session by PID (SIGTERM) |
+| `POST` | `/api/rename-session` | Rename the current session |
 
 ### GET /api/history
 

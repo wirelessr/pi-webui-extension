@@ -36,6 +36,7 @@ import { createSessionsView } from "./sessions.js";
   const $sessionsList = document.getElementById("sessions-list");
   const $refreshSessions = document.getElementById("refresh-sessions");
   const $newSession = document.getElementById("new-session");
+  const $reloadAll = document.getElementById("reload-all");
   const $commandsList = document.getElementById("commands-list");
   const $commandsCount = document.getElementById("commands-count");
   const $commandsTitle = document.getElementById("commands-title");
@@ -82,6 +83,7 @@ import { createSessionsView } from "./sessions.js";
 
   $refreshSessions?.addEventListener("click", () => sessionsView.load());
   $newSession?.addEventListener("click", () => sessionsView.handleNew());
+  $reloadAll?.addEventListener("click", () => sessionsView.handleReloadAll());
 
   // ── Command selection ──
 
