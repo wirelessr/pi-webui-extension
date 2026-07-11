@@ -249,7 +249,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
         textEl.className = "text";
         if (entry.thinking) {
           const thinkBlock = document.createElement("div");
-          thinkBlock.className = "thinking-block expanded";
+          thinkBlock.className = "thinking-block";
           const thinkHeader = document.createElement("div");
           thinkHeader.className = "thinking-header";
           thinkHeader.textContent = "thinking";
