@@ -79,8 +79,52 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         handleRename(s, nameEl);
       });
 
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showSessionMenu(e, s, nameEl);
+      });
+
       $list.appendChild(el);
     }
+  }
+
+  let $sessionMenu = null;
+  function closeSessionMenu() {
+    if ($sessionMenu) {
+      $sessionMenu.remove();
+      $sessionMenu = null;
+    }
+  }
+  document.addEventListener("click", closeSessionMenu);
+  document.addEventListener("scroll", closeSessionMenu, true);
+
+  function showSessionMenu(e, s, nameEl) {
+    closeSessionMenu();
+    $sessionMenu = document.createElement("div");
+    $sessionMenu.className = "context-menu";
+
+    const renameItem = document.createElement("button");
+    renameItem.className = "context-menu-item";
+    renameItem.textContent = "Rename";
+    renameItem.addEventListener("click", () => {
+      closeSessionMenu();
+      handleRename(s, nameEl);
+    });
+    $sessionMenu.appendChild(renameItem);
+
+    const closeItem = document.createElement("button");
+    closeItem.className = "context-menu-item";
+    closeItem.textContent = "Close";
+    closeItem.addEventListener("click", () => {
+      closeSessionMenu();
+      handleClose(s);
+    });
+    $sessionMenu.appendChild(closeItem);
+
+    $sessionMenu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
+    $sessionMenu.style.top = `${Math.min(e.clientY, window.innerHeight - 150)}px`;
+    document.body.appendChild($sessionMenu);
   }
 
   function handleRename(s, nameEl) {
