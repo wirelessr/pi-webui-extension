@@ -51,37 +51,23 @@ Each pi session is a separate process with its own extension instance. There is 
 └── README.md                   # This file
 ```
 
-## API Routes
+## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | WebUI (index.html) |
-| `GET` | `/<file>` | Static file from http-bridge-web/ |
-| `GET` | `/api/status` | This session's status (busy, session ID, port) |
-| `GET` | `/api/sessions` | All active sessions on this machine |
-| `GET` | `/api/commands` | Available skills, prompt templates, and built-in commands |
-| `GET` | `/api/history` | Conversation history from session JSONL (paginated) |
-| `POST` | `/api/command` | Execute a built-in command (compact) |
-| `POST` | `/api/abort` | Abort the current agent operation |
-| `POST` | `/api/prompt` | Send message to agent |
-| `POST` | `/api/new-session` | Spawn a new pi session in RPC mode |
-| `POST` | `/api/kill-session` | Terminate a session by PID (SIGTERM) |
-| `POST` | `/api/rename-session` | Rename the current session |
-| `POST` | `/api/reload` | Self-respawn (resume same session with fresh code) |
+Interactive API docs (Swagger UI) available at `http://<your-lan-ip>:7331/api/docs`.
 
-### GET /api/history
+OpenAPI spec at `http://<your-lan-ip>:7331/api/openapi.json`.
 
-Returns conversation history from the session JSONL file. Paginated from the tail.
+Key endpoints:
 
-```
-GET /api/history?limit=50&offset=0
-```
+- `POST /api/prompt` — Send message (JSON or plain text, supports SSE streaming)
+- `GET /api/sessions` — List all active sessions
+- `POST /api/new-session` / `POST /api/kill-session` — Session lifecycle
+- `POST /api/rename-session` / `POST /api/reload` — Session management
+- `GET /api/history` — Conversation history (paginated)
+- `GET /api/commands` — Available skills and templates
+- `POST /api/abort` — Abort current operation
 
-- `limit`: Max entries to return (0 = all)
-- `offset`: Number of entries to skip from the end (0 = most recent)
-- Response: `{ history: [...], total: 123 }`
-
-The WebUI loads all available history in one request. The `limit` and `offset` parameters are available on the API for programmatic use.
+## API Usage
 
 ### POST /api/prompt
 
@@ -105,22 +91,17 @@ curl -N -H 'Accept: text/event-stream' \
   -X POST http://localhost:7331/api/prompt -d 'What is 2+2?'
 ```
 
-Options:
-- `message` (string, required): The prompt text
-- `full` (boolean): Include raw `messages` array in response
-- `timeout` (number): Response timeout in ms (default: 300000 = 5 min)
-- `stream` (boolean): Force SSE streaming even without Accept header
+### GET /api/history
 
-### JSON Response (non-streaming)
+Returns conversation history from the session JSONL file. Paginated from the tail.
 
-```json
-{
-  "text": "Here's the summary...",
-  "toolCalls": ["bash({\"command\":\"ls\"})"],
-  "thinking": "Let me analyze this...",
-  "messageCount": 5
-}
 ```
+GET /api/history?limit=50&offset=0
+```
+
+- `limit`: Max entries to return (0 = all)
+- `offset`: Number of entries to skip from the end (0 = most recent)
+- Response: `{ history: [...], total: 123 }`
 
 ### SSE Event Format
 
@@ -133,6 +114,17 @@ data: {"type":"done","text":"...","toolCalls":[...],"messages":[...]}
 ```
 
 Event types: `agent_start`, `turn_start`, `turn_end`, `text_start`, `text_delta`, `text_end`, `thinking_start`, `thinking_delta`, `thinking_end`, `toolcall_start`, `toolcall_end`, `tool_execution_start`, `tool_execution_end`, `done`, `error`.
+
+### JSON Response (non-streaming)
+
+```json
+{
+  "text": "Here's the summary...",
+  "toolCalls": ["bash({\"command\":\"ls\"})"],
+  "thinking": "Let me analyze this...",
+  "messageCount": 5
+}
+```
 
 ## WebUI
 
