@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { doInit, doSelectCommand, doSendPrompt, doStop, reapplyExpandState } from "../http-bridge-web/flow.js";
+import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "../http-bridge-web/flow.js";
 
 // ── Mock helpers ──────────────────────────────────────
 
@@ -412,23 +412,31 @@ describe("doInit — initialization sequence", () => {
   });
 });
 
-// ── reapplyExpandState ─────────────────────────────────
+// ── syncExpandButtonState ─────────────────────────────
 
-describe("reapplyExpandState", () => {
+describe("syncExpandButtonState", () => {
   const cases = [
-    { desc: "toolsExpanded=true calls expandAllToolsFn", toolsExpanded: true, expectCalled: true },
-    { desc: "toolsExpanded=false does not call expandAllToolsFn", toolsExpanded: false, expectCalled: false },
+    { desc: "no blocks → button false", total: 0, expanded: 0, toolsExpanded: false, expectButton: false, expectExpandCalled: false },
+    { desc: "all expanded → button true", total: 3, expanded: 3, toolsExpanded: false, expectButton: true, expectExpandCalled: false },
+    { desc: "some collapsed → button false", total: 3, expanded: 1, toolsExpanded: false, expectButton: false, expectExpandCalled: false },
+    { desc: "button says expanded but DOM collapsed → re-expand", total: 2, expanded: 0, toolsExpanded: true, expectButton: true, expectExpandCalled: true },
+    { desc: "button says expanded and DOM matches → stay true", total: 2, expanded: 2, toolsExpanded: true, expectButton: true, expectExpandCalled: false },
   ];
 
-  for (const { desc, toolsExpanded, expectCalled } of cases) {
+  for (const { desc, total, expanded, toolsExpanded, expectButton, expectExpandCalled } of cases) {
     test(desc, () => {
-      let called = false;
-      const result = reapplyExpandState({
+      let buttonState = null;
+      let expandCalled = false;
+      const result = syncExpandButtonState({
         toolsExpanded,
-        expandAllToolsFn: () => { called = true; },
+        countAllFn: () => total,
+        countExpandedFn: () => expanded,
+        expandAllToolsFn: () => { expandCalled = true; },
+        onStateChange: (val) => { buttonState = val; },
       });
-      assert.strictEqual(called, expectCalled);
-      assert.strictEqual(result.applied, toolsExpanded);
+      assert.strictEqual(buttonState, expectButton);
+      assert.strictEqual(expandCalled, expectExpandCalled);
+      assert.strictEqual(result.expanded, expectButton);
     });
   }
 });
