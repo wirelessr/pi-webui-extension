@@ -22,6 +22,11 @@ export async function getHistory() {
   return res.json();
 }
 
+export async function abortAgent() {
+  const res = await fetch("/api/abort", { method: "POST" });
+  return res.json();
+}
+
 export async function executeCommand(command) {
   const res = await fetch("/api/command", {
     method: "POST",

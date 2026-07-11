@@ -11,12 +11,13 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { getStatus, sendPromptStream, getHistory, executeCommand } from "./api.js";
+import { getStatus, sendPromptStream, getHistory, executeCommand, abortAgent } from "./api.js";
 import { createChat } from "./chat.js";
 import { createSessionsView } from "./sessions.js";
 import { createCommandsView } from "./commands.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
+import { createContextMenu } from "./context-menu.js";
 
 (function () {
   "use strict";
@@ -72,7 +73,10 @@ import { createMobileNav } from "./mobile-nav.js";
     mobileNav,
     onSend: handleSend,
     onSelectCommand: handleSelectCommand,
+    onStop: handleStop,
   });
+
+  const contextMenu = createContextMenu({ $messages });
 
   // ── Session refresh ───────────────────────────────
 
@@ -94,6 +98,16 @@ import { createMobileNav } from "./mobile-nav.js";
     // Non-executable builtins: just insert the text (will be ignored by agent)
     // Skills and prompts: insert into input for normal send flow
     input.selectCommand(cmd);
+  }
+
+  // ── Stop flow ──────────────────────────────────────
+
+  async function handleStop() {
+    try {
+      await abortAgent();
+    } catch (err) {
+      chat.showError(err.message || "Failed to abort");
+    }
   }
 
   // ── Send flow ─────────────────────────────────────

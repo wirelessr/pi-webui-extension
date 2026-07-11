@@ -596,6 +596,8 @@ body {
 
 .send-btn:hover { background: var(--accent-hover); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.send-btn.stop { background: var(--danger, #e74c3c); }
+.send-btn.stop:hover { background: var(--danger-hover, #c0392b); }
 
 .input-hint {
   display: flex;
@@ -793,4 +795,35 @@ body {
   #input-area { padding-bottom: 8px; }
 
   .send-btn { padding: 10px 16px; }
+}
+
+/* ── Context menu ── */
+
+.context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 160px;
+  background: var(--bg-elevated, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  color: var(--text, #e0e0e0);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.context-menu-item:hover {
+  background: var(--accent, #4a9eff);
+  color: #fff;
 }

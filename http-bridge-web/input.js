@@ -10,6 +10,7 @@ export function createInput({
   mobileNav,
   onSend,
   onSelectCommand,
+  onStop,
 }) {
   let isStreaming = false;
 
@@ -64,7 +65,13 @@ export function createInput({
 
   // ── Event handlers ──
 
-  $sendBtn.addEventListener("click", sendMessage);
+  $sendBtn.addEventListener("click", () => {
+    if (isStreaming) {
+      onStop();
+    } else {
+      sendMessage();
+    }
+  });
 
   $input.addEventListener("input", () => {
     autoResize();
@@ -112,7 +119,8 @@ export function createInput({
 
   function setStreaming(streaming) {
     isStreaming = streaming;
-    $sendBtn.disabled = streaming;
+    $sendBtn.textContent = streaming ? "Stop" : "Send";
+    $sendBtn.className = streaming ? "send-btn stop" : "send-btn";
   }
 
   function focus() {

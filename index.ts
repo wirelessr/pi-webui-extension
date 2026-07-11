@@ -283,7 +283,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_info_changed", (event: any) => {
+pi.on("session_info_changed", (event: any) => {
 		sessionName = event.name;
 		writeDiscovery();
 	});
@@ -923,6 +923,23 @@ export default function (pi: ExtensionAPI) {
 					}
 					res.writeHead(200, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ ok: true }));
+				} catch (err: any) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: err.message }));
+				}
+				return;
+			}
+
+			if (url === "/api/abort" && method === "POST") {
+				try {
+					if (sessionCtx) {
+						sessionCtx.abort();
+						res.writeHead(200, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ ok: true }));
+					} else {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: "No active session context" }));
+					}
 				} catch (err: any) {
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: err.message }));
