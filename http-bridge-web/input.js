@@ -3,6 +3,32 @@
  * Coordinates between the input box and the commands view.
  */
 
+/**
+ * Compute the result of inserting a command into the input text.
+ * Pure function — no DOM dependency.
+ * @param {string} text — current input value
+ * @param {number} cursor — current cursor position
+ * @param {{name: string}} cmd — command to insert
+ * @returns {{value: string, cursor: number}} new input value and cursor position
+ */
+export function applyCommand(text, cursor, cmd) {
+  // Find the / token at cursor position
+  let start = cursor;
+  while (start > 0 && !/\s/.test(text[start - 1])) start--;
+  const token = text.slice(start, cursor);
+
+  if (!token.startsWith("/")) {
+    // No / token — replace entire input with the command
+    return { value: `/${cmd.name} `, cursor: cmd.name.length + 2 };
+  }
+
+  const end = cursor;
+  const suffix = text.slice(end).startsWith(" ") ? "" : " ";
+  const value = text.slice(0, start) + "/" + cmd.name + suffix + text.slice(end);
+  const newCursor = start + cmd.name.length + 1 + suffix.length;
+  return { value, cursor: newCursor };
+}
+
 export function createInput({
   $input,
   $sendBtn,
@@ -44,27 +70,9 @@ export function createInput({
   }
 
   function selectCommand(cmd) {
-    const ctx = getCommandToken();
-    if (!ctx) {
-      // No / token — replace entire input with the command
-      $input.value = `/${cmd.name} `;
-      const cursorPos = $input.value.length;
-      $input.setSelectionRange(cursorPos, cursorPos);
-      $input.focus();
-      autoResize();
-      filterCommands();
-      onSelectCommand();
-      if (mobileNav.isMobile()) {
-        mobileNav.switchView("chat");
-      }
-      return;
-    }
-
-    const text = $input.value;
-    const suffix = text.slice(ctx.end).startsWith(" ") ? "" : " ";
-    $input.value = text.slice(0, ctx.start) + "/" + cmd.name + suffix + text.slice(ctx.end);
-    const newCursorPos = ctx.start + cmd.name.length + 1 + suffix.length;
-    $input.setSelectionRange(newCursorPos, newCursorPos);
+    const { value, cursor } = applyCommand($input.value, $input.selectionStart, cmd);
+    $input.value = value;
+    $input.setSelectionRange(cursor, cursor);
     $input.focus();
     autoResize();
     filterCommands();
