@@ -5,13 +5,32 @@
  */
 
 /**
+ * Build the sh command string for spawning a new session.
+ *
+ * Behavioral spec:
+ * 1. Includes `pi --mode rpc` (no --session, fresh session)
+ * 2. Stderr redirected to logFile with `[port] ` prefix per line
+ * 3. Uses `tail -f /dev/null |` as stdin keepalive
+ *
+ * @param {object} opts
+ * @param {string} opts.logFile — shared stderr log file path
+ * @param {number} [opts.port] — port for log prefix (optional, new sessions get assigned later)
+ * @returns {string} sh command string
+ */
+export function buildSpawnCommand({ logFile, port }) {
+  const escapedLog = logFile.replace(/"/g, '\\"');
+  const prefix = port != null ? `[${port}]` : "[new]";
+  return `tail -f /dev/null | pi --mode rpc 2> >(sed "s/^/${prefix} /" >> "${escapedLog}")`;
+}
+
+/**
  * Build the sh command string for reloading a session.
  *
  * Behavioral spec:
  * 1. Always includes `pi --mode rpc --session "<sessionPath>"`
  * 2. Includes `--name "<name>"` only when name is provided
  * 3. Includes `PI_HTTP_PORT=<port>` env var
- * 4. Includes `2>>"<logFile>"` stderr redirect
+ * 4. Stderr redirected to logFile with `[port] ` prefix per line
  * 5. Uses `sleep 1 && tail -f /dev/null |` as stdin keepalive
  * 6. Escapes double quotes in name and paths
  *
@@ -19,14 +38,14 @@
  * @param {number} opts.port
  * @param {string} opts.sessionPath
  * @param {string|undefined} opts.name — session display name
- * @param {string} opts.logFile — stderr log file path
+ * @param {string} opts.logFile — stderr log file path (shared, appended)
  * @returns {string} sh command string
  */
 export function buildReloadCommand({ port, sessionPath, name, logFile }) {
   const escapedPath = sessionPath.replace(/"/g, '\\"');
   const escapedLog = logFile.replace(/"/g, '\\"');
   const nameArg = name ? ` --name "${name.replace(/"/g, '\\"')}"` : "";
-  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2>>"${escapedLog}"`;
+  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2> >(sed "s/^/[${port}] /" >> "${escapedLog}")`;
 }
 
 /**
