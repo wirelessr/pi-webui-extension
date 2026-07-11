@@ -20,3 +20,22 @@ jobs:
       - run: npx biome check http-bridge-web/ index.ts
 
       - run: node --test test/*.test.js
+
+      - name: Coverage threshold check
+        run: |
+          node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/coverage.txt
+          # Verify all behavior modules have 100% line coverage
+          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser; do
+            line=$(grep " $mod.js " /tmp/coverage.txt || true)
+            if [ -z "$line" ]; then
+              echo "ERROR: Module $mod.js not found in coverage report"
+              exit 1
+            fi
+            pct=$(echo "$line" | awk -F'|' '{print $2}' | awk '{print $1}' | tr -d '.')
+            if [ "$pct" != "10000" ]; then
+              echo "ERROR: $mod.js line coverage is ${pct:0:-2}.${pct: -2}%, expected 100%"
+              echo "$line"
+              exit 1
+            fi
+            echo "OK: $mod.js — 100% line coverage"
+          done

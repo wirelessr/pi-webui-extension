@@ -117,6 +117,13 @@ describe("createSelectionState", () => {
     assert.equal(state.getSelectedIndex(), -1);
     assert.equal(state.getFiltered().length, 1);
   });
+
+  test("getCommands returns all available commands", () => {
+    const { state } = setup();
+    assert.equal(state.getCommands().length, COMMANDS.length);
+    state.filter("skill", filterCommands);
+    assert.equal(state.getCommands().length, COMMANDS.length);
+  });
 });
 
 // ── decideKeyAction ───────────────────────────────────

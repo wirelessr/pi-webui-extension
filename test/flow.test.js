@@ -380,4 +380,34 @@ describe("doInit — initialization sequence", () => {
     assert.equal(received.pid, 12345);
     assert.equal(received.sessionName, "my-session");
   });
+
+  test("commands failure does not block sessions/history", async () => {
+    const result = await doInit({
+      getStatusFn: async () => ({ port: 7331 }),
+      getHistoryFn: async () => ({ history: [{ role: "user", text: "hi" }] }),
+      loadCommandsFn: async () => { throw new Error("commands fail"); },
+      loadSessionsFn: () => {},
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+    });
+    assert.equal(result.commandsLoaded, false);
+    assert.ok(result.sessionsLoaded);
+    assert.ok(result.historyLoaded);
+  });
+
+  test("sessions failure does not block history", async () => {
+    const result = await doInit({
+      getStatusFn: async () => ({ port: 7331 }),
+      getHistoryFn: async () => ({ history: [{ role: "user", text: "hi" }] }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => { throw new Error("sessions fail"); },
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+    });
+    assert.ok(result.commandsLoaded);
+    assert.equal(result.sessionsLoaded, false);
+    assert.ok(result.historyLoaded);
+  });
 });
