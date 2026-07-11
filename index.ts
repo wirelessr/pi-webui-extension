@@ -90,6 +90,7 @@
  */
 
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, extname, normalize, dirname, basename } from "node:path";
@@ -157,7 +158,6 @@ export default function (pi: ExtensionAPI) {
 	try {
 		// Resolve from pi's main entry point to find internal submodules
 		const piEntryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
-		const { createRequire } = require("node:module");
 		const piRequire = createRequire(piEntryUrl);
 		const slashMod = piRequire("./core/slash-commands.js");
 		if (slashMod?.BUILTIN_SLASH_COMMANDS) {
@@ -168,7 +168,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// Commands that can be triggered from WebUI via /api/command
-	const WEBUI_EXECUTABLE = new Set(["compact", "reload"]);
+	const WEBUI_EXECUTABLE = new Set(["compact"]);
 
 	// ── Agent event handlers ──────────────────────────────────────────
 
@@ -254,7 +254,6 @@ export default function (pi: ExtensionAPI) {
 			"text_start", "text_delta", "text_end",
 			"thinking_start", "thinking_delta", "thinking_end",
 			"toolcall_start", "toolcall_delta", "toolcall_end",
-			"done", "error",
 		];
 		if (forwardTypes.includes(ae.type)) {
 			writeSse(ae);
@@ -691,7 +690,7 @@ pi.on("session_info_changed", (event: any) => {
 		let includeFull = false;
 		let stream = false;
 
-		if (contentType.includes("application/json") || body.startsWith("{")) {
+		if (contentType.includes("application/json")) {
 			try {
 				const parsed = JSON.parse(body);
 				message = parsed.message;
@@ -719,7 +718,9 @@ pi.on("session_info_changed", (event: any) => {
 	): Promise<any[]> {
 		await waitForIdle(30000);
 
+		let watchdogReject: ((e: Error) => void) | null = null;
 		const responsePromise = new Promise<any[]>((resolve, reject) => {
+			watchdogReject = reject;
 			pending = {
 				resolve,
 				reject,
@@ -727,6 +728,7 @@ pi.on("session_info_changed", (event: any) => {
 					pending = null;
 					waitingForExtensionInput = false;
 					ourTurnActive = false;
+					try { sessionCtx?.abort(); } catch {}
 					reject(new Error("Agent response timeout"));
 				}, timeoutMs),
 			};
@@ -734,9 +736,19 @@ pi.on("session_info_changed", (event: any) => {
 
 		const expanded = expandInput(message);
 		waitingForExtensionInput = true;
+		inputWatchdog = setTimeout(() => {
+			if (waitingForExtensionInput) {
+				waitingForExtensionInput = false;
+				ourTurnActive = false;
+				if (pending) { clearTimeout(pending.timeout); pending = null; }
+				if (watchdogReject) watchdogReject(new Error("Agent did not start processing the message (input event not received)"));
+			}
+		}, 10000);
+
 		try {
 			pi.sendUserMessage(expanded);
 		} catch (err) {
+			if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 			waitingForExtensionInput = false;
 			pending = null;
 			throw err;
@@ -770,6 +782,7 @@ pi.on("session_info_changed", (event: any) => {
 		}, 15000);
 
 		const timeout = setTimeout(() => {
+			try { sessionCtx?.abort(); } catch {}
 			sendSseError("Agent response timeout");
 		}, timeoutMs);
 
@@ -781,6 +794,9 @@ pi.on("session_info_changed", (event: any) => {
 				clearInterval(sse.heartbeat);
 				clearTimeout(sse.timeout);
 				sse = null;
+				if (ourTurnActive) {
+					try { sessionCtx?.abort(); } catch {}
+				}
 			}
 		});
 
@@ -914,8 +930,6 @@ pi.on("session_info_changed", (event: any) => {
 				try {
 					if (cmdName === "compact" && sessionCtx) {
 						sessionCtx.compact();
-					} else if (cmdName === "reload" && sessionCtx) {
-						await sessionCtx.reload();
 					} else {
 						res.writeHead(400, { "Content-Type": "application/json" });
 						res.end(JSON.stringify({ error: `Command "${cmdName}" has no handler` }));
@@ -1022,7 +1036,11 @@ pi.on("session_info_changed", (event: any) => {
 		});
 
 		server.on("error", (err: any) => {
-			if (err.code !== "EADDRINUSE" && ctx.hasUI) {
+			if (err.code === "EADDRINUSE") {
+				// Port was grabbed between findFreePort and listen — retry next port
+				actualPort++;
+				server!.listen(actualPort, HOST);
+			} else if (ctx.hasUI) {
 				ctx.ui.notify(`HTTP bridge error: ${err}`, "error");
 			}
 		});
@@ -1057,6 +1075,14 @@ pi.on("session_info_changed", (event: any) => {
 		waitingForExtensionInput = false;
 		ourTurnActive = false;
 		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
+
+		// Reject idle waiters so they don't hang for 30s
+		const waiters = idleWaiters;
+		idleWaiters = [];
+		for (const w of waiters) {
+			clearTimeout(w.timeout);
+			w.resolve();
+		}
 
 		if (discoveryFile && existsSync(discoveryFile)) {
 			try {

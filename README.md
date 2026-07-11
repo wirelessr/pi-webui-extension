@@ -57,7 +57,7 @@ Each pi session is a separate process with its own extension instance. There is 
 | `GET` | `/api/sessions` | All active sessions on this machine |
 | `GET` | `/api/commands` | Available skills, prompt templates, and built-in commands |
 | `GET` | `/api/history` | Conversation history from session JSONL (paginated) |
-| `POST` | `/api/command` | Execute a built-in command (compact, reload) |
+| `POST` | `/api/command` | Execute a built-in command (compact) |
 | `POST` | `/api/abort` | Abort the current agent operation |
 | `POST` | `/api/prompt` | Send message to agent |
 
@@ -73,7 +73,7 @@ GET /api/history?limit=50&offset=0
 - `offset`: Number of entries to skip from the end (0 = most recent)
 - Response: `{ history: [...], total: 123 }`
 
-The WebUI loads 50 entries initially, with a "Load earlier messages" button to fetch older pages. Offset is stable against new messages (they append at the tail).
+The WebUI loads all available history in one request. The `limit` and `offset` parameters are available on the API for programmatic use.
 
 ### POST /api/prompt
 
@@ -129,9 +129,7 @@ Event types: `agent_start`, `turn_start`, `turn_end`, `text_start`, `text_delta`
 ## WebUI
 
 - QR code button on each session item — scan to connect a mobile device to that session's URL
-- Conversation history persists across refresh (loaded from session JSONL via `/api/history`, paginated 50 at a time)
-- SSE disconnect detection: if the connection drops without a `done`/`error` event (e.g. extension reloaded), WebUI shows an error message
-- Auto-recovery: 3s health poll detects when server comes back after reload, reloads history and resets state
+- Conversation history persists across refresh (loaded from session JSONL via `/api/history`)
 
 ### Desktop (>= 700px)
 
@@ -181,7 +179,7 @@ Bottom tab bar with three views: sessions, chat, commands.
 3. Wrap in `<skill name="..." location="...">` block (same format as TUI)
 4. Append user args after the block
 
-Built-in commands (/compact, /reload, /new, /model, etc.) are loaded dynamically from pi's `BUILTIN_SLASH_COMMANDS` export — no hardcoded list. Most are TUI-only (shown in the command list with a "TUI" tag and reduced opacity). `/compact` and `/reload` are executable from WebUI via `POST /api/command`, which calls `ctx.compact()` and `ctx.reload()` respectively.
+Built-in commands (/compact, /reload, /new, /model, etc.) are loaded dynamically from pi's `BUILTIN_SLASH_COMMANDS` export — no hardcoded list. Most are TUI-only (shown in the command list with a "TUI" tag and reduced opacity). Only `/compact` is executable from WebUI via `POST /api/command`, which calls `ctx.compact()`. `/reload` is not executable from WebUI because `ctx.reload()` is only available on `ExtensionCommandContext`, not the `ExtensionContext` that event handlers receive. Use the TUI to reload.
 
 Extension commands (`/cmd`) are not supported via HTTP because they require pi's internal command handler, not text expansion. Use the TUI for those.
 
@@ -256,6 +254,6 @@ pi auto-discovers `extensions/*/index.ts` on startup. No additional configuratio
 - One request at a time per session; concurrent requests get HTTP 409
 - Don't type in the TUI while a request is in flight (agent processes one turn at a time)
 - Extension commands (`/cmd`) not supported via HTTP
-- Most built-in commands are TUI-only; only `/compact` and `/reload` are executable from WebUI
+- Most built-in commands are TUI-only; only `/compact` is executable from WebUI
 - Default response timeout is 5 minutes
 - No authentication

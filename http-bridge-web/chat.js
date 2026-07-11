@@ -14,6 +14,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   let currentThinkingContent = null;
   let currentToolMap = new Map();
   let textBuffer = "";
+  let committedText = "";
   let thinkingBuffer = "";
   let cursorEl = null;
 
@@ -62,6 +63,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     $messages.appendChild(currentAssistantEl);
 
     textBuffer = "";
+    committedText = "";
     thinkingBuffer = "";
     currentThinkingEl = null;
     currentToolMap.clear();
@@ -78,14 +80,15 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
 
   function updateText() {
     if (!currentTextEl) return;
-    currentTextEl.innerHTML = renderContent("assistant", textBuffer);
+    currentTextEl.innerHTML = renderContent("assistant", committedText + textBuffer);
     addStreamingCursor();
     scrollToBottom();
   }
 
   function flushText() {
     if (!currentTextEl || textBuffer.length === 0) return;
-    currentTextEl.innerHTML = renderContent("assistant", textBuffer);
+    committedText += textBuffer;
+    currentTextEl.innerHTML = renderContent("assistant", committedText);
     textBuffer = "";
   }
 
