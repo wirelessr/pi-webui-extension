@@ -149,12 +149,16 @@ export default function (pi: ExtensionAPI) {
 			detached: true,
 			stdio: "ignore",
 		});
-		if (discoveryFile) {
-			try { unlinkSync(discoveryFile); } catch {}
-		}
+		// Delete discovery file on exit (after spawn), not before.
+		// If spawn fails, the old process is still alive with its discovery file intact,
+		// preventing orphan sessions with no discovery file.
+		const oldDiscoveryFile = discoveryFile;
 		console.error(`[http-bridge] reload: pi pid=${process.pid} ppid=${process.ppid} pgid=${process.getgid?.()}`);
 		const oldShPid = process.ppid;
 		process.on("exit", () => {
+			if (oldDiscoveryFile) {
+				try { unlinkSync(oldDiscoveryFile); } catch {}
+			}
 			console.error(`[http-bridge] reload exit: killing process group -${oldShPid}`);
 			if (oldShPid) {
 				try { process.kill(-oldShPid, "SIGTERM"); } catch (err: any) {
