@@ -3,6 +3,9 @@
  *
  * Sessions run on separate ports. Use sessionUrl(s) to get a session's
  * base URL, then pass it to the cross-session API functions.
+ *
+ * All functions accept an optional `fetchFn` parameter (defaults to
+ * global fetch) to enable unit testing without a browser.
  */
 
 import { parseSseBuffer } from "./sse-parser.js";
@@ -39,95 +42,89 @@ export async function pollUntil(fn, intervalMs = 500, maxAttempts = 10) {
   return null;
 }
 
+/**
+ * Throw a typed error from a non-ok response.
+ * @param {Response} res
+ */
+async function throwHttpError(res) {
+  const err = await res.json().catch(() => ({ error: "Request failed" }));
+  throw new Error(err.error || `HTTP ${res.status}`);
+}
+
 // ── Current session API ───────────────────────────────
 
-export async function getStatus() {
-  const res = await fetch("/api/status");
+export async function getStatus(fetchFn = fetch) {
+  const res = await fetchFn("/api/status");
   return res.json();
 }
 
-export async function getSessions() {
-  const res = await fetch("/api/sessions");
+export async function getSessions(fetchFn = fetch) {
+  const res = await fetchFn("/api/sessions");
   return res.json();
 }
 
-export async function getCommands() {
-  const res = await fetch("/api/commands");
+export async function getCommands(fetchFn = fetch) {
+  const res = await fetchFn("/api/commands");
   return res.json();
 }
 
-export async function getHistory() {
-  const res = await fetch("/api/history");
+export async function getHistory(fetchFn = fetch) {
+  const res = await fetchFn("/api/history");
   return res.json();
 }
 
-export async function abortAgent() {
-  const res = await fetch("/api/abort", { method: "POST" });
+export async function abortAgent(fetchFn = fetch) {
+  const res = await fetchFn("/api/abort", { method: "POST" });
   return res.json();
 }
 
-export async function executeCommand(command) {
-  const res = await fetch("/api/command", {
+export async function executeCommand(command, fetchFn = fetch) {
+  const res = await fetchFn("/api/command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ command }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwHttpError(res);
   return res.json();
 }
 
 // ── Session management (target current session) ───────
 
-export async function newSession(cwd) {
-  const res = await fetch("/api/new-session", {
+export async function newSession(cwd, fetchFn = fetch) {
+  const res = await fetchFn("/api/new-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(cwd ? { cwd } : {}),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwHttpError(res);
   return res.json();
 }
 
-export async function killSession(pid) {
-  const res = await fetch("/api/kill-session", {
+export async function killSession(pid, fetchFn = fetch) {
+  const res = await fetchFn("/api/kill-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pid }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwHttpError(res);
   return res.json();
 }
 
 // ── Cross-session API (target any session by URL) ─────
 
-export async function renameSession(name, baseUrl) {
-  const res = await fetch(`${baseUrl}/api/rename-session`, {
+export async function renameSession(name, baseUrl, fetchFn = fetch) {
+  const res = await fetchFn(`${baseUrl}/api/rename-session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwHttpError(res);
   return res.json();
 }
 
-export async function reloadSession(baseUrl) {
-  const res = await fetch(`${baseUrl}/api/reload`, { method: "POST" });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+export async function reloadSession(baseUrl, fetchFn = fetch) {
+  const res = await fetchFn(`${baseUrl}/api/reload`, { method: "POST" });
+  if (!res.ok) await throwHttpError(res);
   return res.json();
 }
 
@@ -137,22 +134,20 @@ export async function reloadSession(baseUrl) {
  * Send a prompt and stream SSE events.
  * @param {string} message
  * @param {(event: object) => void} onEvent
+ * @param {typeof fetch} [fetchFn]
  * @returns {Promise<void>} Resolves when stream ends.
  */
-export async function sendPromptStream(message, onEvent) {
-  const res = await fetch("/api/prompt", {
+export async function sendPromptStream(message, onEvent, fetchFn = fetch) {
+  const res = await fetchFn("/api/prompt", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Accept": "text/event-stream",
+      Accept: "text/event-stream",
     },
     body: JSON.stringify({ message }),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwHttpError(res);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
