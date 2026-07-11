@@ -32,6 +32,7 @@
  * @param {function} opts.getHistoryFn — () => Promise<{history: Array}>
  * @param {function} opts.getStatusFn — () => Promise<object>
  * @param {function} [opts.onStatusUpdateFn] — (status) => void, optional
+ * @param {function} [opts.clientLogFn] — (level, message, data) => Promise, for diagnostics
  * @returns {Promise<{completed: boolean, historyReloaded: boolean, error: string|null}>}
  */
 export async function doSendPrompt(opts) {
@@ -44,6 +45,7 @@ export async function doSendPrompt(opts) {
     getHistoryFn,
     getStatusFn,
     onStatusUpdateFn,
+    clientLogFn = async () => {},
   } = opts;
 
   chat.addMessage("user", text);
@@ -54,10 +56,13 @@ export async function doSendPrompt(opts) {
   let streamComplete = false;
   let errorMsg = null;
   let historyReloaded = false;
+  let eventCount = 0;
 
   try {
     await sendPromptStreamFn(text, (event) => {
+      eventCount++;
       if (event.type === "done") streamComplete = true;
+      if (event.type === "error") errorMsg = event.message;
       chat.handleEvent(event);
     });
   } catch (err) {
@@ -71,6 +76,7 @@ export async function doSendPrompt(opts) {
   setBusyFn(false);
 
   if (!streamComplete) {
+    await clientLogFn("warn", "doSendPrompt: stream incomplete, reloading history", { eventCount, errorMsg });
     try {
       const data = await getHistoryFn();
       if (data.history && data.history.length > 0) {
@@ -80,6 +86,8 @@ export async function doSendPrompt(opts) {
     } catch {
       // Best effort
     }
+  } else {
+    await clientLogFn("info", "doSendPrompt: stream complete", { eventCount });
   }
 
   try {

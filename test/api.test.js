@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   abortAgent,
+  clientLog,
   executeCommand,
   getCommands,
   getHistory,
@@ -250,10 +251,12 @@ describe("sendPromptStream", () => {
       bodyText: 'data: {"type":"done"}\n\n',
     });
     await sendPromptStream("hello", () => {}, fetchFn);
-    assert.equal(fetchFn.calls[0].url, "/api/prompt");
-    assert.equal(fetchFn.calls[0].init.method, "POST");
-    assert.equal(fetchFn.calls[0].init.headers.Accept, "text/event-stream");
-    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { message: "hello" });
+    // calls[0] is clientLog, calls[1] is the actual prompt fetch
+    const promptCall = fetchFn.calls.find((c) => c.url === "/api/prompt");
+    assert.ok(promptCall, "prompt fetch was made");
+    assert.equal(promptCall.init.method, "POST");
+    assert.equal(promptCall.init.headers.Accept, "text/event-stream");
+    assert.deepEqual(JSON.parse(promptCall.init.body), { message: "hello" });
   });
 
   test("parses SSE events and calls onEvent for each", async () => {
@@ -289,5 +292,44 @@ describe("sendPromptStream", () => {
   test("throws on non-ok response", async () => {
     const fetchFn = mockFetch({ status: 409, jsonData: { error: "busy" } });
     await assert.rejects(sendPromptStream("test", () => {}, fetchFn), /busy/);
+  });
+
+  test("throws on fetch failure", async () => {
+    const fetchFn = async () => { throw new Error("network down"); };
+    await assert.rejects(sendPromptStream("test", () => {}, fetchFn), /network down/);
+  });
+
+  test("throws on reader error", async () => {
+    const fetchFn = async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => { throw new Error("read failed"); } }) },
+    });
+    await assert.rejects(sendPromptStream("test", () => {}, fetchFn), /read failed/);
+  });
+});
+
+// ── clientLog ─────────────────────────────────────────
+
+describe("clientLog", () => {
+  test("sends POST to /api/client-log", async () => {
+    let capturedUrl, capturedInit;
+    const fetchFn = async (url, init) => {
+      capturedUrl = url;
+      capturedInit = init;
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    await clientLog("error", "test msg", { foo: 1 }, fetchFn);
+    assert.equal(capturedUrl, "/api/client-log");
+    assert.equal(capturedInit.method, "POST");
+    const body = JSON.parse(capturedInit.body);
+    assert.equal(body.level, "error");
+    assert.equal(body.message, "test msg");
+    assert.deepEqual(body.data, { foo: 1 });
+  });
+
+  test("swallows fetch errors silently", async () => {
+    const fetchFn = async () => { throw new Error("network down"); };
+    // Should not throw
+    await clientLog("info", "msg", undefined, fetchFn);
   });
 });

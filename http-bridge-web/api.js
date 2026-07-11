@@ -131,6 +131,25 @@ export async function reloadSession(baseUrl, fetchFn = fetch) {
 // ── Streaming ─────────────────────────────────────────
 
 /**
+ * Send a log entry to the server's bridge.log.
+ * @param {string} level
+ * @param {string} message
+ * @param {any} [data]
+ * @param {typeof fetch} [fetchFn]
+ */
+export async function clientLog(level, message, data, fetchFn = fetch) {
+  try {
+    await fetchFn("/api/client-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level, message, data }),
+    });
+  } catch {
+    // Best effort — don't let logging cause issues
+  }
+}
+
+/**
  * Send a prompt and stream SSE events.
  * @param {string} message
  * @param {(event: object) => void} onEvent
@@ -138,31 +157,52 @@ export async function reloadSession(baseUrl, fetchFn = fetch) {
  * @returns {Promise<void>} Resolves when stream ends.
  */
 export async function sendPromptStream(message, onEvent, fetchFn = fetch) {
-  const res = await fetchFn("/api/prompt", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    },
-    body: JSON.stringify({ message }),
-  });
+  await clientLog("info", "SSE: fetch starting", { messageLength: message.length }, fetchFn);
+  let res;
+  try {
+    res = await fetchFn("/api/prompt", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({ message }),
+    });
+  } catch (err) {
+    await clientLog("error", "SSE: fetch failed", { error: err.message }, fetchFn);
+    throw err;
+  }
 
-  if (!res.ok) await throwHttpError(res);
+  if (!res.ok) {
+    await clientLog("error", "SSE: non-ok response", { status: res.status }, fetchFn);
+    return throwHttpError(res);
+  }
 
+  await clientLog("info", "SSE: response received, starting reader loop", undefined, fetchFn);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let eventCount = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        await clientLog("info", "SSE: reader done", { eventCount }, fetchFn);
+        break;
+      }
 
-    buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value, { stream: true });
 
-    const { events, rest } = parseSseBuffer(buffer);
-    buffer = rest;
-    for (const event of events) {
-      onEvent(event);
+      const { events, rest } = parseSseBuffer(buffer);
+      buffer = rest;
+      for (const event of events) {
+        eventCount++;
+        onEvent(event);
+      }
     }
+  } catch (err) {
+    await clientLog("error", "SSE: reader loop error", { error: err.message, eventCount }, fetchFn);
+    throw err;
   }
 }

@@ -102,6 +102,7 @@ export default function (pi: ExtensionAPI) {
 		sendAndStream,
 		isPendingOrSse: () => !!(pending || sse),
 		reload: doReload,
+		clientLog,
 	};
 
 	const app = createBridgeApp(deps);
@@ -110,6 +111,12 @@ export default function (pi: ExtensionAPI) {
 
 	function bridgeLogPath(): string {
 		return join(BRIDGE_DIR, "bridge.log");
+	}
+
+	function clientLog(level: string, message: string, data?: any): void {
+		const prefix = `[${actualPort}] [client]`;
+		const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+		console.error(`${prefix} [${level}] ${message}${dataStr}`);
 	}
 
 	function spawnNewSession(cwd?: string): { pid: number } {
