@@ -180,7 +180,7 @@ export default function (pi: ExtensionAPI) {
 	 * RPC mode alive without requiring a TTY.
 	 */
 	function spawnNewSession(cwd?: string): { pid: number } {
-		const child = spawn("sh", ["-c", "tail -f /dev/null | pi --rpc"], {
+		const child = spawn("sh", ["-c", "tail -f /dev/null | pi --mode rpc"], {
 			cwd: cwd || process.cwd(),
 			detached: true,
 			stdio: "ignore",

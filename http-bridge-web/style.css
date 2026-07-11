@@ -222,6 +222,9 @@ body {
   font-size: 10px;
   color: var(--text-dim);
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .qr-btn {
