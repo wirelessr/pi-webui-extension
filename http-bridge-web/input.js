@@ -45,7 +45,20 @@ export function createInput({
 
   function selectCommand(cmd) {
     const ctx = getCommandToken();
-    if (!ctx) return;
+    if (!ctx) {
+      // No / token — replace entire input with the command
+      $input.value = `/${cmd.name} `;
+      const cursorPos = $input.value.length;
+      $input.setSelectionRange(cursorPos, cursorPos);
+      $input.focus();
+      autoResize();
+      filterCommands();
+      onSelectCommand();
+      if (mobileNav.isMobile()) {
+        mobileNav.switchView("chat");
+      }
+      return;
+    }
 
     const text = $input.value;
     const suffix = text.slice(ctx.end).startsWith(" ") ? "" : " ";
