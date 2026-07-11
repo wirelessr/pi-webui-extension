@@ -20,7 +20,7 @@
 export function buildSpawnCommand({ logFile, port }) {
   const escapedLog = logFile.replace(/"/g, '\\"');
   const prefix = port != null ? `[${port}]` : "[new]";
-  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed "s/^/${prefix} /" >> "${escapedLog}"`;
+  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> "${escapedLog}"`;
 }
 
 /**
@@ -45,7 +45,7 @@ export function buildReloadCommand({ port, sessionPath, name, logFile }) {
   const escapedPath = sessionPath.replace(/"/g, '\\"');
   const escapedLog = logFile.replace(/"/g, '\\"');
   const nameArg = name ? ` --name "${name.replace(/"/g, '\\"')}"` : "";
-  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2>&1 1>/dev/null | sed "s/^/[${port}] /" >> "${escapedLog}"`;
+  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2>&1 1>/dev/null | sed -u "s/^/[${port}] /" >> "${escapedLog}"`;
 }
 
 /**
