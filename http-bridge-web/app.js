@@ -90,11 +90,12 @@ import { formatStats } from "./utils.js";
   $newSession?.addEventListener("click", () => sessionsView.handleNew());
   $reloadAll?.addEventListener("click", () => sessionsView.handleReloadAll());
 
-  // ── Expand/collapse all tool blocks ──
+  // ── Expand/collapse all tool blocks (persisted in localStorage) ──
 
-  let toolsExpanded = false;
+  let toolsExpanded = localStorage.getItem("pi-webui-tools-expanded") === "true";
   function setExpandButtonState(expanded) {
     toolsExpanded = expanded;
+    localStorage.setItem("pi-webui-tools-expanded", String(expanded));
     if ($expandToolsBtn) {
       $expandToolsBtn.textContent = expanded ? "▲" : "▼";
       $expandToolsBtn.title = expanded ? "Collapse all tool/thinking blocks" : "Expand all tool/thinking blocks";
