@@ -66,19 +66,29 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   }
 
   async function handleNew() {
+    let created = false;
     try {
+      const prevCount = sessions.length;
       await newSession();
-      // Poll a few times — new session needs time to start and write discovery file
-      for (let i = 0; i < 5; i++) {
+      // Poll until new session's discovery file appears
+      for (let i = 0; i < 10; i++) {
         await new Promise((r) => setTimeout(r, 1000));
-        await load();
-        // Check if a new session appeared
-        const data = await getSessions();
-        const newCount = (data.sessions || []).length;
-        if (newCount > sessions.length) break;
+        try {
+          const data = await getSessions();
+          sessions = data.sessions || [];
+          if (sessions.length > prevCount) {
+            created = true;
+            render();
+            break;
+          }
+        } catch {
+          // Server might be temporarily unavailable during reload — keep polling
+        }
+      }
+      if (!created) {
+        $list.innerHTML = '<div class="cmd-empty">New session not detected — try refresh</div>';
       }
     } catch (err) {
-      // Show error in list
       $list.innerHTML = `<div class="cmd-empty">Failed to create: ${escapeHtml(err.message)}</div>`;
     }
   }
@@ -87,12 +97,26 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     if (!confirm(`Close session "${s.sessionName || s.sessionId?.slice(0, 8)}"?`)) return;
     try {
       await killSession(s.pid);
-      // Wait for discovery file cleanup, then refresh
-      await new Promise((r) => setTimeout(r, 500));
-      await load();
     } catch (err) {
       $list.innerHTML = `<div class="cmd-empty">Failed to close: ${escapeHtml(err.message)}</div>`;
+      return;
     }
+    // Poll until the session disappears from discovery
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const data = await getSessions();
+        sessions = data.sessions || [];
+        if (!sessions.some((x) => x.pid === s.pid)) {
+          render();
+          return;
+        }
+      } catch {
+        // Keep polling
+      }
+    }
+    // Fallback: just reload
+    await load();
   }
 
   return { load, handleNew };
