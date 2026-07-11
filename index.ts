@@ -79,6 +79,8 @@ const StatusResponse = z.object({
 	sessionId: z.string().nullable(),
 	sessionName: z.string().nullable(),
 	port: z.number(),
+	pid: z.number(),
+	startedAt: z.number(),
 	model: z.string().nullable(),
 	usage: UsageStats,
 	context: ContextUsageInfo,
@@ -203,6 +205,7 @@ export default function (pi: ExtensionAPI) {
 	let sessionName: string | undefined;
 	let discoveryFile: string | undefined;
 	let sessionCtx: any = null;
+	let sessionStartTime = Date.now();
 
 	// Built-in commands loaded from pi's internal module
 	let builtinCommands: { name: string; description: string }[] = [];
@@ -414,6 +417,8 @@ export default function (pi: ExtensionAPI) {
 			sessionId: sessionId ?? null,
 			sessionName: sessionName ?? null,
 			port: actualPort,
+			pid: process.pid,
+			startedAt: sessionStartTime,
 			model: sessionCtx?.model?.id ?? null,
 			usage: computeUsageStats(),
 			context: computeContextUsage(),

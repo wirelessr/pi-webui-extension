@@ -32,6 +32,7 @@ import { createSessionsView } from "./sessions.js";
   const $sendBtn = document.getElementById("send-btn");
   const $busyIndicator = document.getElementById("busy-indicator");
   const $portDisplay = document.getElementById("port-display");
+  const $pidDisplay = document.getElementById("pid-display");
   const $sessionName = document.getElementById("session-name");
   const $statsDisplay = document.getElementById("stats-display");
   const $sessionsList = document.getElementById("sessions-list");
@@ -148,6 +149,7 @@ import { createSessionsView } from "./sessions.js";
       try {
         const status = await getStatus();
         updateStats(status);
+        if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
       } catch {
         // Best effort
       }
@@ -196,6 +198,7 @@ import { createSessionsView } from "./sessions.js";
       const data = await getStatus();
       currentPort = data.port;
       $portDisplay.textContent = `:${data.port}`;
+      if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
       if (data.sessionName) $sessionName.textContent = data.sessionName;
       else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
       updateStats(data);
