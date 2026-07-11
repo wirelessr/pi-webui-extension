@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, executeCommand, getHistory, getStatus, sendPromptStream } from "./api.js";
+import { abortAgent, clientLog, executeCommand, getHistory, getStatus, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { createContextMenu } from "./context-menu.js";
@@ -139,6 +139,7 @@ import { formatStats } from "./utils.js";
       sendPromptStreamFn: sendPromptStream,
       getHistoryFn: getHistory,
       getStatusFn: getStatus,
+      clientLogFn: clientLog,
       onStatusUpdateFn: (status) => {
         updateStats(status);
         if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
@@ -190,4 +191,20 @@ import { formatStats } from "./utils.js";
   }
 
   init();
+
+  // ── Global error logging ───────────────────────────
+
+  window.addEventListener("error", (e) => {
+    clientLog("error", "window.error", {
+      message: e.message,
+      filename: e.filename,
+      lineno: e.lineno,
+    });
+  });
+
+  window.addEventListener("unhandledrejection", (e) => {
+    clientLog("error", "unhandledrejection", {
+      reason: e.reason?.message || String(e.reason),
+    });
+  });
 })();

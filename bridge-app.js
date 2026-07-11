@@ -305,6 +305,24 @@ const reloadRoute = createRoute({
 	},
 });
 
+const ClientLogBody = z.object({
+	level: z.string(),
+	message: z.string(),
+	data: z.any().optional(),
+}).openapi("ClientLogBody");
+
+const clientLogRoute = createRoute({
+	method: "post",
+	path: "/api/client-log",
+	summary: "Log a client-side message to bridge.log",
+	request: {
+		body: { content: { "application/json": { schema: ClientLogBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+	},
+});
+
 // ── Static file serving ───────────────────────────────────────────
 
 async function serveStatic(path, c) {
@@ -571,6 +589,17 @@ export function createBridgeApp(deps) {
 			return c.json({ error: "No session file to resume" }, 500);
 		}
 		deps.reload();
+		return c.json({ ok: true });
+	});
+
+	app.openapi(clientLogRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ ok: false });
+		}
+		deps.clientLog(body.level || "info", body.message, body.data);
 		return c.json({ ok: true });
 	});
 

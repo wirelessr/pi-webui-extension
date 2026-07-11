@@ -18,6 +18,7 @@ function createMockDeps(overrides = {}) {
 		spawnNewSession: [],
 		killSession: [],
 		reload: [],
+		clientLog: [],
 		compact: [],
 		abort: [],
 	};
@@ -66,6 +67,7 @@ function createMockDeps(overrides = {}) {
 		},
 		isPendingOrSse: () => false,
 		reload: () => { calls.reload.push(true); },
+		clientLog: (level, message, data) => { calls.clientLog.push({ level, message, data }); },
 		...overrides,
 	};
 }
@@ -370,6 +372,25 @@ test("POST /api/reload without session file returns 500", async () => {
 	const app = createBridgeApp(createMockDeps({ getSessionFile: () => null }));
 	const res = await app.fetch(req("/api/reload", { method: "POST" }));
 	assert.strictEqual(res.status, 500);
+});
+
+test("POST /api/client-log calls clientLog dep", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/client-log", { level: "error", message: "test error", data: { foo: 1 } }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(deps.calls.clientLog.length, 1);
+	assert.strictEqual(deps.calls.clientLog[0].level, "error");
+	assert.strictEqual(deps.calls.clientLog[0].message, "test error");
+	assert.deepStrictEqual(deps.calls.clientLog[0].data, { foo: 1 });
+});
+
+test("POST /api/client-log with invalid JSON returns 400", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/client-log", "{bad json"));
+	assert.strictEqual(res.status, 400);
 });
 
 test("GET /api/openapi.json returns OpenAPI spec", async () => {
