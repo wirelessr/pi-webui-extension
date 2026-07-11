@@ -95,13 +95,32 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
 
   async function handleClose(s) {
     if (!confirm(`Close session "${s.sessionName || s.sessionId?.slice(0, 8)}"?`)) return;
+
+    const isCurrent = s.port === getCurrentPort();
+
     try {
       await killSession(s.pid);
     } catch (err) {
       $list.innerHTML = `<div class="cmd-empty">Failed to close: ${escapeHtml(err.message)}</div>`;
       return;
     }
-    // Poll until the session disappears from discovery
+
+    // If closing the current session, redirect to another one immediately
+    // — our own HTTP server is about to die, polling will fail
+    if (isCurrent) {
+      // Try to find another session from the cached list
+      const other = sessions.find((x) => x.pid !== s.pid);
+      if (other) {
+        const url = other.url || `http://localhost:${other.port}`;
+        window.location.href = url;
+        return;
+      }
+      // No other session — show message, page will go unresponsive
+      $list.innerHTML = '<div class="cmd-empty">Session closed</div>';
+      return;
+    }
+
+    // Closing a different session — poll until it disappears from discovery
     for (let i = 0; i < 5; i++) {
       await new Promise((r) => setTimeout(r, 500));
       try {
