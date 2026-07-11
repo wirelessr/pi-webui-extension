@@ -8,6 +8,15 @@ import { getSessions, killSession, newSession } from "./api.js";
 import { createQrCode } from "./qr.js";
 import { escapeHtml } from "./utils.js";
 
+/**
+ * Given a list of sessions and the pid being closed, return the session
+ * to redirect to (first available that isn't the one being closed).
+ * Returns null if no other session exists.
+ */
+export function pickRedirectTarget(sessions, closedPid) {
+  return sessions.find((s) => s.pid !== closedPid) || null;
+}
+
 export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   let sessions = [];
   const qr = createQrCode();
@@ -108,14 +117,12 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     // If closing the current session, redirect to another one immediately
     // — our own HTTP server is about to die, polling will fail
     if (isCurrent) {
-      // Try to find another session from the cached list
-      const other = sessions.find((x) => x.pid !== s.pid);
+      const other = pickRedirectTarget(sessions, s.pid);
       if (other) {
         const url = other.url || `http://localhost:${other.port}`;
         window.location.href = url;
         return;
       }
-      // No other session — show message, page will go unresponsive
       $list.innerHTML = '<div class="cmd-empty">Session closed</div>';
       return;
     }
