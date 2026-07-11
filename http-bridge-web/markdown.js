@@ -153,7 +153,10 @@ export function renderMarkdown(md) {
       i++;
     }
     if (paraLines.length > 0) {
-      html.push(`<p>${renderInline(paraLines.join("<br>"))}</p>`);
+      // Join multi-line paragraphs with <br> — use placeholder to survive escapeHtml
+      const joined = paraLines.join("\x00BR\x00");
+      const rendered = renderInline(joined);
+      html.push(`<p>${rendered.replace(/\x00BR\x00/g, "<br>")}</p>`);
     }
   }
 
