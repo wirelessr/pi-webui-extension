@@ -6,6 +6,7 @@
  */
 
 import { renderMarkdown } from "./markdown.js";
+import { createStreamAccumulator } from "./stream-accumulator.js";
 import { escapeHtml } from "./utils.js";
 
 export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
@@ -14,10 +15,8 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   let currentThinkingEl = null;
   let currentThinkingContent = null;
   const currentToolMap = new Map();
-  let textBuffer = "";
-  let committedText = "";
-  let thinkingBuffer = "";
   let cursorEl = null;
+  let accumulator = null;
 
   // ── Scroll ──
 
@@ -57,9 +56,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     currentAssistantEl.appendChild(currentTextEl);
     $messages.appendChild(currentAssistantEl);
 
-    textBuffer = "";
-    committedText = "";
-    thinkingBuffer = "";
+    accumulator = createStreamAccumulator();
     currentThinkingEl = null;
     currentToolMap.clear();
   }
@@ -71,20 +68,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     currentThinkingEl = null;
     currentThinkingContent = null;
     currentToolMap.clear();
-  }
-
-  function updateText() {
-    if (!currentTextEl) return;
-    currentTextEl.innerHTML = renderContent("assistant", committedText + textBuffer);
-    addStreamingCursor();
-    scrollToBottom();
-  }
-
-  function flushText() {
-    if (!currentTextEl || textBuffer.length === 0) return;
-    committedText += textBuffer;
-    currentTextEl.innerHTML = renderContent("assistant", committedText);
-    textBuffer = "";
+    accumulator = null;
   }
 
   function ensureThinkingBlock() {
@@ -103,17 +87,6 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     currentThinkingEl.appendChild(header);
     currentThinkingEl.appendChild(currentThinkingContent);
     currentAssistantEl.insertBefore(currentThinkingEl, currentTextEl);
-  }
-
-  function updateThinking() {
-    if (!currentThinkingContent) return;
-    currentThinkingContent.textContent = thinkingBuffer;
-  }
-
-  function flushThinking() {
-    if (!currentThinkingContent || thinkingBuffer.length === 0) return;
-    currentThinkingContent.textContent = thinkingBuffer;
-    thinkingBuffer = "";
   }
 
   function addToolBlock(toolCallId, toolName, args) {
@@ -195,24 +168,50 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   // ── Event dispatch ──
 
   function handleEvent(event) {
+    if (!accumulator) return;
+    accumulator.handleEvent(event);
+    const state = accumulator.getState();
+
     switch (event.type) {
       case "agent_start": break;
       case "turn_start": break;
-      case "turn_end": flushText(); flushThinking(); break;
-      case "done": flushText(); flushThinking(); removeStreamingCursor(); break;
+      case "turn_end": renderText(state); renderThinking(state); break;
+      case "done": renderText(state); renderThinking(state); removeStreamingCursor(); break;
       case "error": showError(event.message); break;
-      case "text_start": textBuffer = ""; break;
-      case "text_delta": textBuffer += event.delta; updateText(); break;
-      case "text_end": flushText(); break;
-      case "thinking_start": thinkingBuffer = ""; ensureThinkingBlock(); break;
-      case "thinking_delta": thinkingBuffer += event.delta; updateThinking(); break;
-      case "thinking_end": flushThinking(); break;
+      case "text_start": break;
+      case "text_delta": renderText(state); break;
+      case "text_end": renderTextCommitted(state); break;
+      case "thinking_start": ensureThinkingBlock(); break;
+      case "thinking_delta": renderThinking(state); break;
+      case "thinking_end": renderThinkingCommitted(state); break;
       case "toolcall_start": break;
       case "toolcall_end": break;
       case "tool_execution_start": addToolBlock(event.toolCallId, event.toolName, event.args); break;
       case "tool_execution_end": updateToolBlock(event.toolCallId, event.isError); break;
       default: break;
     }
+  }
+
+  function renderText(state) {
+    if (!currentTextEl) return;
+    currentTextEl.innerHTML = renderContent("assistant", state.committedText + state.pendingText);
+    addStreamingCursor();
+    scrollToBottom();
+  }
+
+  function renderTextCommitted(state) {
+    if (!currentTextEl) return;
+    currentTextEl.innerHTML = renderContent("assistant", state.committedText);
+  }
+
+  function renderThinking(state) {
+    if (!currentThinkingContent) return;
+    currentThinkingContent.textContent = state.committedThinking + state.pendingThinking;
+  }
+
+  function renderThinkingCommitted(state) {
+    if (!currentThinkingContent) return;
+    currentThinkingContent.textContent = state.committedThinking;
   }
 
   // ── History rendering ──
