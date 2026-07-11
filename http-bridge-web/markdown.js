@@ -7,14 +7,7 @@
  * Escapes HTML first, then applies markdown transformations.
  */
 
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+import { escapeHtml } from "./utils.js";
 
 function renderInline(text) {
   const codePlaceholders = [];

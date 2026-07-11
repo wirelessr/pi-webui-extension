@@ -249,6 +249,16 @@ git clone <repo-url> pi-webui-extension
 
 pi auto-discovers `extensions/*/index.ts` on startup. No additional configuration needed.
 
+## Development
+
+Tests for pure-logic functions (markdown rendering, command filtering, HTML escaping):
+
+```bash
+node --test test/*.test.js
+```
+
+No external test framework or dependencies required — uses Node.js built-in test runner.
+
 ## Limitations
 
 - One request at a time per session; concurrent requests get HTTP 409

@@ -6,6 +6,7 @@
  */
 
 import { renderMarkdown } from "./markdown.js";
+import { escapeHtml } from "./utils.js";
 
 export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   let currentAssistantEl = null;
@@ -34,12 +35,6 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   $scrollBottom.addEventListener("click", scrollToBottom);
 
   // ── Rendering ──
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
 
   function renderContent(role, text) {
     if (role === "user") return escapeHtml(text);
