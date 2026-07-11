@@ -700,9 +700,21 @@ export default function (pi: ExtensionAPI) {
 				res.writeHead(response.status, Object.fromEntries(response.headers));
 				if (response.body) {
 					const reader = response.body.getReader();
+					let clientClosed = false;
+					res.on("close", () => {
+						if (!res.writableEnded) {
+							clientClosed = true;
+							console.error("[http-bridge] client disconnected during stream");
+							reader.cancel().catch(() => {});
+							if (sse) {
+								console.error("[http-bridge] closing SSE state after client disconnect");
+								closeSse();
+							}
+						}
+					});
 					while (true) {
 						const { done, value } = await reader.read();
-						if (done) break;
+						if (done || clientClosed) break;
 						res.write(value);
 					}
 				}
