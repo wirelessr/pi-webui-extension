@@ -134,3 +134,19 @@ export function shouldSend(text, isStreaming) {
   if (!text?.trim() || isStreaming) return false;
   return true;
 }
+
+/**
+ * Find a command token at the cursor position.
+ * Only matches when / is at the beginning of the input (position 0).
+ * @param {string} text
+ * @param {number} cursor
+ * @returns {{token: string, start: number, end: number} | null}
+ */
+export function findCommandToken(text, cursor) {
+  let start = cursor;
+  while (start > 0 && !/\s/.test(text[start - 1])) start--;
+  const token = text.slice(start, cursor);
+  if (!token.startsWith("/")) return null;
+  if (start !== 0) return null;
+  return { token, start, end: cursor };
+}

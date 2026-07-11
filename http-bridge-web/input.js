@@ -2,7 +2,7 @@
  * Input controller — textarea handling, keyboard shortcuts, auto-resize.
  */
 
-import { decideKeyAction, decideMobileViewOnFilter, decideMobileViewOnSelect, decideSendClick, shouldSend } from "./selection-state.js";
+import { decideKeyAction, decideMobileViewOnFilter, decideMobileViewOnSelect, decideSendClick, findCommandToken, shouldSend } from "./selection-state.js";
 
 /**
  * Compute the result of inserting a command into the input text.
@@ -47,13 +47,7 @@ export function createInput({
   }
 
   function getCommandToken() {
-    const text = $input.value;
-    const pos = $input.selectionStart;
-    let start = pos;
-    while (start > 0 && !/\s/.test(text[start - 1])) start--;
-    const token = text.slice(start, pos);
-    if (!token.startsWith("/")) return null;
-    return { token, start, end: pos };
+    return findCommandToken($input.value, $input.selectionStart);
   }
 
   function filterCommands() {
