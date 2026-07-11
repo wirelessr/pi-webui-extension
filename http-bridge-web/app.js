@@ -15,6 +15,7 @@ import { abortAgent, executeCommand, getHistory, getStatus, sendPromptStream } f
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { createContextMenu } from "./context-menu.js";
+import { doInit, doSelectCommand, doSendPrompt, doStop } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { createSessionsView } from "./sessions.js";
@@ -91,70 +92,36 @@ import { formatStats } from "./utils.js";
   // ── Command selection ──
 
   async function handleSelectCommand(cmd) {
-    // Executable builtins (compact, reload) are triggered via API
-    if (cmd.source === "builtin" && cmd.executable) {
-      try {
-        await executeCommand(cmd.name);
-        chat.addMessage("system", `/${cmd.name} triggered`);
-      } catch (err) {
-        chat.showError(err.message || `Failed to execute /${cmd.name}`);
-      }
-      return;
-    }
-    // Non-executable builtins: just insert the text (will be ignored by agent)
-    // Skills and prompts: insert into input for normal send flow
-    input.selectCommand(cmd);
+    await doSelectCommand({
+      cmd,
+      chat,
+      input,
+      executeCommandFn: executeCommand,
+    });
   }
 
   // ── Stop flow ──────────────────────────────────────
 
   async function handleStop() {
-    try {
-      await abortAgent();
-    } catch (err) {
-      chat.showError(err.message || "Failed to abort");
-    }
+    await doStop({ chat, abortFn: abortAgent });
   }
 
   // ── Send flow ─────────────────────────────────────
 
   async function handleSend(text) {
-    chat.addMessage("user", text);
-    input.setStreaming(true);
-    setBusy(true);
-    chat.startAssistantMessage();
-
-    let streamComplete = false;
-    try {
-      await sendPromptStream(text, (event) => {
-        if (event.type === "done") streamComplete = true;
-        chat.handleEvent(event);
-      });
-    } catch (err) {
-      chat.showError(err.message || "Connection failed");
-    } finally {
-      chat.finishAssistantMessage();
-      input.setStreaming(false);
-      setBusy(false);
-      // Only reload if SSE ended abnormally (no done event = connection dropped)
-      if (!streamComplete) {
-        try {
-          const data = await getHistory();
-          if (data.history && data.history.length > 0) {
-            chat.loadHistory(data.history);
-          }
-        } catch {
-          // Best effort
-        }
-      }
-      try {
-        const status = await getStatus();
+    await doSendPrompt({
+      text,
+      chat,
+      input,
+      setBusyFn: setBusy,
+      sendPromptStreamFn: sendPromptStream,
+      getHistoryFn: getHistory,
+      getStatusFn: getStatus,
+      onStatusUpdateFn: (status) => {
         updateStats(status);
         if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
-      } catch {
-        // Best effort
-      }
-    }
+      },
+    });
   }
 
   // ── Busy indicator ────────────────────────────────
@@ -173,31 +140,22 @@ import { formatStats } from "./utils.js";
   // ── Init ──────────────────────────────────────────
 
   async function init() {
-    try {
-      const data = await getStatus();
-      currentPort = data.port;
-      $portDisplay.textContent = `:${data.port}`;
-      if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
-      if (data.sessionName) $sessionName.textContent = data.sessionName;
-      else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
-      updateStats(data);
-    } catch {
-      // Server might not be ready yet
-    }
-
-    await commandsView.load();
-    sessionsView.load();
-    input.autoResize();
-
-    // Load conversation history from session JSONL
-    try {
-      const data = await getHistory();
-      if (data.history && data.history.length > 0) {
-        chat.loadHistory(data.history);
-      }
-    } catch {
-      // History might not be available
-    }
+    await doInit({
+      getStatusFn: getStatus,
+      getHistoryFn: getHistory,
+      loadCommandsFn: () => commandsView.load(),
+      loadSessionsFn: () => sessionsView.load(),
+      loadHistoryFn: (history) => chat.loadHistory(history),
+      autoResizeFn: () => input.autoResize(),
+      onStatusFn: (data) => {
+        currentPort = data.port;
+        $portDisplay.textContent = `:${data.port}`;
+        if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
+        if (data.sessionName) $sessionName.textContent = data.sessionName;
+        else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
+        updateStats(data);
+      },
+    });
   }
 
   init();
