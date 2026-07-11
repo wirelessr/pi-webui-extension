@@ -162,7 +162,10 @@ import { formatStats } from "./utils.js";
       getHistoryFn: getHistory,
       loadCommandsFn: () => commandsView.load(),
       loadSessionsFn: () => sessionsView.load(),
-      loadHistoryFn: (history) => chat.loadHistory(history),
+      loadHistoryFn: (history) => {
+        chat.loadHistory(history);
+        if (toolsExpanded) chat.expandAllTools();
+      },
       autoResizeFn: () => input.autoResize(),
       onStatusFn: (data) => {
         currentPort = data.port;
