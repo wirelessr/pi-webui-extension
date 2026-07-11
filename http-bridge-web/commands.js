@@ -114,7 +114,7 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
         const name = cmd.name.toLowerCase();
         if (name === q) return { cmd, rank: 0 };
         if (name.startsWith(q)) return { cmd, rank: 1 };
-        if (name.match(new RegExp("[/:-_]" + escapeRegex(q)))) return { cmd, rank: 2 };
+        if (name.match(new RegExp("[/\\\-_]" + escapeRegex(q)))) return { cmd, rank: 2 };
         if (name.includes(q)) return { cmd, rank: 3 };
         const desc = (cmd.description || "").toLowerCase();
         if (desc.includes(q)) return { cmd, rank: 4 };

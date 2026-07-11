@@ -76,7 +76,7 @@ import { createContextMenu } from "./context-menu.js";
     onStop: handleStop,
   });
 
-  const contextMenu = createContextMenu({ $messages });
+  createContextMenu({ $messages });
 
   // ── Session refresh ───────────────────────────────
 

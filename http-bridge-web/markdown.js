@@ -33,7 +33,11 @@ function renderInline(text) {
   text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   text = text.replace(
     /\[([^\]]+)\]\(([^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>',
+    (_, label, url) => {
+      const safe = /^(https?:|mailto:|\/|#)/i.test(url);
+      const href = safe ? url : "#";
+      return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+    },
   );
 
   text = text.replace(/\x00CODE(\d+)\x00/g, (_, idx) => codePlaceholders[parseInt(idx)]);
