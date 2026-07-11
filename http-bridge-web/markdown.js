@@ -33,6 +33,14 @@ function renderInline(text) {
     },
   );
 
+  // Autolink bare URLs that are NOT already inside an <a href="..."> tag
+  // The negative lookbehind avoids matching URLs inside href attributes.
+  // Trailing punctuation [.,;:!?)"'] is excluded from the URL.
+  text = text.replace(
+    /(?<!["'\w])(https?:\/\/[^\s<]*[^\s<.,;:!?)"'\]])/g,
+    (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`,
+  );
+
   text = text.replace(/\x00CODE(\d+)\x00/g, (_, idx) => codePlaceholders[parseInt(idx)]);
   return text;
 }

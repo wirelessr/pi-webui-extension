@@ -115,3 +115,24 @@ describe("renderMarkdown - basic formatting", () => {
     assert.equal(renderMarkdown(undefined), "");
   });
 });
+
+// ── Bare URL autolinking ─────────────────────────────
+
+describe("renderMarkdown - bare URL autolinking", () => {
+  const cases = [
+    { name: "simple bare URL", md: "See https://example.com", expect: '<a href="https://example.com"' },
+    { name: "URL with trailing period excluded", md: "See https://example.com.", expect: '<a href="https://example.com"', notExpect: 'example.com."' },
+    { name: "URL with trailing paren excluded", md: "(https://example.com)", expect: '<a href="https://example.com"' },
+    { name: "URL with query params", md: "Visit https://foo.com/page?id=1&x=2", expect: '<a href="https://foo.com/page?id=1' },
+    { name: "URL with path", md: "PR https://github.com/owner/repo/pull/123", expect: '<a href="https://github.com/owner/repo/pull/123"' },
+    { name: "markdown link not double-linked", md: "[text](https://example.com)", expect: '<a href="https://example.com"', notExpect: 'href="https://example.com" target.*href="https://example.com"' },
+    { name: "URL in inline code not autolinked", md: "Run `https://example.com` now", notExpect: '<a href="https://example.com"' },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      const result = renderMarkdown(c.md);
+      if (c.expect) assert.ok(result.includes(c.expect), `expected ${c.expect} in ${result}`);
+      if (c.notExpect) assert.ok(!new RegExp(c.notExpect).test(result), `expected NOT /${c.notExpect}/ in ${result}`);
+    });
+  }
+});
