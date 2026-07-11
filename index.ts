@@ -621,7 +621,15 @@ export default function (pi: ExtensionAPI) {
 		if (discoveryFile) {
 			try { unlinkSync(discoveryFile); } catch {}
 		}
-		// Send response then exit
+		// Kill old sh + tail wrapper after exit to prevent orphan processes.
+		// process.ppid is the sh wrapper PID. The new respawn has sleep 1
+		// so it won't be affected (it's in a different process group).
+		const oldShPid = process.ppid;
+		process.on("exit", () => {
+			if (oldShPid) {
+				try { process.kill(-oldShPid, "SIGTERM"); } catch {}
+			}
+		});
 		setTimeout(() => process.exit(0), 100);
 		return c.json({ ok: true });
 	});
@@ -651,12 +659,23 @@ export default function (pi: ExtensionAPI) {
 		// Pipe stderr to a log file for debugging
 		const logStream = createWriteStream(sessionLogPath(pid), { flags: "a" });
 		child.stderr?.pipe(logStream);
+		// Return the sh wrapper PID, not the pi node PID.
+		// killSession will use process.kill(-pid) to kill the entire process group.
 		return { pid };
 	}
 
 	function killSession(pid: number): boolean {
 		try {
-			process.kill(pid, "SIGTERM");
+			// Kill the entire process group (negative PID).
+			// The pid in discovery file is the sh wrapper PID.
+			// process.kill(-pid) kills sh + tail + pi node together.
+			try {
+				process.kill(-pid, "SIGTERM");
+			} catch {
+				// Fallback: kill the process directly (old-style discovery files
+				// store pi node PID, not sh wrapper PID)
+				process.kill(pid, "SIGTERM");
+			}
 			return true;
 		} catch {
 			return false;
@@ -905,7 +924,7 @@ export default function (pi: ExtensionAPI) {
 						sessionFile,
 						sessionId,
 						sessionName,
-						pid: process.pid,
+						pid: process.ppid || process.pid,
 						startedAt: Date.now(),
 					},
 					null,
