@@ -115,12 +115,16 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     argsEl.className = "tool-args";
     argsEl.textContent = formatArgs(args);
 
+    const resultEl = document.createElement("div");
+    resultEl.className = "tool-result";
+
     header.addEventListener("click", () => block.classList.toggle("expanded"));
     block.appendChild(header);
     block.appendChild(argsEl);
+    block.appendChild(resultEl);
     currentAssistantEl.insertBefore(block, currentTextEl);
 
-    if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan });
+    if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan, resultEl });
     scrollToBottom();
   }
 
@@ -131,6 +135,16 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     entry.statusSpan.classList.remove("running");
     entry.statusSpan.classList.add(isError ? "error" : "done");
     entry.statusSpan.textContent = isError ? "error" : "done";
+  }
+
+  function updateToolResult(toolCallId, resultText, isPartial) {
+    if (!toolCallId) return;
+    const entry = currentToolMap.get(toolCallId);
+    if (!entry?.resultEl) return;
+    if (!resultText) return;
+    entry.resultEl.textContent = resultText;
+    entry.resultEl.classList.toggle("partial", isPartial);
+    scrollToBottom();
   }
 
   function formatArgs(args) {
@@ -187,7 +201,13 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
       case "toolcall_start": break;
       case "toolcall_end": break;
       case "tool_execution_start": addToolBlock(event.toolCallId, event.toolName, event.args); break;
-      case "tool_execution_end": updateToolBlock(event.toolCallId, event.isError); break;
+      case "tool_execution_update": updateToolResult(event.toolCallId, state.tools.find((t) => t.toolCallId === event.toolCallId)?.resultText, true); break;
+      case "tool_execution_end": {
+        const tool = state.tools.find((t) => t.toolCallId === event.toolCallId);
+        updateToolBlock(event.toolCallId, event.isError);
+        if (tool?.resultText) updateToolResult(event.toolCallId, tool.resultText, false);
+        break;
+      }
       default: break;
     }
   }
@@ -218,6 +238,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
 
   function loadHistory(history) {
     $messages.innerHTML = "";
+    let lastAssistantEl = null;
     for (const entry of history) {
       if (entry.role === "user") {
         addMessage("user", entry.text);
@@ -261,18 +282,28 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
             const argsEl = document.createElement("div");
             argsEl.className = "tool-args";
             argsEl.textContent = formatArgs(tc.arguments);
+            const resultEl = document.createElement("div");
+            resultEl.className = "tool-result";
+            resultEl.dataset.toolCallId = tc.id || "";
             header.addEventListener("click", () => block.classList.toggle("expanded"));
             block.appendChild(header);
             block.appendChild(argsEl);
+            block.appendChild(resultEl);
             el.appendChild(block);
           }
         }
         if (el.children.length > 0) {
           $messages.appendChild(el);
+          lastAssistantEl = el;
         }
       } else if (entry.role === "toolResult") {
-        // Tool results are rendered inline under the preceding assistant message
-        // Skip — tool result content is already reflected in the agent's text
+        if (entry.toolCallId && entry.text && lastAssistantEl) {
+          const resultEl = lastAssistantEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);
+          if (resultEl) {
+            resultEl.textContent = entry.text;
+            resultEl.classList.toggle("error", entry.isError);
+          }
+        }
       }
     }
     scrollToBottom();

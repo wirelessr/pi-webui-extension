@@ -114,28 +114,32 @@ describe("stream accumulator — tools", () => {
     assert.equal(state.tools[0].status, "running");
   });
 
-  test("tool_execution_end updates status to done", () => {
+  test("tool_execution_end updates status to done and stores result text", () => {
     const acc = createStreamAccumulator();
     acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
-    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: false });
+    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: false, result: { content: [{ type: "text", text: "hello\nworld" }] } });
     const state = acc.getState();
     assert.equal(state.tools[0].status, "done");
+    assert.equal(state.tools[0].resultText, "hello\nworld");
+    assert.equal(state.tools[0].isPartial, false);
   });
 
   test("tool_execution_end with isError updates to error", () => {
     const acc = createStreamAccumulator();
     acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
-    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: true });
+    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: true, result: { content: [{ type: "text", text: "command not found" }] } });
     const state = acc.getState();
     assert.equal(state.tools[0].status, "error");
+    assert.equal(state.tools[0].resultText, "command not found");
   });
 
   test("tool_execution_end for unknown toolCallId is ignored", () => {
     const acc = createStreamAccumulator();
     acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
-    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc999", isError: false });
+    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc999", isError: false, result: { content: [] } });
     const state = acc.getState();
     assert.equal(state.tools[0].status, "running");
+    assert.equal(state.tools[0].resultText, null);
   });
 
   test("multiple tools tracked independently", () => {
@@ -164,6 +168,51 @@ describe("stream accumulator — tools", () => {
     acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash" });
     const state = acc.getState();
     assert.equal(state.tools[0].args, null);
+    assert.equal(state.tools[0].resultText, null);
+    assert.equal(state.tools[0].isPartial, false);
+  });
+
+  test("tool_execution_update stores partial result text", () => {
+    const acc = createStreamAccumulator();
+    acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
+    acc.handleEvent({ type: "tool_execution_update", toolCallId: "tc1", partialResult: { content: [{ type: "text", text: "partial output" }] } });
+    const state = acc.getState();
+    assert.equal(state.tools[0].resultText, "partial output");
+    assert.equal(state.tools[0].isPartial, true);
+    assert.equal(state.tools[0].status, "running");
+  });
+
+  test("tool_execution_update for unknown toolCallId is ignored", () => {
+    const acc = createStreamAccumulator();
+    acc.handleEvent({ type: "tool_execution_update", toolCallId: "tc999", partialResult: { content: [{ type: "text", text: "x" }] } });
+    const state = acc.getState();
+    assert.equal(state.tools.length, 0);
+  });
+
+  test("result with no content yields null resultText", () => {
+    const acc = createStreamAccumulator();
+    acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
+    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: false, result: undefined });
+    const state = acc.getState();
+    assert.equal(state.tools[0].resultText, null);
+  });
+
+  test("result with image-only content yields null resultText", () => {
+    const acc = createStreamAccumulator();
+    acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "read", args: {} });
+    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: false, result: { content: [{ type: "image", data: "base64...", mimeType: "image/png" }] } });
+    const state = acc.getState();
+    assert.equal(state.tools[0].resultText, null);
+  });
+
+  test("partial result replaced by final result on end", () => {
+    const acc = createStreamAccumulator();
+    acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
+    acc.handleEvent({ type: "tool_execution_update", toolCallId: "tc1", partialResult: { content: [{ type: "text", text: "partial..." }] } });
+    acc.handleEvent({ type: "tool_execution_end", toolCallId: "tc1", isError: false, result: { content: [{ type: "text", text: "final output" }] } });
+    const state = acc.getState();
+    assert.equal(state.tools[0].resultText, "final output");
+    assert.equal(state.tools[0].isPartial, false);
   });
 });
 

@@ -22,6 +22,8 @@
  * @property {string} toolName
  * @property {object|null} args
  * @property {"running"|"done"|"error"} status
+ * @property {string|null} resultText — extracted text from tool result
+ * @property {boolean} isPartial — whether this is a partial result (still streaming)
  */
 
 /**
@@ -106,13 +108,25 @@ export function createStreamAccumulator() {
           toolName: event.toolName,
           args: event.args ?? null,
           status: "running",
+          resultText: null,
+          isPartial: false,
         });
+        break;
+
+      case "tool_execution_update":
+        if (event.toolCallId && tools.has(event.toolCallId)) {
+          const tool = tools.get(event.toolCallId);
+          tool.resultText = extractResultText(event.partialResult);
+          tool.isPartial = true;
+        }
         break;
 
       case "tool_execution_end":
         if (event.toolCallId && tools.has(event.toolCallId)) {
           const tool = tools.get(event.toolCallId);
           tool.status = event.isError ? "error" : "done";
+          tool.resultText = extractResultText(event.result);
+          tool.isPartial = false;
         }
         break;
 
@@ -135,4 +149,17 @@ export function createStreamAccumulator() {
   }
 
   return { handleEvent, getState };
+}
+
+/**
+ * Extract text content from a tool result/partialResult.
+ * @param {object|undefined} result — { content: Array<{type, text?}>, ... }
+ * @returns {string|null}
+ */
+function extractResultText(result) {
+  if (!result?.content) return null;
+  const texts = result.content
+    .filter((c) => c.type === "text" && c.text)
+    .map((c) => c.text);
+  return texts.length > 0 ? texts.join("\n") : null;
 }
