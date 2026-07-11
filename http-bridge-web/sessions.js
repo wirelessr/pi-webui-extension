@@ -48,12 +48,14 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
       const url = s.url || `http://localhost:${s.port}`;
       el.innerHTML = `
-        <div class="session-item-info">
-          <div class="item-name">${escapeHtml(name)}</div>
-          <div class="item-meta">${escapeHtml(url)}</div>
+        <div class="session-item-row">
+          <div class="session-item-info">
+            <div class="item-name">${escapeHtml(name)}</div>
+          </div>
+          <button class="qr-btn" title="Show QR code" data-url="${escapeHtml(url)}">&#9641;</button>
+          <button class="close-btn" title="Close session" data-pid="${s.pid}">&times;</button>
         </div>
-        <button class="qr-btn" title="Show QR code" data-url="${escapeHtml(url)}">&#9641;</button>
-        <button class="close-btn" title="Close session" data-pid="${s.pid}">&times;</button>
+        <div class="item-meta">${escapeHtml(url)}</div>
       `;
 
       el.addEventListener("click", (e) => {
