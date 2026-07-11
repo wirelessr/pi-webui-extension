@@ -9,7 +9,7 @@ import { renderMarkdown } from "./markdown.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { escapeHtml } from "./utils.js";
 
-export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded }) {
   let currentAssistantEl = null;
   let currentTextEl = null;
   let currentThinkingEl = null;
@@ -20,14 +20,17 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
 
   // ── Scroll ──
 
+  let userAtBottom = true;
+
   function scrollToBottom() {
-    if ($autoScroll.checked) {
+    if (userAtBottom) {
       $chat.scrollTop = $chat.scrollHeight;
     }
   }
 
   $chat.addEventListener("scroll", () => {
     const atBottom = $chat.scrollHeight - $chat.scrollTop - $chat.clientHeight < 60;
+    userAtBottom = atBottom;
     $scrollBottom.classList.toggle("hidden", atBottom);
   });
 
@@ -75,6 +78,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     if (currentThinkingEl) return;
     currentThinkingEl = document.createElement("div");
     currentThinkingEl.className = "thinking-block";
+    if (isToolsExpanded?.()) currentThinkingEl.classList.add("expanded");
 
     const header = document.createElement("div");
     header.className = "thinking-header";
@@ -95,6 +99,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
 
     const block = document.createElement("div");
     block.className = "tool-block";
+    if (isToolsExpanded?.()) block.classList.add("expanded");
 
     const header = document.createElement("div");
     header.className = "tool-header";

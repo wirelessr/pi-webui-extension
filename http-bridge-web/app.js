@@ -28,7 +28,6 @@ import { formatStats } from "./utils.js";
   const $app = document.getElementById("app");
   const $messages = document.getElementById("messages");
   const $chat = document.getElementById("chat");
-  const $autoScroll = document.getElementById("auto-scroll");
   const $scrollBottom = document.getElementById("scroll-bottom");
   const $input = document.getElementById("message-input");
   const $sendBtn = document.getElementById("send-btn");
