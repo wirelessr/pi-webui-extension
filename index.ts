@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./http-bridge-web/helpers.js";
-import { buildReloadCommand, dedupSessions } from "./session-helpers.js";
+import { buildReloadCommand, buildSpawnCommand, dedupSessions } from "./session-helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -108,12 +108,13 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Session spawn helper ─────────────────────────────────────────
 
-	function sessionLogPath(id: string | number): string {
-		return join(BRIDGE_DIR, `session-${id}.stderr.log`);
+	function bridgeLogPath(): string {
+		return join(BRIDGE_DIR, "bridge.log");
 	}
 
 	function spawnNewSession(cwd?: string): { pid: number } {
-		const child = spawn("sh", ["-c", "tail -f /dev/null | pi --mode rpc"], {
+		const cmd = buildSpawnCommand({ logFile: bridgeLogPath() });
+		const child = spawn("sh", ["-c", cmd], {
 			cwd: cwd || process.cwd(),
 			detached: true,
 			stdio: "ignore",
@@ -142,7 +143,7 @@ export default function (pi: ExtensionAPI) {
 	function doReload() {
 		const sessionPath = sessionFile;
 		if (!sessionPath) return;
-		const logFile = sessionLogPath(actualPort);
+		const logFile = bridgeLogPath();
 		const cmd = buildReloadCommand({ port: actualPort, sessionPath, name: sessionName, logFile });
 		spawn("sh", ["-c", cmd], {
 			detached: true,

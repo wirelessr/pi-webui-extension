@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildReloadCommand, dedupSessions } from "../session-helpers.js";
+import { buildReloadCommand, buildSpawnCommand, dedupSessions } from "../session-helpers.js";
 
 // ── buildReloadCommand ─────────────────────────────────
 
@@ -20,7 +20,7 @@ describe("buildReloadCommand", () => {
         { label: "has --name", re: /--name "my-session"/ },
         { label: "has --session", re: /--session "\/tmp\/session.jsonl"/ },
         { label: "has port env", re: /PI_HTTP_PORT=7331/ },
-        { label: "has stderr redirect", re: /2>>"\/tmp\/log.stderr.log"/ },
+        { label: "has stderr redirect with port prefix", re: /2> >\(sed "s\/\^\/\[7331\] \/" >> "\/tmp\/log.stderr.log"\)/ },
         { label: "has tail keepalive", re: /tail -f \/dev\/null/ },
       ],
     },
@@ -57,7 +57,7 @@ describe("buildReloadCommand", () => {
       desc: "logFile with double quotes is escaped",
       opts: { ...baseOpts, name: undefined, logFile: '/tmp/"log".txt' },
       checks: [
-        { label: "escaped log", re: /2>>"\/tmp\/\\"log\\".txt"/ },
+        { label: "escaped log", re: /2> >\(sed "s\/\^\/\[7331\] \/" >> "\/tmp\/\\"log\\".txt"\)/ },
       ],
     },
   ];
@@ -70,6 +70,22 @@ describe("buildReloadCommand", () => {
       }
     });
   }
+});
+
+// ── buildSpawnCommand ─────────────────────────────────
+
+describe("buildSpawnCommand", () => {
+  test("includes pi --mode rpc and stderr redirect with prefix", () => {
+    const cmd = buildSpawnCommand({ logFile: "/tmp/bridge.log", port: 7333 });
+    assert.match(cmd, /pi --mode rpc/);
+    assert.match(cmd, /2> >\(sed "s\/\^\/\[7333\] \/" >> "\/tmp\/bridge.log"\)/);
+    assert.match(cmd, /tail -f \/dev\/null/);
+  });
+
+  test("without port uses [new] prefix", () => {
+    const cmd = buildSpawnCommand({ logFile: "/tmp/bridge.log" });
+    assert.match(cmd, /\[new\]/);
+  });
 });
 
 // ── dedupSessions ──────────────────────────────────────
