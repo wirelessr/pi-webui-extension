@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFile
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
+import { createServer as createNetServer } from "node:net";
 import { networkInterfaces } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -509,9 +510,7 @@ export default function (pi: ExtensionAPI) {
 			if (parsed.includeFull) result.messages = messages;
 			return c.json(result);
 		} catch (err) {
-			return c.json({
-				error: err instanceof Error ? err.message : String(err),
-			});
+			return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 		}
 	});
 
@@ -896,13 +895,12 @@ export default function (pi: ExtensionAPI) {
 
 	function findFreePort(start: number, host: string): Promise<number> {
 		return new Promise((resolve, reject) => {
-			const net = require("node:net");
 			function tryPort(port: number): void {
 				if (port > start + 1000) {
 					reject(new Error(`No free port in range ${start}-${start + 1000}`));
 					return;
 				}
-				const tester = net.createServer();
+				const tester = createNetServer();
 				tester.once("error", (err: any) => {
 					if (err.code === "EADDRINUSE") tryPort(port + 1);
 					else reject(err);

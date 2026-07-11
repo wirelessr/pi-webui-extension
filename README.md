@@ -26,30 +26,9 @@ curl -X POST http://localhost:7331/api/prompt -d 'Run the tests'
 
 Each pi session is a separate process with its own extension instance. There is no singleton or cross-session broker. The extension auto-allocates a port (starting from `PI_HTTP_PORT`) and writes a per-session discovery file to a shared directory.
 
-```
-~/.pi/agent/extensions/
-├── index.ts                   # Extension (HTTP server + SSE + skill expansion)
-├── http-bridge-web/            # WebUI static files (vanilla JS ES modules)
-│   ├── index.html              # Page structure
-│   ├── style.css               # Dark theme + responsive layout
-│   ├── app.js                  # Entry point, wires modules together
-│   ├── api.js                  # Fetch wrappers + sessionUrl/pollUntil helpers
-│   ├── sse-parser.js           # Pure SSE buffer parser
-│   ├── helpers.js              # Pure logic extracted from index.ts
-│   ├── utils.js                # Shared escapeHtml (string-based)
-│   ├── chat.js                 # Message rendering, streaming, tool/thinking blocks
-│   ├── commands.js             # Right sidebar: command list + free-text filtering
-│   ├── sessions.js             # Left sidebar: session list + global management
-│   ├── input.js                # Textarea handling, keyboard shortcuts, auto-resize
-│   ├── mobile-nav.js           # Bottom tab bar for mobile view switching
-│   ├── context-menu.js         # Right-click menu on messages (copy text)
-│   ├── qr.js                   # QR code modal (canvas-based)
-│   ├── qrcode-lib.js           # Vendored QR generator (Kazuhiko Arase, MIT)
-│   └── markdown.js             # Minimal markdown renderer (zero dependencies)
-├── test/                      # Unit tests (node:test)
-├── data/                      # Runtime: discovery files (gitignored)
-└── README.md                   # This file
-```
+The HTTP layer uses [Hono](https://hono.dev) with [`@hono/zod-openapi`](https://github.com/honojs/middleware/tree/main/packages/zod-openapi) — routes are defined with zod schemas, and an OpenAPI spec is auto-generated as a byproduct. Swagger UI is served at `/api/docs`.
+
+The WebUI is vanilla JS ES modules with no build step. Browser-native module loading with `Cache-Control: no-cache` for hot reload on refresh.
 
 ## API
 
