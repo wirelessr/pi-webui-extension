@@ -91,7 +91,6 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
 
   function addToolBlock(toolCallId, toolName, args) {
     if (!currentAssistantEl) return;
-    flushText();
     removeStreamingCursor();
 
     const block = document.createElement("div");
