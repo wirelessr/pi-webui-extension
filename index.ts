@@ -621,13 +621,15 @@ export default function (pi: ExtensionAPI) {
 		if (discoveryFile) {
 			try { unlinkSync(discoveryFile); } catch {}
 		}
-		// Kill old sh + tail wrapper after exit to prevent orphan processes.
-		// process.ppid is the sh wrapper PID. The new respawn has sleep 1
-		// so it won't be affected (it's in a different process group).
+		// Log process tree info for debugging orphan cleanup
+		console.error(`[http-bridge] reload: pi pid=${process.pid} ppid=${process.ppid} pgid=${process.getgid?.()}`);
 		const oldShPid = process.ppid;
 		process.on("exit", () => {
+			console.error(`[http-bridge] reload exit: killing process group -${oldShPid}`);
 			if (oldShPid) {
-				try { process.kill(-oldShPid, "SIGTERM"); } catch {}
+				try { process.kill(-oldShPid, "SIGTERM"); } catch (err: any) {
+					console.error(`[http-bridge] reload exit: kill failed: ${err.message}`);
+				}
 			}
 		});
 		setTimeout(() => process.exit(0), 100);
@@ -666,18 +668,22 @@ export default function (pi: ExtensionAPI) {
 
 	function killSession(pid: number): boolean {
 		try {
+			console.error(`[http-bridge] killSession: pid=${pid}`);
 			// Kill the entire process group (negative PID).
 			// The pid in discovery file is the sh wrapper PID.
 			// process.kill(-pid) kills sh + tail + pi node together.
 			try {
 				process.kill(-pid, "SIGTERM");
-			} catch {
+				console.error(`[http-bridge] killSession: killed process group -${pid}`);
+			} catch (err: any) {
 				// Fallback: kill the process directly (old-style discovery files
 				// store pi node PID, not sh wrapper PID)
+				console.error(`[http-bridge] killSession: group kill failed (${err.message}), trying direct kill`);
 				process.kill(pid, "SIGTERM");
 			}
 			return true;
-		} catch {
+		} catch (err: any) {
+				console.error(`[http-bridge] killSession: failed: ${err.message}`);
 			return false;
 		}
 	}
@@ -912,6 +918,7 @@ export default function (pi: ExtensionAPI) {
 	function writeDiscovery() {
 		if (!discoveryFile || !sessionId) return;
 		const lanIp = getLanIp();
+		console.error(`[http-bridge] writeDiscovery: pid=${process.pid} ppid=${process.ppid} → storing pid=${process.ppid || process.pid}`);
 		try {
 			writeFileSync(
 				discoveryFile,
