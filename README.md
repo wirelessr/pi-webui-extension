@@ -33,16 +33,20 @@ Each pi session is a separate process with its own extension instance. There is 
 │   ├── index.html              # Page structure
 │   ├── style.css               # Dark theme + responsive layout
 │   ├── app.js                  # Entry point, wires modules together
-│   ├── api.js                  # Fetch wrappers for API endpoints + SSE reader
+│   ├── api.js                  # Fetch wrappers + sessionUrl/pollUntil helpers
+│   ├── sse-parser.js           # Pure SSE buffer parser
+│   ├── helpers.js              # Pure logic extracted from index.ts
+│   ├── utils.js                # Shared escapeHtml (string-based)
 │   ├── chat.js                 # Message rendering, streaming, tool/thinking blocks
 │   ├── commands.js             # Right sidebar: command list + free-text filtering
-│   ├── sessions.js             # Left sidebar: session list + QR code button
+│   ├── sessions.js             # Left sidebar: session list + global management
 │   ├── input.js                # Textarea handling, keyboard shortcuts, auto-resize
 │   ├── mobile-nav.js           # Bottom tab bar for mobile view switching
 │   ├── context-menu.js         # Right-click menu on messages (copy text)
 │   ├── qr.js                   # QR code modal (canvas-based)
 │   ├── qrcode-lib.js           # Vendored QR generator (Kazuhiko Arase, MIT)
 │   └── markdown.js             # Minimal markdown renderer (zero dependencies)
+├── test/                      # Unit tests (node:test)
 ├── data/                      # Runtime: discovery files (gitignored)
 └── README.md                   # This file
 ```
@@ -63,6 +67,7 @@ Each pi session is a separate process with its own extension instance. There is 
 | `POST` | `/api/new-session` | Spawn a new pi session in RPC mode |
 | `POST` | `/api/kill-session` | Terminate a session by PID (SIGTERM) |
 | `POST` | `/api/rename-session` | Rename the current session |
+| `POST` | `/api/reload` | Self-respawn (resume same session with fresh code) |
 
 ### GET /api/history
 
@@ -131,8 +136,25 @@ Event types: `agent_start`, `turn_start`, `turn_end`, `text_start`, `text_delta`
 
 ## WebUI
 
-- QR code button on each session item — scan to connect a mobile device to that session's URL
+### Session Management
+
+The sessions sidebar is a global management panel for all pi sessions on this machine:
+
+- **New session**: `+` button spawns a new pi session in RPC mode (detached)
+- **Close session**: `×` button terminates a session by PID (cannot close the last session)
+- **Rename session**: Double-click a session name, or right-click → Rename. Persists to session JSONL.
+- **Reload all**: `⟳` button respawns all sessions with fresh extension code. Each session resumes its own session file.
+- **Right-click context menu**: Rename and Close on each session item
+- **QR code button**: Scan to connect a mobile device to that session's URL
+- **Click a session**: Navigate to that session's WebUI in-place
+
+Cross-session API calls use CORS headers (`Access-Control-Allow-Origin: *`).
+
+### Chat
+
 - Conversation history persists across refresh (loaded from session JSONL via `/api/history`)
+- Markdown rendering with streaming, tool/thinking blocks
+- Right-click any message to copy text
 
 ### Desktop (>= 700px)
 
@@ -182,7 +204,7 @@ Bottom tab bar with three views: sessions, chat, commands.
 3. Wrap in `<skill name="..." location="...">` block (same format as TUI)
 4. Append user args after the block
 
-Built-in commands (/compact, /reload, /new, /model, etc.) are loaded dynamically from pi's `BUILTIN_SLASH_COMMANDS` export — no hardcoded list. Most are TUI-only (shown in the command list with a "TUI" tag and reduced opacity). Only `/compact` is executable from WebUI via `POST /api/command`, which calls `ctx.compact()`. `/reload` is not executable from WebUI because `ctx.reload()` is only available on `ExtensionCommandContext`, not the `ExtensionContext` that event handlers receive. Use the TUI to reload.
+Built-in commands are loaded dynamically from pi's `BUILTIN_SLASH_COMMANDS` export. Only executable builtins (currently `/compact`) are shown in the WebUI command list. TUI-only commands are not exposed. `/compact` is executable via `POST /api/command`, which calls `ctx.compact()`.
 
 Extension commands (`/cmd`) are not supported via HTTP because they require pi's internal command handler, not text expansion. Use the TUI for those.
 
@@ -239,7 +261,7 @@ Binding to `0.0.0.0` exposes the bridge to anyone on your network. There is **no
 | What changed | How to apply | Session preserved? |
 |--------------|-------------|-------------------|
 | Web UI files (HTML/CSS/JS) | Browser refresh | Yes |
-| Extension TypeScript | `/reload` in TUI | Yes (conversation preserved, HTTP server restarts) |
+| Extension TypeScript | `/reload` in TUI or `⟳` in WebUI | Yes (session file resumed) |
 
 ## Installation
 
@@ -254,13 +276,21 @@ pi auto-discovers `extensions/*/index.ts` on startup. No additional configuratio
 
 ## Development
 
-Tests for pure-logic functions (markdown rendering, command filtering, HTML escaping):
+Tests for pure-logic functions (markdown rendering, command filtering, HTML escaping, session API helpers, SSE parsing, history parsing):
 
 ```bash
 node --test test/*.test.js
 ```
 
-No external test framework or dependencies required — uses Node.js built-in test runner.
+Uses Node.js built-in test runner. No external test framework or dependencies required.
+
+Lint:
+
+```bash
+npx biome check http-bridge-web/ index.ts
+```
+
+CI runs on every push and PR via GitHub Actions.
 
 ## Limitations
 
@@ -268,5 +298,6 @@ No external test framework or dependencies required — uses Node.js built-in te
 - Don't type in the TUI while a request is in flight (agent processes one turn at a time)
 - Extension commands (`/cmd`) not supported via HTTP
 - Most built-in commands are TUI-only; only `/compact` is executable from WebUI
+- Session reload uses self-respawn (process exit + new process), not `ctx.reload()` (which is only available on `ExtensionCommandContext`)
 - Default response timeout is 5 minutes
 - No authentication
