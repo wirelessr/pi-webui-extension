@@ -1,6 +1,6 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { pickRedirectTarget } from "../http-bridge-web/sessions.js";
+import { describe, test } from "node:test";
+import { allPidsReplaced, pickRedirectTarget } from "../http-bridge-web/sessions.js";
 
 const SESSIONS = [
   { pid: 100, port: 7331, url: "http://192.168.1.130:7331" },
@@ -48,5 +48,53 @@ describe("pickRedirectTarget", () => {
       100,
     );
     assert.equal(target.pid, 200);
+  });
+});
+
+describe("allPidsReplaced", () => {
+  test("returns true when all current PIDs differ from prevPids", () => {
+    const prevPids = new Set([100, 200, 300]);
+    const current = [
+      { pid: 101, port: 7331 },
+      { pid: 201, port: 7332 },
+      { pid: 301, port: 7333 },
+    ];
+    assert.equal(allPidsReplaced(current, prevPids), true);
+  });
+
+  test("returns false when any current PID matches a prevPid", () => {
+    const prevPids = new Set([100, 200, 300]);
+    const current = [
+      { pid: 101, port: 7331 },
+      { pid: 200, port: 7332 },
+      { pid: 301, port: 7333 },
+    ];
+    assert.equal(allPidsReplaced(current, prevPids), false);
+  });
+
+  test("returns false when current session list is empty", () => {
+    const prevPids = new Set([100]);
+    assert.equal(allPidsReplaced([], prevPids), false);
+  });
+
+  test("returns true when prevPids is empty and current has sessions", () => {
+    const prevPids = new Set();
+    const current = [{ pid: 100, port: 7331 }];
+    assert.equal(allPidsReplaced(current, prevPids), true);
+  });
+
+  test("handles single session replacement", () => {
+    const prevPids = new Set([100]);
+    assert.equal(allPidsReplaced([{ pid: 101, port: 7331 }], prevPids), true);
+    assert.equal(allPidsReplaced([{ pid: 100, port: 7331 }], prevPids), false);
+  });
+
+  test("handles partial replacement (some old PIDs remain)", () => {
+    const prevPids = new Set([100, 200, 300]);
+    const current = [
+      { pid: 101, port: 7331 },
+      { pid: 200, port: 7332 },
+    ];
+    assert.equal(allPidsReplaced(current, prevPids), false);
   });
 });
