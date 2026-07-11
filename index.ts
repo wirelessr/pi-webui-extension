@@ -770,6 +770,16 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
+	pi.on("tool_execution_update", (event: any) => {
+		if (sse && ourTurnActive) {
+			writeSse({
+				type: "tool_execution_update",
+				toolCallId: event.toolCallId,
+				partialResult: event.partialResult,
+			});
+		}
+	});
+
 	pi.on("tool_execution_end", (event: any) => {
 		if (sse && ourTurnActive) {
 			writeSse({
@@ -777,6 +787,7 @@ export default function (pi: ExtensionAPI) {
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				isError: event.isError,
+				result: event.result,
 			});
 		}
 	});
