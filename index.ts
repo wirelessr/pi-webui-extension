@@ -875,6 +875,32 @@ pi.on("session_info_changed", (event: any) => {
 				res.end(JSON.stringify({ ok: killed, pid }));
 				return;
 			}
+			if (url === "/api/rename-session" && method === "POST") {
+				let body = "";
+				for await (const chunk of req) body += chunk;
+				let name: string | undefined;
+				if (body) {
+					try {
+						name = JSON.parse(body).name;
+					} catch {
+						// ignore
+					}
+				}
+				if (!name || typeof name !== "string") {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Missing or invalid name" }));
+					return;
+				}
+				try {
+					pi.setSessionName(name);
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ ok: true, name }));
+				} catch (err: any) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: err.message }));
+				}
+				return;
+			}
 
 			if (url === "/api/abort" && method === "POST") {
 				try {

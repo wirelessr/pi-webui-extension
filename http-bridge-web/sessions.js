@@ -2,9 +2,10 @@
  * Sessions view — left sidebar, lists all active pi bridge sessions.
  * Each session item has a QR button and a close button.
  * The header has an add button to spawn a new session.
+ * Double-click a session name to rename it.
  */
 
-import { getSessions, killSession, newSession } from "./api.js";
+import { getSessions, killSession, newSession, renameSession } from "./api.js";
 import { createQrCode } from "./qr.js";
 import { escapeHtml } from "./utils.js";
 
@@ -50,7 +51,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       el.innerHTML = `
         <div class="session-item-row">
           <div class="session-item-info">
-            <div class="item-name">${escapeHtml(name)}</div>
+            <div class="item-name" title="Double-click to rename">${escapeHtml(name)}</div>
           </div>
           <button class="qr-btn" title="Show QR code" data-url="${escapeHtml(url)}">&#9641;</button>
           <button class="close-btn" title="Close session" data-pid="${s.pid}">&times;</button>
@@ -72,8 +73,75 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         onOpen(s);
       });
 
+      const nameEl = el.querySelector(".item-name");
+      nameEl.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        handleRename(s, nameEl);
+      });
+
       $list.appendChild(el);
     }
+  }
+
+  function handleRename(s, nameEl) {
+    const currentName = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = currentName;
+    input.className = "rename-input";
+    input.maxLength = 100;
+
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    async function commit() {
+      if (done) return;
+      done = true;
+      const newName = input.value.trim();
+      if (!newName || newName === currentName) {
+        render();
+        return;
+      }
+      try {
+        await renameSession(newName, s.url || `http://localhost:${s.port}`);
+        // Poll for discovery file update
+        for (let i = 0; i < 5; i++) {
+          await new Promise((r) => setTimeout(r, 300));
+          try {
+            const data = await getSessions();
+            sessions = data.sessions || [];
+            const updated = sessions.find((x) => x.pid === s.pid);
+            if (updated && updated.sessionName === newName) {
+              render();
+              return;
+            }
+          } catch {
+            // Keep polling
+          }
+        }
+        render();
+      } catch (err) {
+        render();
+        $list.insertAdjacentHTML(
+          "afterbegin",
+          `<div class="cmd-empty">Rename failed: ${escapeHtml(err.message)}</div>`,
+        );
+      }
+    }
+
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        input.blur();
+      }
+      if (e.key === "Escape") {
+        done = true;
+        render();
+      }
+    });
   }
 
   async function handleNew() {
@@ -81,7 +149,6 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     try {
       const prevCount = sessions.length;
       await newSession();
-      // Poll until new session's discovery file appears
       for (let i = 0; i < 10; i++) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
@@ -116,8 +183,6 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       return;
     }
 
-    // If closing the current session, redirect to another one immediately
-    // — our own HTTP server is about to die, polling will fail
     if (isCurrent) {
       const other = pickRedirectTarget(sessions, s.pid);
       if (other) {
@@ -129,7 +194,6 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       return;
     }
 
-    // Closing a different session — poll until it disappears from discovery
     for (let i = 0; i < 5; i++) {
       await new Promise((r) => setTimeout(r, 500));
       try {
@@ -143,7 +207,6 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         // Keep polling
       }
     }
-    // Fallback: just reload
     await load();
   }
 
