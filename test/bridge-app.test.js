@@ -1,0 +1,404 @@
+/**
+ * HTTP integration tests for the Hono bridge app.
+ *
+ * Tests call app.fetch(new Request(...)) directly — no real HTTP server,
+ * no real pi session. All side effects are injected via mock deps.
+ */
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createBridgeApp } from "../bridge-app.js";
+
+// ── Mock factory ──────────────────────────────────────────────────
+
+function createMockDeps(overrides = {}) {
+	const calls = {
+		setSessionName: [],
+		sendUserMessage: [],
+		spawnNewSession: [],
+		killSession: [],
+		reload: [],
+		compact: [],
+		abort: [],
+	};
+
+	return {
+		calls,
+		getActualPort: () => 7331,
+		getPid: () => 12345,
+		getStartedAt: () => 1700000000000,
+		getIsBusy: () => false,
+		getSessionFile: () => "/tmp/test-session.jsonl",
+		getSessionId: () => "test-session-id",
+		getSessionName: () => "test-name",
+		getSessionCtx: () => ({
+			model: { id: "test-model" },
+			compact: () => { calls.compact.push(true); },
+			abort: () => { calls.abort.push(true); },
+		}),
+		getCommands: () => [
+			{ name: "skill:test", source: "skill", description: "test skill", sourceInfo: { path: "/tmp/test-skill.md" } },
+			{ name: "prompt:tpl", source: "prompt", description: "test template", sourceInfo: { path: "/tmp/test-tpl.md" } },
+		],
+		setSessionName: (name) => { calls.setSessionName.push(name); },
+		builtinCommands: [
+			{ name: "compact", description: "Compact conversation" },
+			{ name: "clear", description: "Clear screen (TUI only)" },
+		],
+		listAllSessions: () => [],
+		spawnNewSession: (cwd) => { calls.spawnNewSession.push(cwd); return { pid: 99999 }; },
+		killSession: (pid) => { calls.killSession.push(pid); return true; },
+		readSessionHistory: async () => ({ history: [], total: 0 }),
+		computeUsageStats: () => ({
+			inputTokens: 100, outputTokens: 200, cacheReadTokens: 50,
+			cacheWriteTokens: 10, cacheHitRate: 33.3, totalCost: 0.01,
+		}),
+		computeContextUsage: () => ({ tokens: 5000, contextWindow: 128000, percent: 3.9 }),
+		sendAndWait: async (msg, timeoutMs) => {
+			calls.sendUserMessage.push({ msg, timeoutMs });
+			return [{ role: "assistant", content: [{ type: "text", text: "hello" }] }];
+		},
+		sendAndStream: async (_msg, _timeoutMs, res) => {
+			calls.sendUserMessage.push({ msg, timeoutMs });
+			res.write('data: {"type":"agent_start"}\n\n');
+			res.write('data: {"type":"done","text":"hello","toolCalls":[],"thinking":"","messageCount":1}\n\n');
+			res.end();
+		},
+		isPendingOrSse: () => false,
+		reload: () => { calls.reload.push(true); },
+		...overrides,
+	};
+}
+
+const BASE = "http://localhost:7331";
+
+function req(path, init) {
+	return new Request(`${BASE}${path}`, init);
+}
+
+function postJson(path, body) {
+	return req(path, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: typeof body === "string" ? body : JSON.stringify(body),
+	});
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test("OPTIONS preflight returns 204 with CORS headers", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/status", { method: "OPTIONS" }));
+	assert.strictEqual(res.status, 204);
+	assert.strictEqual(res.headers.get("Access-Control-Allow-Origin"), "*");
+	assert.strictEqual(res.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
+	assert.strictEqual(res.headers.get("Access-Control-Allow-Headers"), "Content-Type");
+});
+
+test("CORS headers present on all responses", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/status"));
+	assert.strictEqual(res.headers.get("Access-Control-Allow-Origin"), "*");
+});
+
+test("GET /api/status returns session info", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/status"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.status, "ok");
+	assert.strictEqual(body.busy, false);
+	assert.strictEqual(body.port, 7331);
+	assert.strictEqual(body.pid, 12345);
+	assert.strictEqual(body.sessionFile, "/tmp/test-session.jsonl");
+	assert.strictEqual(body.sessionId, "test-session-id");
+	assert.strictEqual(body.sessionName, "test-name");
+	assert.strictEqual(body.model, "test-model");
+	assert.strictEqual(body.usage.inputTokens, 100);
+	assert.strictEqual(body.context.tokens, 5000);
+});
+
+test("GET /api/sessions returns session list", async () => {
+	const mockSessions = [
+		{ port: 7331, host: "0.0.0.0", url: "http://localhost:7331", sessionFile: "/tmp/a.jsonl", sessionId: "a", sessionName: "A", pid: 100, startedAt: 1 },
+	];
+	const app = createBridgeApp(createMockDeps({ listAllSessions: () => mockSessions }));
+	const res = await app.fetch(req("/api/sessions"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.sessions.length, 1);
+	assert.strictEqual(body.sessions[0].port, 7331);
+});
+
+test("GET /api/commands returns skills + builtins, filters TUI-only", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/commands"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	const names = body.commands.map((c) => c.name);
+	assert.ok(names.includes("skill:test"));
+	assert.ok(names.includes("prompt:tpl"));
+	assert.ok(names.includes("compact"));
+	assert.ok(!names.includes("clear"));
+});
+
+test("GET /api/history returns paginated history", async () => {
+	const app = createBridgeApp(createMockDeps({
+		readSessionHistory: async (file, limit, offset) => {
+			assert.strictEqual(file, "/tmp/test-session.jsonl");
+			assert.strictEqual(limit, 10);
+			assert.strictEqual(offset, 0);
+			return { history: [{ role: "user", text: "hi" }], total: 1 };
+		},
+	}));
+	const res = await app.fetch(req("/api/history?limit=10&offset=0"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.total, 1);
+	assert.strictEqual(body.history[0].text, "hi");
+});
+
+test("POST /api/command executes compact", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/command", { command: "compact" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(deps.calls.compact.length, 1);
+});
+
+test("POST /api/command rejects non-executable command", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/command", { command: "clear" }));
+	assert.strictEqual(res.status, 400);
+	const body = await res.json();
+	assert.ok(body.error.includes("not executable"));
+});
+
+test("POST /api/command rejects invalid JSON", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/command", "not json"));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/prompt (JSON, no stream) returns response", async () => {
+	const deps = createMockDeps({
+		sendAndWait: async (msg) => {
+			assert.strictEqual(msg, "hello agent");
+			return [{ role: "assistant", content: [{ type: "text", text: "hi back" }] }];
+		},
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/prompt", { message: "hello agent" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.text, "hi back");
+	assert.strictEqual(body.messageCount, 1);
+});
+
+test("POST /api/prompt (plain text) returns response", async () => {
+	const deps = createMockDeps({
+		sendAndWait: async (msg) => {
+			assert.strictEqual(msg, "plain text message");
+			return [{ role: "assistant", content: [{ type: "text", text: "ok" }] }];
+		},
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/prompt", {
+		method: "POST",
+		headers: { "Content-Type": "text/plain" },
+		body: "plain text message",
+	}));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.text, "ok");
+});
+
+test("POST /api/prompt empty body returns 400", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/prompt", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: "",
+	}));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/prompt with stream=true returns SSE", async () => {
+	const deps = createMockDeps({
+		sendAndStream: async (_msg, _timeoutMs, res) => {
+			res.write('data: {"type":"agent_start"}\n\n');
+			res.write('data: {"type":"done","text":"hi","toolCalls":[],"thinking":"","messageCount":1}\n\n');
+			res.end();
+		},
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/prompt", { message: "hello", stream: true }));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(res.headers.get("Content-Type"), "text/event-stream");
+	const text = await res.text();
+	assert.ok(text.includes("agent_start"));
+	assert.ok(text.includes("done"));
+});
+
+test("POST /api/prompt returns 409 when busy", async () => {
+	const app = createBridgeApp(createMockDeps({ isPendingOrSse: () => true }));
+	const res = await app.fetch(postJson("/api/prompt", { message: "hello" }));
+	assert.strictEqual(res.status, 409);
+	const body = await res.json();
+	assert.ok(body.error.includes("Another request"));
+});
+
+test("POST /api/prompt with full=true includes messages", async () => {
+	const deps = createMockDeps({
+		sendAndWait: async () => [
+			{ role: "assistant", content: [{ type: "text", text: "response" }] },
+		],
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/prompt", { message: "hello", full: true }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.ok(Array.isArray(body.messages));
+	assert.strictEqual(body.messages.length, 1);
+});
+
+test("POST /api/prompt sendAndWait error returns 500", async () => {
+	const deps = createMockDeps({
+		sendAndWait: async () => { throw new Error("agent timeout"); },
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/prompt", { message: "hello" }));
+	assert.strictEqual(res.status, 500);
+	const body = await res.json();
+	assert.strictEqual(body.error, "agent timeout");
+});
+
+test("POST /api/abort calls sessionCtx.abort", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/abort", { method: "POST" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(deps.calls.abort.length, 1);
+});
+
+test("POST /api/abort without session context returns 500", async () => {
+	const app = createBridgeApp(createMockDeps({ getSessionCtx: () => null }));
+	const res = await app.fetch(req("/api/abort", { method: "POST" }));
+	assert.strictEqual(res.status, 500);
+});
+
+test("POST /api/new-session spawns and returns pid", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/new-session", { cwd: "/tmp" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(body.pid, 99999);
+	assert.strictEqual(deps.calls.spawnNewSession[0], "/tmp");
+});
+
+test("POST /api/new-session with empty body spawns with undefined cwd", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/new-session", { method: "POST", body: "" }));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(deps.calls.spawnNewSession[0], undefined);
+});
+
+test("POST /api/kill-session calls killSession with pid", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/kill-session", { pid: 12345 }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(body.pid, 12345);
+	assert.strictEqual(deps.calls.killSession[0], 12345);
+});
+
+test("POST /api/kill-session rejects missing pid", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/kill-session", {}));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/kill-session rejects invalid JSON", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/kill-session", "broken"));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/rename-session calls setSessionName", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/rename-session", { name: "my new name" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(body.name, "my new name");
+	assert.strictEqual(deps.calls.setSessionName[0], "my new name");
+});
+
+test("POST /api/rename-session rejects missing name", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/rename-session", {}));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/rename-session rejects invalid JSON", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/rename-session", "not json"));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/reload calls reload dep", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/reload", { method: "POST" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(deps.calls.reload.length, 1);
+});
+
+test("POST /api/reload without session file returns 500", async () => {
+	const app = createBridgeApp(createMockDeps({ getSessionFile: () => null }));
+	const res = await app.fetch(req("/api/reload", { method: "POST" }));
+	assert.strictEqual(res.status, 500);
+});
+
+test("GET /api/openapi.json returns OpenAPI spec", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/openapi.json"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.openapi, "3.0.0");
+	assert.ok(body.paths["/api/status"]);
+	assert.ok(body.paths["/api/prompt"]);
+});
+
+test("GET / serves index.html", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/"));
+	assert.strictEqual(res.status, 200);
+	assert.match(res.headers.get("Content-Type"), /text\/html/);
+});
+
+test("GET nonexistent path returns 404", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/no-such-file.js"));
+	assert.strictEqual(res.status, 404);
+});
+
+test("GET path traversal is blocked by URL normalization", async () => {
+	const app = createBridgeApp(createMockDeps());
+	// new Request() normalizes ../../etc/passwd against the base URL,
+	// so the path never reaches route handlers as traversal.
+	const res = await app.fetch(req("/../../etc/passwd"));
+	assert.ok(res.status === 403 || res.status === 404);
+});
