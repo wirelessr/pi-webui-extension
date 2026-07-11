@@ -25,7 +25,7 @@ jobs:
         run: |
           node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/coverage.txt
           # Verify all behavior modules have 100% line coverage
-          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser; do
+          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser session-helpers; do
             line=$(grep " $mod.js " /tmp/coverage.txt || true)
             if [ -z "$line" ]; then
               echo "ERROR: Module $mod.js not found in coverage report"

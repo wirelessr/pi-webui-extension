@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./http-bridge-web/helpers.js";
+import { buildReloadCommand, dedupSessions } from "./session-helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -142,8 +143,8 @@ export default function (pi: ExtensionAPI) {
 		const sessionPath = sessionFile;
 		if (!sessionPath) return;
 		const logFile = sessionLogPath(actualPort);
-		const nameArg = sessionName ? ` --name "${sessionName.replace(/"/g, "\\\"")}"` : "";
-		spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc${nameArg} --session "${sessionPath}" 2>>"${logFile}"`], {
+		const cmd = buildReloadCommand({ port: actualPort, sessionPath, name: sessionName, logFile });
+		spawn("sh", ["-c", cmd], {
 			detached: true,
 			stdio: "ignore",
 		});
@@ -516,31 +517,13 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// Dir doesn't exist
 		}
-		// Deduplicate by sessionFile — multiple processes may share the same
-		// session file (e.g. after multiple reloads). Keep the newest by startedAt.
-		const bySessionFile = new Map<string, any>();
-		const allFiles = new Set<string>();
-		for (const s of sessions) {
-			const key = s.sessionFile ?? s.sessionId;
-			allFiles.add(key);
-			const existing = bySessionFile.get(key);
-			if (!existing || (s.startedAt ?? 0) > (existing.startedAt ?? 0)) {
-				bySessionFile.set(key, s);
-			}
-		}
-		// Clean up stale discovery files for sessions that lost the dedup.
-		// Also kill the losing processes to prevent orphans.
-		const winnerPids = new Set(Array.from(bySessionFile.values()).map((s) => s.pid));
-		for (const s of sessions) {
-			if (!winnerPids.has(s.pid)) {
-				try { unlinkSync(join(BRIDGE_DIR, `${s.sessionId}.json`)); } catch {}
-				try { process.kill(-s.pid, "SIGTERM"); } catch {
-					try { process.kill(s.pid, "SIGTERM"); } catch {}
-				}
-				console.error(`[http-bridge] listAllSessions: killed dedup loser pid=${s.pid} port=${s.port}`);
-			}
-		}
-		return Array.from(bySessionFile.values()).sort((a, b) => a.port - b.port);
+		return dedupSessions({
+			sessions,
+			unlinkFn: (name) => { try { unlinkSync(join(BRIDGE_DIR, name)); } catch {} },
+			killGroupFn: (pid) => { try { process.kill(-pid, "SIGTERM"); return true; } catch { return false; } },
+			killFn: (pid) => { try { process.kill(pid, "SIGTERM"); } catch {} },
+			logFn: (msg) => console.error(`[http-bridge] listAllSessions: ${msg}`),
+		});
 	}
 
 	function computeUsageStats(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheHitRate: number | null; totalCost: number } {
