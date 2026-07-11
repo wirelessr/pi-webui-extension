@@ -901,6 +901,32 @@ pi.on("session_info_changed", (event: any) => {
 				}
 				return;
 			}
+			if (url === "/api/reload" && method === "POST") {
+				try {
+					const sessionPath = sessionFile;
+					if (!sessionPath) {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: "No session file to resume" }));
+						return;
+					}
+					// Self-respawn: spawn new process, then exit
+					spawn("sh", ["-c", `sleep 1 && pi --mode rpc --session "${sessionPath}"`], {
+						detached: true,
+						stdio: "ignore",
+					});
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ ok: true }));
+					// Clean up discovery file before exiting
+					if (discoveryFile) {
+						try { unlinkSync(discoveryFile); } catch {}
+					}
+					process.exit(0);
+				} catch (err: any) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: err.message }));
+				}
+				return;
+			}
 
 			if (url === "/api/abort" && method === "POST") {
 				try {

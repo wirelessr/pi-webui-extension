@@ -81,6 +81,15 @@ export async function renameSession(name, baseUrl = "") {
   return res.json();
 }
 
+export async function reloadSession(baseUrl = "") {
+  const res = await fetch(`${baseUrl}/api/reload`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * Send a prompt and stream SSE events.
  * @param {string} message

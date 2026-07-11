@@ -5,7 +5,7 @@
  * Double-click a session name to rename it.
  */
 
-import { getSessions, killSession, newSession, renameSession } from "./api.js";
+import { getSessions, killSession, newSession, reloadSession, renameSession } from "./api.js";
 import { createQrCode } from "./qr.js";
 import { escapeHtml } from "./utils.js";
 
@@ -215,6 +215,43 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     }
   }
 
+  async function handleReloadAll() {
+    if (sessions.length === 0) return;
+    if (!confirm(`Reload all ${sessions.length} session(s)?`)) return;
+
+    const prevPids = new Set(sessions.map((s) => s.pid));
+
+    // Send reload to all sessions concurrently
+    const results = await Promise.allSettled(
+      sessions.map((s) => reloadSession(s.url || `http://localhost:${s.port}`)),
+    );
+
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      $list.insertAdjacentHTML(
+        "afterbegin",
+        `<div class="cmd-empty">${failed} session(s) failed to reload</div>`,
+      );
+    }
+
+    // Poll until all old sessions are replaced with new ones
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const data = await getSessions();
+        sessions = data.sessions || [];
+        // All old PIDs gone means all have respawned
+        if (sessions.every((s) => !prevPids.has(s.pid))) {
+          render();
+          return;
+        }
+      } catch {
+        // Keep polling
+      }
+    }
+    await load();
+  }
+
   async function handleClose(s) {
     if (!confirm(`Close session "${s.sessionName || s.sessionId?.slice(0, 8)}"?`)) return;
 
@@ -254,5 +291,5 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     await load();
   }
 
-  return { load, handleNew };
+  return { load, handleNew, handleReloadAll };
 }
