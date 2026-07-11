@@ -1,92 +1,8 @@
 /**
  * HTTP Bridge Extension (multi-session safe, with WebUI + SSE streaming)
  *
- * Starts an HTTP server that lets external scripts send messages to the agent
- * and receive responses as HTTP responses. Also serves a WebUI and supports
- * SSE streaming for real-time response display.
- *
- * Multi-session support:
- *   Each pi session is a separate process with its own extension instance.
- *   There is no singleton. Instead, this extension auto-allocates a port
- *   (starting from PI_HTTP_PORT, default 7331) and writes a discovery file
- *   per session to a shared directory (default: <extension-dir>/data).
- *
- * Usage:
- *   # WebUI — open in browser
- *   open http://localhost:7331
- *
- *   # Plain text (curl)
- *   curl -X POST http://localhost:7331/api/prompt -d 'Run the tests'
- *
- *   # JSON body with options
- *   curl -X POST http://localhost:7331/api/prompt \
- *     -H 'Content-Type: application/json' \
- *     -d '{"message":"Summarize /tmp/report.csv","full":true}'
- *
- *   # SSE streaming (curl)
- *   curl -N -H 'Accept: text/event-stream' \
- *     -X POST http://localhost:7331/api/prompt -d 'What is 2+2?'
- *
- *   # Health check / status
- *   curl http://localhost:7331/api/status
- *
- *   # List all active sessions
- *   curl http://localhost:7331/api/sessions
- *
- * API routes:
- *   GET  /                  → WebUI (index.html)
- *   GET  /<static-file>     → Static files from http-bridge-web/
- *   GET  /api/status        → This session's status (JSON)
- *   GET  /api/sessions      → All active sessions (JSON)
- *   POST /api/prompt        → Send message to agent
- *       Accept: text/event-stream → SSE streaming response
- *       Otherwise                  → JSON response
- *
- * SSE event format:
- *   data: {"type":"agent_start"}
- *   data: {"type":"turn_start","turnIndex":0}
- *   data: {"type":"text_delta","delta":"Hello"}
- *   data: {"type":"tool_execution_start","toolName":"bash","args":{...}}
- *   data: {"type":"tool_execution_end","toolName":"bash","result":{...}}
- *   data: {"type":"turn_end","turnIndex":0}
- *   data: {"type":"done","text":"...","toolCalls":[...],"messages":[...]}
- *   data: {"type":"error","message":"..."}
- *
- * Discovery:
- *   <extension-dir>/data/<session-id>.json
- *   { port, host, sessionFile, sessionId, sessionName, pid, startedAt, webui }
- *
- * Hot reload:
- *   - Web UI files: just refresh the browser (served with no-cache)
- *   - Extension logic: type /reload in the TUI (preserves conversation,
- *     restarts HTTP server)
- *
- * Configuration (env vars):
- *   PI_HTTP_PORT   - Starting port for auto-allocation (default: 7331)
- *   PI_HTTP_HOST   - Bind address (default: 0.0.0.0 = all interfaces)
- *   PI_BRIDGE_DIR  - Discovery file directory (default: <extension-dir>/data)
- *
- * Security note:
- *   Binding to 0.0.0.0 exposes the bridge to anyone on your network.
- *   There is no authentication. Anyone who can reach the port can send
- *   messages to your agent and read responses. For local-only use, set
- *   PI_HTTP_HOST=127.0.0.1. For remote use, ensure you trust your
- *   network (e.g. home WiFi, not public WiFi).
- *
- * Skill / template expansion:
- *   sendUserMessage() bypasses pi's internal skill/template expansion
- *   (expandPromptTemplates: false). This extension manually expands
- *   /skill:name and /template commands before sending, replicating
- *   pi's _expandSkillCommand logic. Extension commands (/cmd) are not
- *   supported via HTTP — use the TUI for those.
- *
- *   GET /api/commands — list available skills, prompt templates, and built-in commands
- *
- * Limitations:
- *   - One request at a time per session; concurrent requests get HTTP 409.
- *   - Don't type in the TUI while a request is in flight.
- *   - Extension commands (/cmd) are not supported via HTTP.
- *   - Default response timeout is 5 minutes. Override with {"timeout": ms}.
+ * Uses Hono + zod-openapi for route definitions with auto-generated OpenAPI spec.
+ * Swagger UI available at /api/docs.
  */
 
 import { spawn } from "node:child_process";
@@ -98,6 +14,8 @@ import { networkInterfaces } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { swaggerUI } from "@hono/swagger-ui";
+import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import * as helpers from "./http-bridge-web/helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -132,6 +50,115 @@ interface SseState {
 	timeout: ReturnType<typeof setTimeout>;
 }
 
+// ── Zod schemas ───────────────────────────────────────────────────
+
+const StatusResponse = z.object({
+	status: z.string(),
+	busy: z.boolean(),
+	sessionFile: z.string().nullable(),
+	sessionId: z.string().nullable(),
+	sessionName: z.string().nullable(),
+	port: z.number(),
+}).openapi("Status");
+
+const SessionInfo = z.object({
+	port: z.number(),
+	host: z.string(),
+	lanIp: z.string().nullable(),
+	url: z.string(),
+	sessionFile: z.string().nullable(),
+	sessionId: z.string().nullable(),
+	sessionName: z.string().nullable(),
+	pid: z.number(),
+	startedAt: z.number(),
+}).openapi("SessionInfo");
+
+const SessionsResponse = z.object({
+	sessions: z.array(SessionInfo),
+}).openapi("SessionsResponse");
+
+const CommandInfo = z.object({
+	name: z.string(),
+	description: z.string().optional(),
+	source: z.string(),
+	executable: z.boolean().optional(),
+}).openapi("CommandInfo");
+
+const CommandsResponse = z.object({
+	commands: z.array(CommandInfo),
+}).openapi("CommandsResponse");
+
+const HistoryEntry = z.object({
+	id: z.string().optional(),
+	timestamp: z.any().optional(),
+	role: z.string(),
+	text: z.string().optional(),
+	thinking: z.string().optional(),
+	toolCalls: z.array(z.any()).optional(),
+	toolCallId: z.string().optional(),
+	toolName: z.string().optional(),
+	isError: z.boolean().optional(),
+}).openapi("HistoryEntry");
+
+const HistoryResponse = z.object({
+	history: z.array(HistoryEntry),
+	total: z.number(),
+}).openapi("HistoryResponse");
+
+const PromptBody = z.object({
+	message: z.string(),
+	timeout: z.number().optional(),
+	full: z.boolean().optional(),
+	stream: z.boolean().optional(),
+}).openapi("PromptBody");
+
+const PromptResponse = z.object({
+	text: z.string(),
+	toolCalls: z.array(z.string()),
+	thinking: z.string(),
+	messageCount: z.number(),
+	messages: z.array(z.any()).optional(),
+}).openapi("PromptResponse");
+
+const ErrorResponse = z.object({
+	error: z.string(),
+}).openapi("ErrorResponse");
+
+const CommandBody = z.object({
+	command: z.string(),
+}).openapi("CommandBody");
+
+const NewSessionBody = z.object({
+	cwd: z.string().optional(),
+}).openapi("NewSessionBody");
+
+const NewSessionResponse = z.object({
+	ok: z.boolean(),
+	pid: z.number(),
+}).openapi("NewSessionResponse");
+
+const KillSessionBody = z.object({
+	pid: z.number(),
+}).openapi("KillSessionBody");
+
+const KillSessionResponse = z.object({
+	ok: z.boolean(),
+	pid: z.number(),
+}).openapi("KillSessionResponse");
+
+const RenameSessionBody = z.object({
+	name: z.string(),
+}).openapi("RenameSessionBody");
+
+const RenameSessionResponse = z.object({
+	ok: z.boolean(),
+	name: z.string(),
+}).openapi("RenameSessionResponse");
+
+const OkResponse = z.object({
+	ok: z.boolean(),
+}).openapi("OkResponse");
+
 export default function (pi: ExtensionAPI) {
 	const BASE_PORT = parseInt(process.env.PI_HTTP_PORT || "7331", 10);
 	const HOST = process.env.PI_HTTP_HOST || "0.0.0.0";
@@ -154,11 +181,9 @@ export default function (pi: ExtensionAPI) {
 	let discoveryFile: string | undefined;
 	let sessionCtx: any = null;
 
-	// Built-in commands loaded from pi's internal module (not public API, but
-	// avoids hardcoding the list — stays in sync with pi updates)
+	// Built-in commands loaded from pi's internal module
 	let builtinCommands: { name: string; description: string }[] = [];
 	try {
-		// Resolve from pi's main entry point to find internal submodules
 		const piEntryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 		const piRequire = createRequire(piEntryUrl);
 		const slashMod = piRequire("./core/slash-commands.js");
@@ -169,17 +194,404 @@ export default function (pi: ExtensionAPI) {
 		// Fallback: no builtins if module path changes in future pi versions
 	}
 
-	// Commands that can be triggered from WebUI via /api/command
 	const WEBUI_EXECUTABLE = new Set(["compact"]);
 
-	// ── Session spawn helper ────────────────────────────────────────
+	// ── Route definitions ────────────────────────────────────────────
 
-	/**
-	 * Spawn a new pi process in RPC mode with a keep-alive stdin.
-	 * The child is detached so it survives the parent process exiting.
-	 * stdin is fed by `tail -f /dev/null` which never EOFs, keeping
-	 * RPC mode alive without requiring a TTY.
-	 */
+	const statusRoute = createRoute({
+		method: "get",
+		path: "/api/status",
+		summary: "This session's status",
+		responses: {
+			200: {
+				description: "OK",
+				content: { "application/json": { schema: StatusResponse } },
+			},
+		},
+	});
+
+	const sessionsRoute = createRoute({
+		method: "get",
+		path: "/api/sessions",
+		summary: "All active sessions on this machine",
+		responses: {
+			200: {
+				description: "OK",
+				content: { "application/json": { schema: SessionsResponse } },
+			},
+		},
+	});
+
+	const historyRoute = createRoute({
+		method: "get",
+		path: "/api/history",
+		summary: "Conversation history from session JSONL (paginated)",
+		request: {
+			query: z.object({
+				limit: z.string().optional().openapi({ description: "Max entries (0 = all)" }),
+				offset: z.string().optional().openapi({ description: "Skip from end (0 = most recent)" }),
+			}),
+		},
+		responses: {
+			200: {
+				description: "OK",
+				content: { "application/json": { schema: HistoryResponse } },
+			},
+		},
+	});
+
+	const commandsRoute = createRoute({
+		method: "get",
+		path: "/api/commands",
+		summary: "Available skills, prompt templates, and executable built-in commands",
+		responses: {
+			200: {
+				description: "OK",
+				content: { "application/json": { schema: CommandsResponse } },
+			},
+		},
+	});
+
+	const commandRoute = createRoute({
+		method: "post",
+		path: "/api/command",
+		summary: "Execute a built-in command (compact)",
+		request: {
+			body: {
+				content: { "application/json": { schema: CommandBody } },
+			},
+		},
+		responses: {
+			200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+			400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	const promptRoute = createRoute({
+		method: "post",
+		path: "/api/prompt",
+		summary: "Send message to agent (JSON or plain text, supports SSE streaming)",
+		request: {
+			body: {
+				content: {
+					"application/json": { schema: PromptBody },
+					"text/plain": { schema: z.string() },
+				},
+			},
+		},
+		responses: {
+			200: {
+				description: "OK (JSON or SSE stream)",
+				content: {
+					"application/json": { schema: PromptResponse },
+					"text/event-stream": { schema: z.string() },
+				},
+			},
+			400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+			409: { description: "Conflict", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	const abortRoute = createRoute({
+		method: "post",
+		path: "/api/abort",
+		summary: "Abort the current agent operation",
+		responses: {
+			200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+			500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	const newSessionRoute = createRoute({
+		method: "post",
+		path: "/api/new-session",
+		summary: "Spawn a new pi session in RPC mode",
+		request: {
+			body: {
+				content: { "application/json": { schema: NewSessionBody } },
+			},
+		},
+		responses: {
+			200: { description: "OK", content: { "application/json": { schema: NewSessionResponse } } },
+			500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	const killSessionRoute = createRoute({
+		method: "post",
+		path: "/api/kill-session",
+		summary: "Terminate a session by PID (SIGTERM)",
+		request: {
+			body: {
+				content: { "application/json": { schema: KillSessionBody } },
+			},
+		},
+		responses: {
+			200: { description: "OK", content: { "application/json": { schema: KillSessionResponse } } },
+			400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	const renameSessionRoute = createRoute({
+		method: "post",
+		path: "/api/rename-session",
+		summary: "Rename the current session",
+		request: {
+			body: {
+				content: { "application/json": { schema: RenameSessionBody } },
+			},
+		},
+		responses: {
+			200: { description: "OK", content: { "application/json": { schema: RenameSessionResponse } } },
+			400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	const reloadRoute = createRoute({
+		method: "post",
+		path: "/api/reload",
+		summary: "Self-respawn (resume same session with fresh code)",
+		responses: {
+			200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+			500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+		},
+	});
+
+	// ── Hono app ─────────────────────────────────────────────────────
+
+	const app = new OpenAPIHono();
+
+	// CORS middleware
+	app.use("*", async (c, next) => {
+		await next();
+		c.header("Access-Control-Allow-Origin", "*");
+		c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		c.header("Access-Control-Allow-Headers", "Content-Type");
+	});
+	app.options("*", (c) => c.text("", 204));
+
+	// Swagger UI
+	app.doc("/api/openapi.json", {
+		openapi: "3.0.0",
+		info: {
+			title: "pi HTTP Bridge",
+			version: "1.0.0",
+			description: "HTTP bridge for pi coding agent sessions",
+		},
+	});
+	app.get("/api/docs", swaggerUI({ url: "/api/openapi.json" }));
+
+	// ── Route handlers ────────────────────────────────────────────────
+
+	app.openapi(statusRoute, (c) => {
+		return c.json(200, {
+			status: "ok",
+			busy: isBusy,
+			sessionFile: sessionFile ?? null,
+			sessionId: sessionId ?? null,
+			sessionName: sessionName ?? null,
+			port: actualPort,
+		});
+	});
+
+	app.openapi(sessionsRoute, (c) => {
+		return c.json(200, { sessions: listAllSessions() });
+	});
+
+	app.openapi(historyRoute, async (c) => {
+		const limit = parseInt(c.req.query("limit") || "0", 10);
+		const offset = parseInt(c.req.query("offset") || "0", 10);
+		try {
+			const { history, total } = await readSessionHistory(sessionFile, limit, offset);
+			return c.json(200, { history, total });
+		} catch (err: any) {
+			return c.json(500, { error: err.message });
+		}
+	});
+
+	app.openapi(commandsRoute, (c) => {
+		const commands = pi.getCommands()
+			.filter((cmd) => cmd.source === "skill" || cmd.source === "prompt")
+			.map((cmd) => ({
+				name: cmd.name,
+				description: cmd.description,
+				source: cmd.source,
+			}));
+		const builtins = builtinCommands
+			.filter((cmd) => WEBUI_EXECUTABLE.has(cmd.name))
+			.map((cmd) => ({
+				name: cmd.name,
+				description: cmd.description,
+				source: "builtin",
+				executable: true,
+			}));
+		return c.json(200, { commands: [...commands, ...builtins] });
+	});
+
+	app.openapi(commandRoute, async (c) => {
+		const body = await c.req.json();
+		const cmdName = body.command;
+		if (!WEBUI_EXECUTABLE.has(cmdName)) {
+			return c.json(400, { error: `Command "${cmdName}" is not executable from WebUI` });
+		}
+		try {
+			if (cmdName === "compact" && sessionCtx) {
+				sessionCtx.compact();
+			} else {
+				return c.json(400, { error: `Command "${cmdName}" has no handler` });
+			}
+			return c.json(200, { ok: true });
+		} catch (err: any) {
+			return c.json(500, { error: err.message });
+		}
+	});
+
+	app.openapi(promptRoute, async (c) => {
+		const contentType = c.req.header("content-type") || "";
+		const rawBody = await c.req.text();
+
+		if (!rawBody.trim()) {
+			return c.json(400, { error: "Empty request body" });
+		}
+
+		const parsed = helpers.parsePromptBody(rawBody, contentType);
+		if ("error" in parsed) {
+			return c.json(400, { error: parsed.error });
+		}
+
+		if (pending || sse) {
+			return c.json(409, { error: "Another request is being processed" });
+		}
+
+		const accept = c.req.header("accept") || "";
+		const useSse = parsed.stream || accept.includes("text/event-stream");
+
+		if (useSse) {
+			// SSE streaming — use raw Node response
+			const { readable, writable } = new TransformStream();
+			const writer = writable.getWriter();
+			const encoder = new TextEncoder();
+
+			// Start SSE in background
+			(async () => {
+				const res: any = {
+					write: (chunk: string) => { writer.write(encoder.encode(chunk)); },
+					writeHead: () => {},
+					flushHeaders: () => {},
+					end: () => { writer.close(); },
+					on: () => {},
+				};
+				await sendAndStream(parsed.message, parsed.timeoutMs, res);
+			})();
+
+			return new Response(readable, {
+				headers: {
+					"Content-Type": "text/event-stream",
+					"Cache-Control": "no-cache",
+					"Connection": "keep-alive",
+					"X-Accel-Buffering": "no",
+				},
+			});
+		}
+
+		try {
+			const messages = await sendAndWait(parsed.message, parsed.timeoutMs);
+			const result: Record<string, any> = {
+				text: helpers.extractText(messages),
+				toolCalls: helpers.extractToolCalls(messages),
+				thinking: helpers.extractThinking(messages),
+				messageCount: messages.length,
+			};
+			if (parsed.includeFull) result.messages = messages;
+			return c.json(200, result);
+		} catch (err) {
+			return c.json(500, {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	});
+
+	app.openapi(abortRoute, (c) => {
+		try {
+			if (sessionCtx) {
+				sessionCtx.abort();
+				return c.json(200, { ok: true });
+			}
+			return c.json(500, { error: "No active session context" });
+		} catch (err: any) {
+			return c.json(500, { error: err.message });
+		}
+	});
+
+	app.openapi(newSessionRoute, async (c) => {
+		let cwd: string | undefined;
+		try {
+			const body = await c.req.json();
+			cwd = body.cwd;
+		} catch {
+			// empty or non-JSON body is fine
+		}
+		try {
+			const { pid } = spawnNewSession(cwd);
+			return c.json(200, { ok: true, pid });
+		} catch (err: any) {
+			return c.json(500, { error: err.message });
+		}
+	});
+
+	app.openapi(killSessionRoute, async (c) => {
+		const body = await c.req.json();
+		const pid = body.pid;
+		if (!pid || typeof pid !== "number") {
+			return c.json(400, { error: "Missing or invalid pid" });
+		}
+		const killed = killSession(pid);
+		return c.json(200, { ok: killed, pid });
+	});
+
+	app.openapi(renameSessionRoute, async (c) => {
+		const body = await c.req.json();
+		const name = body.name;
+		if (!name || typeof name !== "string") {
+			return c.json(400, { error: "Missing or invalid name" });
+		}
+		try {
+			pi.setSessionName(name);
+			return c.json(200, { ok: true, name });
+		} catch (err: any) {
+			return c.json(500, { error: err.message });
+		}
+	});
+
+	app.openapi(reloadRoute, (c) => {
+		const sessionPath = sessionFile;
+		if (!sessionPath) {
+			return c.json(500, { error: "No session file to resume" });
+		}
+		// Self-respawn: spawn new process, then exit
+		spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc --session "${sessionPath}"`], {
+			detached: true,
+			stdio: "ignore",
+		});
+		// Clean up discovery file before exiting
+		if (discoveryFile) {
+			try { unlinkSync(discoveryFile); } catch {}
+		}
+		// Send response then exit
+		setTimeout(() => process.exit(0), 100);
+		return c.json(200, { ok: true });
+	});
+
+	// ── Static file serving (fallback) ───────────────────────────────
+
+	app.get("*", async (c) => {
+		const reqPath = c.req.path;
+		const filePath = reqPath === "/" ? "/index.html" : reqPath;
+		return serveStatic(filePath, c);
+	});
+
+	// ── Session spawn helper ─────────────────────────────────────────
+
 	function spawnNewSession(cwd?: string): { pid: number } {
 		const child = spawn("sh", ["-c", "tail -f /dev/null | pi --mode rpc"], {
 			cwd: cwd || process.cwd(),
@@ -216,12 +628,11 @@ export default function (pi: ExtensionAPI) {
 			const messages = event.messages ?? [];
 
 			if (sse) {
-				// Streaming: send done event and close
 				writeSse({
 					type: "done",
-					text: extractText(messages),
-					toolCalls: extractToolCalls(messages),
-					thinking: extractThinking(messages),
+					text: helpers.extractText(messages),
+					toolCalls: helpers.extractToolCalls(messages),
+					thinking: helpers.extractThinking(messages),
 					messageCount: messages.length,
 					messages,
 				});
@@ -230,7 +641,6 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (pending) {
-				// Non-streaming: resolve promise
 				const p = pending;
 				pending = null;
 				clearTimeout(p.timeout);
@@ -241,7 +651,6 @@ export default function (pi: ExtensionAPI) {
 
 		ourTurnActive = false;
 
-		// Notify idle waiters
 		const waiters = idleWaiters;
 		idleWaiters = [];
 		for (const w of waiters) {
@@ -278,7 +687,6 @@ export default function (pi: ExtensionAPI) {
 		const ae = event.assistantMessageEvent;
 		if (!ae) return;
 
-		// Forward relevant streaming event types
 		const forwardTypes = [
 			"text_start", "text_delta", "text_end",
 			"thinking_start", "thinking_delta", "thinking_end",
@@ -311,7 +719,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-pi.on("session_info_changed", (event: any) => {
+	pi.on("session_info_changed", (event: any) => {
 		sessionName = event.name;
 		writeDiscovery();
 	});
@@ -356,17 +764,12 @@ pi.on("session_info_changed", (event: any) => {
 
 	// ── Skill / template expansion ─────────────────────────────────────
 
-	/**
-	 * pi.sendUserMessage() bypasses skill/template expansion (expandPromptTemplates: false).
-	 * This replicates pi's _expandSkillCommand + expandPromptTemplate logic so that
-	 * /skill:name and /template commands work via HTTP.
-	 */
 	function expandSkillCommand(text: string): string {
 		const { isSkill, skillName, args } = helpers.parseSkillCommand(text);
 		if (!isSkill) return text;
 
 		const commands = pi.getCommands();
-		const skill = commands.find((c) => c.name === `skill:${skillName}`);
+		const skill = commands.find((cmd) => cmd.name === `skill:${skillName}`);
 		if (!skill) return text;
 
 		const filePath = skill.sourceInfo?.path;
@@ -388,7 +791,7 @@ pi.on("session_info_changed", (event: any) => {
 		if (!isTemplate) return text;
 
 		const commands = pi.getCommands();
-		const template = commands.find((c) => c.source === "prompt" && c.name === templateName);
+		const template = commands.find((cmd) => cmd.source === "prompt" && cmd.name === templateName);
 		if (!template) return text;
 
 		const filePath = template.sourceInfo?.path;
@@ -449,10 +852,6 @@ pi.on("session_info_changed", (event: any) => {
 		}
 	}
 
-	/**
-	 * Detect the primary LAN IP for display purposes.
-	 * Returns the first non-internal IPv4 address, or null.
-	 */
 	function getLanIp(): string | null {
 		try {
 			const nets = networkInterfaces();
@@ -522,12 +921,6 @@ pi.on("session_info_changed", (event: any) => {
 		});
 	}
 
-	const { extractText, extractToolCalls, extractThinking } = helpers;
-
-	/**
-	 * Read the session JSONL file and extract message history.
-	 * Returns an array of { role, content, toolCalls, thinking } entries.
-	 */
 	async function readSessionHistory(filePath: string | undefined, limit: number = 0, offset: number = 0): Promise<{ history: any[]; total: number }> {
 		if (!filePath || !existsSync(filePath)) return { history: [], total: 0 };
 		const data = await readFile(filePath, "utf-8");
@@ -556,43 +949,32 @@ pi.on("session_info_changed", (event: any) => {
 
 	// ── Static file serving ───────────────────────────────────────────
 
-	async function serveStatic(path: string, res: any): Promise<boolean> {
+	async function serveStatic(path: string, c: any): Promise<Response> {
 		const check = helpers.isPathSafe(path, WEB_DIR);
 		if (!check.safe) {
-			res.writeHead(403, { "Content-Type": "text/plain" });
-			res.end(check.reason);
-			return true;
+			return c.text(check.reason || "Forbidden", 403);
 		}
 
 		const safePath = normalize(path).replace(/^(\.\.[/\\])+/, "");
 		const filePath = join(WEB_DIR, safePath);
 
 		if (!existsSync(filePath)) {
-			res.writeHead(404, { "Content-Type": "text/plain" });
-			res.end("Not found");
-			return true;
+			return c.text("Not found", 404);
 		}
 
 		try {
 			const data = await readFile(filePath);
 			const ext = extname(filePath).toLowerCase();
 			const mime = MIME_TYPES[ext] || "application/octet-stream";
-			res.writeHead(200, {
-				"Content-Type": mime,
-				"Cache-Control": "no-cache",
+			return new Response(data, {
+				headers: {
+					"Content-Type": mime,
+					"Cache-Control": "no-cache",
+				},
 			});
-			res.end(data);
 		} catch {
-			res.writeHead(500, { "Content-Type": "text/plain" });
-			res.end("Internal server error");
+			return c.text("Internal server error", 500);
 		}
-		return true;
-	}
-
-	// ── Prompt parsing ────────────────────────────────────────────────
-
-	function parsePromptBody(body: string, contentType: string) {
-		return helpers.parsePromptBody(body, contentType);
 	}
 
 	// ── Send message (shared logic) ───────────────────────────────────
@@ -655,7 +1037,6 @@ pi.on("session_info_changed", (event: any) => {
 			return;
 		}
 
-		// Set up SSE state
 		const heartbeat = setInterval(() => {
 			if (sse) {
 				try {
@@ -673,22 +1054,9 @@ pi.on("session_info_changed", (event: any) => {
 
 		sse = { res, heartbeat, timeout };
 
-		// Clean up if client disconnects
-		res.on("close", () => {
-			if (sse && sse.res === res) {
-				clearInterval(sse.heartbeat);
-				clearTimeout(sse.timeout);
-				sse = null;
-				if (ourTurnActive) {
-					try { sessionCtx?.abort(); } catch {}
-				}
-			}
-		});
-
 		const expanded = expandInput(message);
 		waitingForExtensionInput = true;
 
-		// Safety timeout: if input event doesn't fire within 10s, abort
 		inputWatchdog = setTimeout(() => {
 			if (waitingForExtensionInput) {
 				waitingForExtensionInput = false;
@@ -735,305 +1103,39 @@ pi.on("session_info_changed", (event: any) => {
 		}
 
 		server = createServer(async (req, res) => {
-			const url = (req.url || "/").split("?")[0];
+			// Bridge Node's IncomingMessage to Hono's Request
+			const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 			const method = req.method || "GET";
+			const headers = new Headers();
+			for (const [key, val] of Object.entries(req.headers)) {
+				if (val) headers.set(key, Array.isArray(val) ? val.join(", ") : val);
+			}
+			const body = method === "GET" || method === "HEAD" ? undefined : req;
+			const request = new Request(url, { method, headers, body: body as any });
 
-			// CORS: allow cross-origin from any session's WebUI
-			res.setHeader("Access-Control-Allow-Origin", "*");
-			res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-			if (method === "OPTIONS") {
-				res.writeHead(204);
+			try {
+				const response = await app.fetch(request);
+				// Copy response back to Node res
+				res.writeHead(response.status, Object.fromEntries(response.headers));
+				if (response.body) {
+					const reader = response.body.getReader();
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						res.write(value);
+					}
+				}
 				res.end();
-				return;
-			}
-
-			// ── API routes ───────────────────────────────────────────
-			if (url === "/api/status" && method === "GET") {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({
-					status: "ok",
-					busy: isBusy,
-					sessionFile,
-					sessionId,
-					sessionName,
-					port: actualPort,
-				}, null, 2));
-				return;
-			}
-
-				if (url === "/api/sessions" && method === "GET") {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ sessions: listAllSessions() }, null, 2));
-				return;
-			}
-
-			if (url === "/api/history" && method === "GET") {
-				try {
-					const rawUrl = req.url || "/api/history";
-					const queryIdx = rawUrl.indexOf("?");
-					let limit = 0;
-					let offset = 0;
-					if (queryIdx !== -1) {
-						const params = new URLSearchParams(rawUrl.slice(queryIdx));
-						limit = parseInt(params.get("limit") || "0", 10);
-						offset = parseInt(params.get("offset") || "0", 10);
-					}
-					const { history, total } = await readSessionHistory(sessionFile, limit, offset);
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ history, total }, null, 2));
-				} catch (err: any) {
+			} catch (err: any) {
+				if (!res.headersSent) {
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: err.message }));
 				}
-				return;
 			}
-
-			if (url === "/api/commands" && method === "GET") {
-				const commands = pi.getCommands()
-					.filter((c) => c.source === "skill" || c.source === "prompt")
-					.map((c) => ({
-						name: c.name,
-						description: c.description,
-						source: c.source,
-					}));
-				const builtins = builtinCommands
-					.filter((c) => WEBUI_EXECUTABLE.has(c.name))
-					.map((c) => ({
-						name: c.name,
-						description: c.description,
-						source: "builtin",
-						executable: true,
-					}));
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ commands: [...commands, ...builtins] }, null, 2));
-				return;
-			}
-
-			if (url === "/api/command" && method === "POST") {
-				let body = "";
-				for await (const chunk of req) body += chunk;
-				let parsed: any;
-				try { parsed = JSON.parse(body); } catch {
-					res.writeHead(400, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Invalid JSON" }));
-					return;
-				}
-				const cmdName = parsed.command;
-				if (!WEBUI_EXECUTABLE.has(cmdName)) {
-					res.writeHead(400, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: `Command "${cmdName}" is not executable from WebUI` }));
-					return;
-				}
-				try {
-					if (cmdName === "compact" && sessionCtx) {
-						sessionCtx.compact();
-					} else {
-						res.writeHead(400, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: `Command "${cmdName}" has no handler` }));
-						return;
-					}
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ ok: true }));
-				} catch (err: any) {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: err.message }));
-				}
-				return;
-			}
-
-			if (url === "/api/new-session" && method === "POST") {
-				let body = "";
-				for await (const chunk of req) body += chunk;
-				let cwd: string | undefined;
-				if (body) {
-					try {
-						const parsed = JSON.parse(body);
-						cwd = parsed.cwd;
-					} catch {
-						// empty or non-JSON body is fine — use default cwd
-					}
-				}
-				try {
-					const { pid } = spawnNewSession(cwd);
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ ok: true, pid }));
-				} catch (err: any) {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: err.message }));
-				}
-				return;
-			}
-
-			if (url === "/api/kill-session" && method === "POST") {
-				let body = "";
-				for await (const chunk of req) body += chunk;
-				let pid: number | undefined;
-				if (body) {
-					try {
-						pid = JSON.parse(body).pid;
-					} catch {
-						// ignore
-					}
-				}
-				if (!pid || typeof pid !== "number") {
-					res.writeHead(400, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Missing or invalid pid" }));
-					return;
-				}
-				const killed = killSession(pid);
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ ok: killed, pid }));
-				return;
-			}
-			if (url === "/api/rename-session" && method === "POST") {
-				let body = "";
-				for await (const chunk of req) body += chunk;
-				let name: string | undefined;
-				if (body) {
-					try {
-						name = JSON.parse(body).name;
-					} catch {
-						// ignore
-					}
-				}
-				if (!name || typeof name !== "string") {
-					res.writeHead(400, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Missing or invalid name" }));
-					return;
-				}
-				try {
-					pi.setSessionName(name);
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ ok: true, name }));
-				} catch (err: any) {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: err.message }));
-				}
-				return;
-			}
-			if (url === "/api/reload" && method === "POST") {
-				try {
-					const sessionPath = sessionFile;
-					if (!sessionPath) {
-						res.writeHead(500, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: "No session file to resume" }));
-						return;
-					}
-					// Self-respawn: spawn new process, then exit
-					// Pass old port via env so new process tries same port first
-					spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc --session "${sessionPath}"`], {
-						detached: true,
-						stdio: "ignore",
-					});
-					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ ok: true }));
-					// Clean up discovery file before exiting
-					if (discoveryFile) {
-						try { unlinkSync(discoveryFile); } catch {}
-					}
-					process.exit(0);
-				} catch (err: any) {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: err.message }));
-				}
-				return;
-			}
-
-			if (url === "/api/abort" && method === "POST") {
-				try {
-					if (sessionCtx) {
-						sessionCtx.abort();
-						res.writeHead(200, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ ok: true }));
-					} else {
-						res.writeHead(500, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: "No active session context" }));
-					}
-				} catch (err: any) {
-					res.writeHead(500, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: err.message }));
-				}
-				return;
-			}
-
-			if (url === "/api/prompt" && method === "POST") {
-				// Read body
-				let body = "";
-				for await (const chunk of req) body += chunk;
-				body = body.trim();
-
-				if (!body) {
-					res.writeHead(400, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Empty request body" }));
-					return;
-				}
-
-				const parsed = parsePromptBody(body, req.headers["content-type"] || "");
-				if ("error" in parsed) {
-					res.writeHead(400, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: parsed.error }));
-					return;
-				}
-
-				// One request at a time
-				if (pending || sse) {
-					res.writeHead(409, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Another request is being processed" }));
-					return;
-				}
-
-				// Decide SSE vs JSON
-				const accept = req.headers.accept || "";
-				const useSse = parsed.stream || accept.includes("text/event-stream");
-
-				try {
-					if (useSse) {
-						res.writeHead(200, {
-							"Content-Type": "text/event-stream",
-							"Cache-Control": "no-cache",
-							"Connection": "keep-alive",
-							"X-Accel-Buffering": "no",
-						});
-						res.flushHeaders();
-						await sendAndStream(parsed.message, parsed.timeoutMs, res);
-					} else {
-						const messages = await sendAndWait(parsed.message, parsed.timeoutMs);
-						const result: Record<string, any> = {
-							text: extractText(messages),
-							toolCalls: extractToolCalls(messages),
-							thinking: extractThinking(messages),
-							messageCount: messages.length,
-						};
-						if (parsed.includeFull) result.messages = messages;
-						res.writeHead(200, { "Content-Type": "application/json" });
-						res.end(JSON.stringify(result));
-					}
-				} catch (err) {
-					if (!res.headersSent) {
-						res.writeHead(500, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({
-							error: err instanceof Error ? err.message : String(err),
-						}));
-					}
-				}
-				return;
-			}
-
-			// ── Static files (WebUI) ─────────────────────────────────
-			if (method === "GET") {
-				const filePath = url === "/" ? "/index.html" : url;
-				await serveStatic(filePath, res);
-				return;
-			}
-
-			res.writeHead(405, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ error: "Method not allowed" }));
 		});
 
 		server.on("error", (err: any) => {
 			if (err.code === "EADDRINUSE") {
-				// Port was grabbed between findFreePort and listen — retry next port
 				actualPort++;
 				server?.listen(actualPort, HOST);
 			} else if (ctx.hasUI) {
@@ -1072,7 +1174,6 @@ pi.on("session_info_changed", (event: any) => {
 		ourTurnActive = false;
 		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 
-		// Reject idle waiters so they don't hang for 30s
 		const waiters = idleWaiters;
 		idleWaiters = [];
 		for (const w of waiters) {
