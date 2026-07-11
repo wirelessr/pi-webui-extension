@@ -122,20 +122,30 @@ import { createSessionsView } from "./sessions.js";
     setBusy(true);
     chat.startAssistantMessage();
 
+    let streamComplete = false;
     try {
-      await sendPromptStream(text, (event) => chat.handleEvent(event));
+      await sendPromptStream(text, (event) => {
+        if (event.type === "done") streamComplete = true;
+        chat.handleEvent(event);
+      });
     } catch (err) {
       chat.showError(err.message || "Connection failed");
     } finally {
       chat.finishAssistantMessage();
       input.setStreaming(false);
       setBusy(false);
-      // Reload history as a safety net — SSE may have dropped events
-      try {
-        const data = await getHistory();
-        if (data.history && data.history.length > 0) {
-          chat.loadHistory(data.history);
+      // Only reload if SSE ended abnormally (no done event = connection dropped)
+      if (!streamComplete) {
+        try {
+          const data = await getHistory();
+          if (data.history && data.history.length > 0) {
+            chat.loadHistory(data.history);
+          }
+        } catch {
+          // Best effort
         }
+      }
+      try {
         const status = await getStatus();
         updateStats(status);
       } catch {
