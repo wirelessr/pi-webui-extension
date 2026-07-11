@@ -14,9 +14,13 @@ import { networkInterfaces } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { swaggerUI } from "@hono/swagger-ui";
-import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import * as helpers from "./http-bridge-web/helpers.js";
+
+// Resolve hono from the extension's own node_modules (pi's jiti doesn't
+// look in extension directories, so we use createRequire from our path)
+const extRequire = createRequire(import.meta.url);
+const { OpenAPIHono, createRoute, z } = extRequire("@hono/zod-openapi");
+const { swaggerUI } = extRequire("@hono/swagger-ui");
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = join(EXT_DIR, "http-bridge-web");
