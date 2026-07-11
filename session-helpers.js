@@ -9,7 +9,7 @@
  *
  * Behavioral spec:
  * 1. Includes `pi --mode rpc` (no --session, fresh session)
- * 2. Stderr redirected to logFile with `[port] ` prefix per line
+ * 2. Stderr redirected to logFile with `[port] ` prefix per line via a wrapper function
  * 3. Uses `tail -f /dev/null |` as stdin keepalive
  *
  * @param {object} opts
@@ -20,7 +20,7 @@
 export function buildSpawnCommand({ logFile, port }) {
   const escapedLog = logFile.replace(/"/g, '\\"');
   const prefix = port != null ? `[${port}]` : "[new]";
-  return `tail -f /dev/null | pi --mode rpc 2> >(sed "s/^/${prefix} /" >> "${escapedLog}")`;
+  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed "s/^/${prefix} /" >> "${escapedLog}"`;
 }
 
 /**
@@ -30,7 +30,7 @@ export function buildSpawnCommand({ logFile, port }) {
  * 1. Always includes `pi --mode rpc --session "<sessionPath>"`
  * 2. Includes `--name "<name>"` only when name is provided
  * 3. Includes `PI_HTTP_PORT=<port>` env var
- * 4. Stderr redirected to logFile with `[port] ` prefix per line
+ * 4. Stderr redirected to logFile with `[port] ` prefix per line via a wrapper function
  * 5. Uses `sleep 1 && tail -f /dev/null |` as stdin keepalive
  * 6. Escapes double quotes in name and paths
  *
@@ -45,7 +45,7 @@ export function buildReloadCommand({ port, sessionPath, name, logFile }) {
   const escapedPath = sessionPath.replace(/"/g, '\\"');
   const escapedLog = logFile.replace(/"/g, '\\"');
   const nameArg = name ? ` --name "${name.replace(/"/g, '\\"')}"` : "";
-  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2> >(sed "s/^/[${port}] /" >> "${escapedLog}")`;
+  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2>&1 1>/dev/null | sed "s/^/[${port}] /" >> "${escapedLog}"`;
 }
 
 /**
