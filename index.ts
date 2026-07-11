@@ -737,6 +737,16 @@ pi.on("session_info_changed", (event: any) => {
 			const url = (req.url || "/").split("?")[0];
 			const method = req.method || "GET";
 
+			// CORS: allow cross-origin from any session's WebUI
+			res.setHeader("Access-Control-Allow-Origin", "*");
+			res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+			if (method === "OPTIONS") {
+				res.writeHead(204);
+				res.end();
+				return;
+			}
+
 			// ── API routes ───────────────────────────────────────────
 			if (url === "/api/status" && method === "GET") {
 				res.writeHead(200, { "Content-Type": "application/json" });
