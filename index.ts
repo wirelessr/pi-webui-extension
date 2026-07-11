@@ -9,7 +9,7 @@
  *   Each pi session is a separate process with its own extension instance.
  *   There is no singleton. Instead, this extension auto-allocates a port
  *   (starting from PI_HTTP_PORT, default 7331) and writes a discovery file
- *   per session to a shared directory (default /tmp/pi-bridge/).
+ *   per session to a shared directory (default: <extension-dir>/data).
  *
  * Usage:
  *   # WebUI — open in browser
@@ -53,7 +53,7 @@
  *   data: {"type":"error","message":"..."}
  *
  * Discovery:
- *   /tmp/pi-bridge/<session-id>.json
+ *   <extension-dir>/data/<session-id>.json
  *   { port, host, sessionFile, sessionId, sessionName, pid, startedAt, webui }
  *
  * Hot reload:
@@ -64,7 +64,7 @@
  * Configuration (env vars):
  *   PI_HTTP_PORT   - Starting port for auto-allocation (default: 7331)
  *   PI_HTTP_HOST   - Bind address (default: 0.0.0.0 = all interfaces)
- *   PI_BRIDGE_DIR  - Discovery file directory (default: /tmp/pi-bridge)
+ *   PI_BRIDGE_DIR  - Discovery file directory (default: <extension-dir>/data)
  *
  * Security note:
  *   Binding to 0.0.0.0 exposes the bridge to anyone on your network.
@@ -92,13 +92,13 @@
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, extname, normalize, dirname } from "node:path";
-import { homedir, networkInterfaces } from "node:os";
+import { join, extname, normalize, dirname, basename } from "node:path";
+import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { VERSION as _piVersion } from "@earendil-works/pi-coding-agent";
 
-const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), "http-bridge-web");
+const EXT_DIR = dirname(fileURLToPath(import.meta.url));
+const WEB_DIR = join(EXT_DIR, "http-bridge-web");
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
@@ -132,7 +132,7 @@ interface SseState {
 export default function (pi: ExtensionAPI) {
 	const BASE_PORT = parseInt(process.env.PI_HTTP_PORT || "7331", 10);
 	const HOST = process.env.PI_HTTP_HOST || "0.0.0.0";
-	const BRIDGE_DIR = process.env.PI_BRIDGE_DIR || "/tmp/pi-bridge";
+	const BRIDGE_DIR = process.env.PI_BRIDGE_DIR || join(EXT_DIR, "data");
 
 	let server: ReturnType<typeof createServer> | null = null;
 	let actualPort = BASE_PORT;
@@ -142,6 +142,7 @@ export default function (pi: ExtensionAPI) {
 
 	let waitingForExtensionInput = false;
 	let ourTurnActive = false;
+	let inputWatchdog: ReturnType<typeof setTimeout> | null = null;
 
 	let idleWaiters: IdleWaiter[] = [];
 	let sessionFile: string | undefined;
@@ -154,8 +155,7 @@ export default function (pi: ExtensionAPI) {
 	// avoids hardcoding the list — stays in sync with pi updates)
 	let builtinCommands: { name: string; description: string }[] = [];
 	try {
-		// _piVersion is imported from pi's main entry at runtime; its module URL
-		// gives us the filesystem path to resolve internal submodules.
+		// Resolve from pi's main entry point to find internal submodules
 		const piEntryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 		const { createRequire } = require("node:module");
 		const piRequire = createRequire(piEntryUrl);
@@ -225,6 +225,10 @@ export default function (pi: ExtensionAPI) {
 		if (waitingForExtensionInput && event.source === "extension") {
 			waitingForExtensionInput = false;
 			ourTurnActive = true;
+			if (inputWatchdog) {
+				clearTimeout(inputWatchdog);
+				inputWatchdog = null;
+			}
 		}
 	});
 
@@ -285,6 +289,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ── SSE helpers ───────────────────────────────────────────────────
+
+	function writeSseSafe(res: any, data: any): void {
+		try {
+			res.write(`data: ${JSON.stringify(data)}\n\n`);
+		} catch {
+			// Connection might be closed
+		}
+	}
 
 	function writeSse(data: any): void {
 		if (!sse) return;
@@ -533,10 +545,10 @@ export default function (pi: ExtensionAPI) {
 	 * Read the session JSONL file and extract message history.
 	 * Returns an array of { role, content, toolCalls, thinking } entries.
 	 */
-	async function readSessionHistory(filePath: string | undefined): Promise<any[]> {
-		if (!filePath || !existsSync(filePath)) return [];
+	async function readSessionHistory(filePath: string | undefined, limit: number = 0, offset: number = 0): Promise<{ history: any[]; total: number }> {
+		if (!filePath || !existsSync(filePath)) return { history: [], total: 0 };
 		const data = await readFile(filePath, "utf-8");
-		const history: any[] = [];
+		const allHistory: any[] = [];
 		for (const line of data.split("\n")) {
 			const trimmed = line.trim();
 			if (!trimmed) continue;
@@ -600,9 +612,17 @@ export default function (pi: ExtensionAPI) {
 			// Skip entries with no useful content
 			if (!entry.text && !entry.toolCalls && !entry.thinking) continue;
 
-			history.push(entry);
+			allHistory.push(entry);
 		}
-		return history;
+		const total = allHistory.length;
+		if (limit > 0) {
+			// offset counts from the tail: offset=0 → last `limit` items,
+			// offset=50 → items[-(limit+50):-50]
+			const start = Math.max(0, total - offset - limit);
+			const end = Math.max(0, total - offset);
+			return { history: allHistory.slice(start, end), total };
+		}
+		return { history: allHistory, total };
 	}
 
 	function listAllSessions(): any[] {
@@ -730,7 +750,13 @@ export default function (pi: ExtensionAPI) {
 		timeoutMs: number,
 		res: any,
 	): Promise<void> {
-		await waitForIdle(30000);
+		try {
+			await waitForIdle(30000);
+		} catch (err: any) {
+			writeSseSafe(res, { type: "error", message: err?.message || "Timeout waiting for agent to become idle" });
+			res.end();
+			return;
+		}
 
 		// Set up SSE state
 		const heartbeat = setInterval(() => {
@@ -760,9 +786,20 @@ export default function (pi: ExtensionAPI) {
 
 		const expanded = expandInput(message);
 		waitingForExtensionInput = true;
+
+		// Safety timeout: if input event doesn't fire within 10s, abort
+		inputWatchdog = setTimeout(() => {
+			if (waitingForExtensionInput) {
+				waitingForExtensionInput = false;
+				ourTurnActive = false;
+				sendSseError("Agent did not start processing the message (input event not received)");
+			}
+		}, 10000);
+
 		try {
 			pi.sendUserMessage(expanded);
 		} catch (err) {
+			if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 			waitingForExtensionInput = false;
 			sendSseError(err instanceof Error ? err.message : String(err));
 		}
@@ -821,9 +858,18 @@ export default function (pi: ExtensionAPI) {
 
 			if (url === "/api/history" && method === "GET") {
 				try {
-					const history = await readSessionHistory(sessionFile);
+					const rawUrl = req.url || "/api/history";
+					const queryIdx = rawUrl.indexOf("?");
+					let limit = 0;
+					let offset = 0;
+					if (queryIdx !== -1) {
+						const params = new URLSearchParams(rawUrl.slice(queryIdx));
+						limit = parseInt(params.get("limit") || "0", 10);
+						offset = parseInt(params.get("offset") || "0", 10);
+					}
+					const { history, total } = await readSessionHistory(sessionFile, limit, offset);
 					res.writeHead(200, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ history }, null, 2));
+					res.end(JSON.stringify({ history, total }, null, 2));
 				} catch (err: any) {
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: err.message }));
@@ -922,6 +968,7 @@ export default function (pi: ExtensionAPI) {
 							"Connection": "keep-alive",
 							"X-Accel-Buffering": "no",
 						});
+						res.flushHeaders();
 						await sendAndStream(parsed.message, parsed.timeoutMs, res);
 					} else {
 						const messages = await sendAndWait(parsed.message, parsed.timeoutMs);
@@ -992,6 +1039,7 @@ export default function (pi: ExtensionAPI) {
 
 		waitingForExtensionInput = false;
 		ourTurnActive = false;
+		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 
 		if (discoveryFile && existsSync(discoveryFile)) {
 			try {

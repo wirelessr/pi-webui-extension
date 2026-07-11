@@ -28,18 +28,21 @@ Each pi session is a separate process with its own extension instance. There is 
 
 ```
 ~/.pi/agent/extensions/
-├── http-bridge.ts              # Extension (HTTP server + SSE + skill expansion)
-├── http-bridge-web/            # WebUI static files
+├── index.ts                   # Extension (HTTP server + SSE + skill expansion)
+├── http-bridge-web/            # WebUI static files (vanilla JS ES modules)
 │   ├── index.html              # Page structure
 │   ├── style.css               # Dark theme + responsive layout
 │   ├── app.js                  # Entry point, wires modules together
-│   ├── api.js                  # Fetch wrappers for API endpoints
+│   ├── api.js                  # Fetch wrappers for API endpoints + SSE reader
 │   ├── chat.js                 # Message rendering, streaming, tool/thinking blocks
 │   ├── commands.js             # Right sidebar: command list + free-text filtering
-│   ├── sessions.js             # Left sidebar: session list
+│   ├── sessions.js             # Left sidebar: session list + QR code button
 │   ├── input.js                # Textarea handling, keyboard shortcuts, auto-resize
 │   ├── mobile-nav.js           # Bottom tab bar for mobile view switching
+│   ├── qr.js                   # QR code modal (canvas-based)
+│   ├── qrcode-lib.js           # Vendored QR generator (Kazuhiko Arase, MIT)
 │   └── markdown.js             # Minimal markdown renderer (zero dependencies)
+├── data/                      # Runtime: discovery files (gitignored)
 └── README.md                   # This file
 ```
 
@@ -52,9 +55,23 @@ Each pi session is a separate process with its own extension instance. There is 
 | `GET` | `/api/status` | This session's status (busy, session ID, port) |
 | `GET` | `/api/sessions` | All active sessions on this machine |
 | `GET` | `/api/commands` | Available skills, prompt templates, and built-in commands |
-| `GET` | `/api/history` | Conversation history from session JSONL |
+| `GET` | `/api/history` | Conversation history from session JSONL (paginated) |
 | `POST` | `/api/command` | Execute a built-in command (compact, reload) |
 | `POST` | `/api/prompt` | Send message to agent |
+
+### GET /api/history
+
+Returns conversation history from the session JSONL file. Paginated from the tail.
+
+```
+GET /api/history?limit=50&offset=0
+```
+
+- `limit`: Max entries to return (0 = all)
+- `offset`: Number of entries to skip from the end (0 = most recent)
+- Response: `{ history: [...], total: 123 }`
+
+The WebUI loads 50 entries initially, with a "Load earlier messages" button to fetch older pages. Offset is stable against new messages (they append at the tail).
 
 ### POST /api/prompt
 
@@ -110,7 +127,9 @@ Event types: `agent_start`, `turn_start`, `turn_end`, `text_start`, `text_delta`
 ## WebUI
 
 - QR code button on each session item — scan to connect a mobile device to that session's URL
-- Conversation history persists across refresh (loaded from session JSONL via `/api/history`)
+- Conversation history persists across refresh (loaded from session JSONL via `/api/history`, paginated 50 at a time)
+- SSE disconnect detection: if the connection drops without a `done`/`error` event (e.g. extension reloaded), WebUI shows an error message
+- Auto-recovery: 3s health poll detects when server comes back after reload, reloads history and resets state
 
 ### Desktop (>= 700px)
 
@@ -166,7 +185,7 @@ Extension commands (`/cmd`) are not supported via HTTP because they require pi's
 
 ## Discovery Files
 
-Each session writes a JSON file to `/tmp/pi-bridge/<session-id>.json`:
+Each session writes a JSON file to `<extension-dir>/data/<session-id>.json`:
 
 ```json
 {
@@ -188,7 +207,7 @@ Batch scripts can discover sessions:
 
 ```bash
 # Find session by name
-PORT=$(jq -r '.port' /tmp/pi-bridge/*.json | jq -s 'map(select(.sessionName=="data-analysis")) | .[0].port')
+PORT=$(jq -r '.port' <extension-dir>/data/*.json | jq -s 'map(select(.sessionName=="data-analysis")) | .[0].port')
 curl -X POST http://localhost:$PORT -d 'Analysis done'
 ```
 
@@ -200,7 +219,7 @@ Environment variables (set before starting pi):
 |----------|---------|-------------|
 | `PI_HTTP_PORT` | `7331` | Starting port for auto-allocation |
 | `PI_HTTP_HOST` | `0.0.0.0` | Bind address |
-| `PI_BRIDGE_DIR` | `/tmp/pi-bridge` | Discovery file directory |
+| `PI_BRIDGE_DIR` | `<extension-dir>/data` | Discovery file directory |
 
 For local-only access: `PI_HTTP_HOST=127.0.0.1`
 
@@ -218,6 +237,17 @@ Binding to `0.0.0.0` exposes the bridge to anyone on your network. There is **no
 |--------------|-------------|-------------------|
 | Web UI files (HTML/CSS/JS) | Browser refresh | Yes |
 | Extension TypeScript | `/reload` in TUI | Yes (conversation preserved, HTTP server restarts) |
+
+## Installation
+
+Clone into pi's extensions directory:
+
+```bash
+cd ~/.pi/agent/extensions/
+git clone <repo-url> pi-webui-extension
+```
+
+pi auto-discovers `extensions/*/index.ts` on startup. No additional configuration needed.
 
 ## Limitations
 
