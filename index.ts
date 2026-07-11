@@ -901,12 +901,14 @@ pi.on("session_info_changed", (event: any) => {
 						description: c.description,
 						source: c.source,
 					}));
-				const builtins = builtinCommands.map((c) => ({
-					name: c.name,
-					description: c.description,
-					source: "builtin",
-					executable: WEBUI_EXECUTABLE.has(c.name),
-				}));
+				const builtins = builtinCommands
+					.filter((c) => WEBUI_EXECUTABLE.has(c.name))
+					.map((c) => ({
+						name: c.name,
+						description: c.description,
+						source: "builtin",
+						executable: true,
+					}));
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(JSON.stringify({ commands: [...commands, ...builtins] }, null, 2));
 				return;

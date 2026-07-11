@@ -71,12 +71,7 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
 
       const sourceEl = document.createElement("span");
       sourceEl.className = "cmd-source";
-      if (cmd.source === "builtin" && cmd.executable === false) {
-        sourceEl.textContent = "TUI";
-        el.classList.add("cmd-tui-only");
-      } else {
-        sourceEl.textContent = cmd.source;
-      }
+      sourceEl.textContent = cmd.source;
 
       const descEl = document.createElement("div");
       descEl.className = "cmd-desc";

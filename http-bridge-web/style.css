@@ -351,14 +351,6 @@ body {
   margin-top: 2px;
 }
 
-.cmd-tui-only {
-  opacity: 0.5;
-}
-
-.cmd-tui-only .cmd-source {
-  color: var(--status-error, #ef4444);
-}
-
 .cmd-item .cmd-desc {
   color: var(--text-muted);
   font-size: 11px;
