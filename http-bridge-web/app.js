@@ -15,7 +15,7 @@ import { abortAgent, executeCommand, getHistory, getStatus, sendPromptStream } f
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { createContextMenu } from "./context-menu.js";
-import { doInit, doSelectCommand, doSendPrompt, doStop } from "./flow.js";
+import { doInit, doSelectCommand, doSendPrompt, doStop, reapplyExpandState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { createSessionsView } from "./sessions.js";
@@ -164,7 +164,7 @@ import { formatStats } from "./utils.js";
       loadSessionsFn: () => sessionsView.load(),
       loadHistoryFn: (history) => {
         chat.loadHistory(history);
-        if (toolsExpanded) chat.expandAllTools();
+        reapplyExpandState({ toolsExpanded, expandAllToolsFn: chat.expandAllTools });
       },
       autoResizeFn: () => input.autoResize(),
       onStatusFn: (data) => {

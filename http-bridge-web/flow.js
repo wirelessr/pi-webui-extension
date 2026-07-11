@@ -150,6 +150,27 @@ export async function doStop(opts) {
 }
 
 /**
+ * Re-apply expand-all-tools state after history loads.
+ *
+ * Behavioral spec:
+ * 1. If toolsExpanded is true → call expandAllToolsFn (tool blocks loaded async)
+ * 2. If toolsExpanded is false → do nothing
+ *
+ * This fixes the bug where switching sessions caused the expand/collapse
+ * all button to desync from the DOM: history loads asynchronously after
+ * page navigation, so tool blocks don't exist when expandAllTools() first runs.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.toolsExpanded — current button state
+ * @param {function} opts.expandAllToolsFn — () => void
+ * @returns {{applied: boolean}}
+ */
+export function reapplyExpandState({ toolsExpanded, expandAllToolsFn }) {
+  if (toolsExpanded) expandAllToolsFn();
+  return { applied: toolsExpanded };
+}
+
+/**
  * Initialize the WebUI on page load.
  *
  * Behavioral spec:
@@ -168,6 +189,8 @@ export async function doStop(opts) {
  * @param {function} opts.loadHistoryFn — (history) => void
  * @param {function} opts.autoResizeFn — () => void
  * @param {function} opts.onStatusFn — (status) => void (update port/pid/name/stats display)
+ * @param {boolean} [opts.toolsExpanded] — whether expand-all is active (re-applied after history load)
+ * @param {function} [opts.expandAllToolsFn] — () => void, called after history load if toolsExpanded
  * @returns {Promise<{statusLoaded: boolean, historyLoaded: boolean, commandsLoaded: boolean, sessionsLoaded: boolean}>}
  */
 export async function doInit(opts) {
@@ -179,6 +202,8 @@ export async function doInit(opts) {
     loadHistoryFn,
     autoResizeFn,
     onStatusFn,
+    toolsExpanded,
+    expandAllToolsFn,
   } = opts;
 
   const result = { statusLoaded: false, historyLoaded: false, commandsLoaded: false, sessionsLoaded: false };
@@ -211,6 +236,7 @@ export async function doInit(opts) {
     const data = await getHistoryFn();
     if (data.history && data.history.length > 0) {
       loadHistoryFn(data.history);
+      reapplyExpandState({ toolsExpanded, expandAllToolsFn });
       result.historyLoaded = true;
     }
   } catch {

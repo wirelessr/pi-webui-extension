@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { doInit, doSelectCommand, doSendPrompt, doStop } from "../http-bridge-web/flow.js";
+import { doInit, doSelectCommand, doSendPrompt, doStop, reapplyExpandState } from "../http-bridge-web/flow.js";
 
 // ── Mock helpers ──────────────────────────────────────
 
@@ -410,4 +410,25 @@ describe("doInit — initialization sequence", () => {
     assert.equal(result.sessionsLoaded, false);
     assert.ok(result.historyLoaded);
   });
+});
+
+// ── reapplyExpandState ─────────────────────────────────
+
+describe("reapplyExpandState", () => {
+  const cases = [
+    { desc: "toolsExpanded=true calls expandAllToolsFn", toolsExpanded: true, expectCalled: true },
+    { desc: "toolsExpanded=false does not call expandAllToolsFn", toolsExpanded: false, expectCalled: false },
+  ];
+
+  for (const { desc, toolsExpanded, expectCalled } of cases) {
+    test(desc, () => {
+      let called = false;
+      const result = reapplyExpandState({
+        toolsExpanded,
+        expandAllToolsFn: () => { called = true; },
+      });
+      assert.strictEqual(called, expectCalled);
+      assert.strictEqual(result.applied, toolsExpanded);
+    });
+  }
 });
