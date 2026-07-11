@@ -89,6 +89,7 @@
  *   - Default response timeout is 5 minutes. Override with {"timeout": ms}.
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -169,6 +170,33 @@ export default function (pi: ExtensionAPI) {
 
 	// Commands that can be triggered from WebUI via /api/command
 	const WEBUI_EXECUTABLE = new Set(["compact"]);
+
+	// ── Session spawn helper ────────────────────────────────────────
+
+	/**
+	 * Spawn a new pi process in RPC mode with a keep-alive stdin.
+	 * The child is detached so it survives the parent process exiting.
+	 * stdin is fed by `tail -f /dev/null` which never EOFs, keeping
+	 * RPC mode alive without requiring a TTY.
+	 */
+	function spawnNewSession(cwd?: string): { pid: number } {
+		const child = spawn("sh", ["-c", "tail -f /dev/null | pi --rpc"], {
+			cwd: cwd || process.cwd(),
+			detached: true,
+			stdio: "ignore",
+		});
+		child.unref();
+		return { pid: child.pid! };
+	}
+
+	function killSession(pid: number): boolean {
+		try {
+			process.kill(pid, "SIGTERM");
+			return true;
+		} catch {
+			return false;
+		}
+	}
 
 	// ── Agent event handlers ──────────────────────────────────────────
 
@@ -943,6 +971,51 @@ pi.on("session_info_changed", (event: any) => {
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: err.message }));
 				}
+				return;
+			}
+
+			if (url === "/api/new-session" && method === "POST") {
+				let body = "";
+				for await (const chunk of req) body += chunk;
+				let cwd: string | undefined;
+				if (body) {
+					try {
+						const parsed = JSON.parse(body);
+						cwd = parsed.cwd;
+					} catch {
+						// empty or non-JSON body is fine — use default cwd
+					}
+				}
+				try {
+					const { pid } = spawnNewSession(cwd);
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ ok: true, pid }));
+				} catch (err: any) {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: err.message }));
+				}
+				return;
+			}
+
+			if (url === "/api/kill-session" && method === "POST") {
+				let body = "";
+				for await (const chunk of req) body += chunk;
+				let pid: number | undefined;
+				if (body) {
+					try {
+						pid = JSON.parse(body).pid;
+					} catch {
+						// ignore
+					}
+				}
+				if (!pid || typeof pid !== "number") {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Missing or invalid pid" }));
+					return;
+				}
+				const killed = killSession(pid);
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ ok: killed, pid }));
 				return;
 			}
 
