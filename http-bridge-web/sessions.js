@@ -24,6 +24,17 @@ export function pickRedirectTarget(sessions, closedPid) {
   return sessions.find((s) => s.pid !== closedPid) || null;
 }
 
+/**
+ * Check if all previous PIDs have been replaced by new ones.
+ * @param {Array} currentSessions - current session list
+ * @param {Set} prevPids - set of PIDs before reload
+ * @returns {boolean} true if none of the current sessions have an old PID
+ */
+export function allPidsReplaced(currentSessions, prevPids) {
+  if (currentSessions.length === 0) return false;
+  return currentSessions.every((s) => !prevPids.has(s.pid));
+}
+
 export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   let sessions = [];
   const qr = createQrCode();
@@ -237,7 +248,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     // Poll until all old PIDs are replaced
     const result = await pollUntil(async () => {
       const all = await refreshSessions();
-      if (all.every((s) => !prevPids.has(s.pid))) {
+      if (allPidsReplaced(all, prevPids)) {
         render();
         return true;
       }
