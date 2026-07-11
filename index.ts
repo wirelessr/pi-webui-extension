@@ -1114,8 +1114,14 @@ export default function (pi: ExtensionAPI) {
 			for (const [key, val] of Object.entries(req.headers)) {
 				if (val) headers.set(key, Array.isArray(val) ? val.join(", ") : val);
 			}
-			const body = method === "GET" || method === "HEAD" ? undefined : req;
-			const request = new Request(url, { method, headers, body: body as any });
+			// Read body into buffer for POST requests
+			let body: string | undefined;
+			if (method !== "GET" && method !== "HEAD") {
+				let chunks = "";
+				for await (const chunk of req) chunks += chunk;
+				body = chunks;
+			}
+			const request = new Request(url, { method, headers, body });
 
 			try {
 				const response = await app.fetch(request);
