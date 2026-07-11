@@ -33,6 +33,7 @@ import { createSessionsView } from "./sessions.js";
   const $busyIndicator = document.getElementById("busy-indicator");
   const $portDisplay = document.getElementById("port-display");
   const $sessionName = document.getElementById("session-name");
+  const $statsDisplay = document.getElementById("stats-display");
   const $sessionsList = document.getElementById("sessions-list");
   const $refreshSessions = document.getElementById("refresh-sessions");
   const $newSession = document.getElementById("new-session");
@@ -139,6 +140,35 @@ import { createSessionsView } from "./sessions.js";
     $busyIndicator.className = `status ${busy ? "busy" : "idle"}`;
   }
 
+  // ── Stats formatting ───────────────────────────────
+
+  function formatTokens(n) {
+    if (n < 1000) return String(n);
+    if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+    if (n < 1000000) return `${Math.round(n / 1000)}k`;
+    if (n < 10000000) return `${(n / 1000000).toFixed(1)}M`;
+    return `${Math.round(n / 1000000)}M`;
+  }
+
+  function updateStats(data) {
+    if (!data.usage || !data.context) return;
+    const u = data.usage;
+    const ctx = data.context;
+    const parts = [];
+    if (u.inputTokens) parts.push(`↑${formatTokens(u.inputTokens)}`);
+    if (u.outputTokens) parts.push(`↓${formatTokens(u.outputTokens)}`);
+    if (u.cacheReadTokens) parts.push(`R${formatTokens(u.cacheReadTokens)}`);
+    if (u.cacheWriteTokens) parts.push(`W${formatTokens(u.cacheWriteTokens)}`);
+    if (u.cacheHitRate !== null) parts.push(`CH${u.cacheHitRate.toFixed(1)}%`);
+    if (u.totalCost) parts.push(`$${u.totalCost.toFixed(3)}`);
+    const ctxStr = ctx.percent !== null
+      ? `${ctx.percent.toFixed(1)}%/${formatTokens(ctx.contextWindow)}`
+      : `?/${formatTokens(ctx.contextWindow)}`;
+    parts.push(ctxStr);
+    if (data.model) parts.push(data.model);
+    $statsDisplay.textContent = parts.join(" ");
+  }
+
   // ── Init ──────────────────────────────────────────
 
   async function init() {
@@ -148,6 +178,7 @@ import { createSessionsView } from "./sessions.js";
       $portDisplay.textContent = `:${data.port}`;
       if (data.sessionName) $sessionName.textContent = data.sessionName;
       else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
+      updateStats(data);
     } catch {
       // Server might not be ready yet
     }

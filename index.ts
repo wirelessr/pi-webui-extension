@@ -57,6 +57,21 @@ interface SseState {
 
 // ── Zod schemas ───────────────────────────────────────────────────
 
+const UsageStats = z.object({
+	inputTokens: z.number(),
+	outputTokens: z.number(),
+	cacheReadTokens: z.number(),
+	cacheWriteTokens: z.number(),
+	cacheHitRate: z.number().nullable(),
+	totalCost: z.number(),
+}).openapi("UsageStats");
+
+const ContextUsageInfo = z.object({
+	tokens: z.number().nullable(),
+	contextWindow: z.number(),
+	percent: z.number().nullable(),
+}).openapi("ContextUsageInfo");
+
 const StatusResponse = z.object({
 	status: z.string(),
 	busy: z.boolean(),
@@ -64,6 +79,9 @@ const StatusResponse = z.object({
 	sessionId: z.string().nullable(),
 	sessionName: z.string().nullable(),
 	port: z.number(),
+	model: z.string().nullable(),
+	usage: UsageStats,
+	context: ContextUsageInfo,
 }).openapi("Status");
 
 const SessionInfo = z.object({
@@ -396,6 +414,9 @@ export default function (pi: ExtensionAPI) {
 			sessionId: sessionId ?? null,
 			sessionName: sessionName ?? null,
 			port: actualPort,
+			model: sessionCtx?.model?.id ?? null,
+			usage: computeUsageStats(),
+			context: computeContextUsage(),
 		});
 	});
 
@@ -959,6 +980,50 @@ export default function (pi: ExtensionAPI) {
 			// Dir doesn't exist
 		}
 		return sessions.sort((a, b) => a.port - b.port);
+	}
+
+	function computeUsageStats(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheHitRate: number | null; totalCost: number } {
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let cacheReadTokens = 0;
+		let cacheWriteTokens = 0;
+		let totalCost = 0;
+		let latestCacheHitRate: number | null = null;
+
+		try {
+			const entries = sessionCtx?.sessionManager?.getEntries();
+			if (entries) {
+				for (const entry of entries) {
+					if (entry.type === "message" && entry.message?.role === "assistant") {
+						const usage = entry.message.usage;
+						if (!usage) continue;
+						inputTokens += usage.input ?? 0;
+						outputTokens += usage.output ?? 0;
+						cacheReadTokens += usage.cacheRead ?? 0;
+						cacheWriteTokens += usage.cacheWrite ?? 0;
+						totalCost += usage.cost?.total ?? 0;
+						const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+						if (promptTokens > 0) {
+							latestCacheHitRate = ((usage.cacheRead ?? 0) / promptTokens) * 100;
+						}
+					}
+				}
+			}
+		} catch {
+			// Best effort
+		}
+
+		return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHitRate: latestCacheHitRate, totalCost };
+	}
+
+	function computeContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } {
+		try {
+			const ctx = sessionCtx?.getContextUsage?.();
+			if (ctx) return { tokens: ctx.tokens, contextWindow: ctx.contextWindow, percent: ctx.percent };
+		} catch {
+			// Best effort
+		}
+		return { tokens: null, contextWindow: 0, percent: null };
 	}
 
 	// ── Static file serving ───────────────────────────────────────────

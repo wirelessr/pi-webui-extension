@@ -81,6 +81,15 @@ body {
 
 .status-area { display: flex; align-items: center; gap: 10px; }
 
+.stats {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40vw;
+}
+
 .status {
   font-size: 11px;
   padding: 3px 8px;
