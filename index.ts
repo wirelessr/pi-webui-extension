@@ -384,7 +384,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Route handlers ────────────────────────────────────────────────
 
 	app.openapi(statusRoute, (c) => {
-		return c.json(200, {
+		return c.json({
 			status: "ok",
 			busy: isBusy,
 			sessionFile: sessionFile ?? null,
@@ -395,7 +395,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	app.openapi(sessionsRoute, (c) => {
-		return c.json(200, { sessions: listAllSessions() });
+		return c.json({ sessions: listAllSessions() });
 	});
 
 	app.openapi(historyRoute, async (c) => {
@@ -403,9 +403,9 @@ export default function (pi: ExtensionAPI) {
 		const offset = parseInt(c.req.query("offset") || "0", 10);
 		try {
 			const { history, total } = await readSessionHistory(sessionFile, limit, offset);
-			return c.json(200, { history, total });
+			return c.json({ history, total });
 		} catch (err: any) {
-			return c.json(500, { error: err.message });
+			return c.json({ error: err.message }, 500);
 		}
 	});
 
@@ -425,24 +425,24 @@ export default function (pi: ExtensionAPI) {
 				source: "builtin",
 				executable: true,
 			}));
-		return c.json(200, { commands: [...commands, ...builtins] });
+		return c.json({ commands: [...commands, ...builtins] });
 	});
 
 	app.openapi(commandRoute, async (c) => {
 		const body = await c.req.json();
 		const cmdName = body.command;
 		if (!WEBUI_EXECUTABLE.has(cmdName)) {
-			return c.json(400, { error: `Command "${cmdName}" is not executable from WebUI` });
+			return c.json({ error: `Command "${cmdName}" is not executable from WebUI` }, 400);
 		}
 		try {
 			if (cmdName === "compact" && sessionCtx) {
 				sessionCtx.compact();
 			} else {
-				return c.json(400, { error: `Command "${cmdName}" has no handler` });
+				return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
 			}
-			return c.json(200, { ok: true });
+			return c.json({ ok: true });
 		} catch (err: any) {
-			return c.json(500, { error: err.message });
+			return c.json({ error: err.message }, 500);
 		}
 	});
 
@@ -451,16 +451,16 @@ export default function (pi: ExtensionAPI) {
 		const rawBody = await c.req.text();
 
 		if (!rawBody.trim()) {
-			return c.json(400, { error: "Empty request body" });
+			return c.json({ error: "Empty request body" }, 400);
 		}
 
 		const parsed = helpers.parsePromptBody(rawBody, contentType);
 		if ("error" in parsed) {
-			return c.json(400, { error: parsed.error });
+			return c.json({ error: parsed.error }, 400);
 		}
 
 		if (pending || sse) {
-			return c.json(409, { error: "Another request is being processed" });
+			return c.json({ error: "Another request is being processed" }, 409);
 		}
 
 		const accept = c.req.header("accept") || "";
@@ -503,9 +503,9 @@ export default function (pi: ExtensionAPI) {
 				messageCount: messages.length,
 			};
 			if (parsed.includeFull) result.messages = messages;
-			return c.json(200, result);
+			return c.json(result);
 		} catch (err) {
-			return c.json(500, {
+			return c.json({
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
@@ -515,11 +515,11 @@ export default function (pi: ExtensionAPI) {
 		try {
 			if (sessionCtx) {
 				sessionCtx.abort();
-				return c.json(200, { ok: true });
+				return c.json({ ok: true });
 			}
-			return c.json(500, { error: "No active session context" });
+			return c.json({ error: "No active session context" }, 500);
 		} catch (err: any) {
-			return c.json(500, { error: err.message });
+			return c.json({ error: err.message }, 500);
 		}
 	});
 
@@ -533,9 +533,9 @@ export default function (pi: ExtensionAPI) {
 		}
 		try {
 			const { pid } = spawnNewSession(cwd);
-			return c.json(200, { ok: true, pid });
+			return c.json({ ok: true, pid });
 		} catch (err: any) {
-			return c.json(500, { error: err.message });
+			return c.json({ error: err.message }, 500);
 		}
 	});
 
@@ -543,30 +543,30 @@ export default function (pi: ExtensionAPI) {
 		const body = await c.req.json();
 		const pid = body.pid;
 		if (!pid || typeof pid !== "number") {
-			return c.json(400, { error: "Missing or invalid pid" });
+			return c.json({ error: "Missing or invalid pid" }, 400);
 		}
 		const killed = killSession(pid);
-		return c.json(200, { ok: killed, pid });
+		return c.json({ ok: killed, pid });
 	});
 
 	app.openapi(renameSessionRoute, async (c) => {
 		const body = await c.req.json();
 		const name = body.name;
 		if (!name || typeof name !== "string") {
-			return c.json(400, { error: "Missing or invalid name" });
+			return c.json({ error: "Missing or invalid name" }, 400);
 		}
 		try {
 			pi.setSessionName(name);
-			return c.json(200, { ok: true, name });
+			return c.json({ ok: true, name });
 		} catch (err: any) {
-			return c.json(500, { error: err.message });
+			return c.json({ error: err.message }, 500);
 		}
 	});
 
 	app.openapi(reloadRoute, (c) => {
 		const sessionPath = sessionFile;
 		if (!sessionPath) {
-			return c.json(500, { error: "No session file to resume" });
+			return c.json({ error: "No session file to resume" }, 500);
 		}
 		// Self-respawn: spawn new process, then exit
 		spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc --session "${sessionPath}"`], {
@@ -579,7 +579,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		// Send response then exit
 		setTimeout(() => process.exit(0), 100);
-		return c.json(200, { ok: true });
+		return c.json({ ok: true });
 	});
 
 	// ── Static file serving (fallback) ───────────────────────────────
