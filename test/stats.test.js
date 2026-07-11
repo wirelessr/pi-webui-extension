@@ -4,34 +4,25 @@ import { computeUsageStats } from "../http-bridge-web/helpers.js";
 import { formatStats, formatTokens } from "../http-bridge-web/utils.js";
 
 describe("formatTokens", () => {
-  it("returns raw number below 1000", () => {
-    assert.equal(formatTokens(0), "0");
-    assert.equal(formatTokens(42), "42");
-    assert.equal(formatTokens(999), "999");
-  });
-
-  it("returns 1-decimal k for 1k-10k", () => {
-    assert.equal(formatTokens(1000), "1.0k");
-    assert.equal(formatTokens(1500), "1.5k");
-    assert.equal(formatTokens(9999), "10.0k");
-  });
-
-  it("returns rounded k for 10k-1M", () => {
-    assert.equal(formatTokens(10000), "10k");
-    assert.equal(formatTokens(424000), "424k");
-    assert.equal(formatTokens(999999), "1000k");
-  });
-
-  it("returns 1-decimal M for 1M-10M", () => {
-    assert.equal(formatTokens(1000000), "1.0M");
-    assert.equal(formatTokens(3800000), "3.8M");
-    assert.equal(formatTokens(9999999), "10.0M");
-  });
-
-  it("returns rounded M for 10M+", () => {
-    assert.equal(formatTokens(10000000), "10M");
-    assert.equal(formatTokens(213000000), "213M");
-  });
+  const cases = [
+    { name: "returns raw number below 1000", input: 0, expected: "0" },
+    { name: "42", input: 42, expected: "42" },
+    { name: "999", input: 999, expected: "999" },
+    { name: "returns 1-decimal k for 1k-10k", input: 1000, expected: "1.0k" },
+    { name: "1500", input: 1500, expected: "1.5k" },
+    { name: "9999", input: 9999, expected: "10.0k" },
+    { name: "returns rounded k for 10k-1M", input: 10000, expected: "10k" },
+    { name: "424000", input: 424000, expected: "424k" },
+    { name: "999999", input: 999999, expected: "1000k" },
+    { name: "returns 1-decimal M for 1M-10M", input: 1000000, expected: "1.0M" },
+    { name: "3800000", input: 3800000, expected: "3.8M" },
+    { name: "9999999", input: 9999999, expected: "10.0M" },
+    { name: "returns rounded M for 10M+", input: 10000000, expected: "10M" },
+    { name: "213000000", input: 213000000, expected: "213M" },
+  ];
+  for (const c of cases) {
+    it(c.name, () => assert.equal(formatTokens(c.input), c.expected));
+  }
 });
 
 describe("formatStats", () => {
@@ -75,29 +66,21 @@ describe("formatStats", () => {
 });
 
 describe("computeUsageStats", () => {
-  it("returns zeros for null entries", () => {
-    const result = computeUsageStats(null);
-    assert.deepEqual(result, {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      cacheHitRate: null,
-      totalCost: 0,
-    });
-  });
-
-  it("returns zeros for empty entries", () => {
-    const result = computeUsageStats([]);
-    assert.deepEqual(result, {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      cacheHitRate: null,
-      totalCost: 0,
-    });
-  });
+  const zeroCases = [
+    { name: "returns zeros for null entries", input: null },
+    { name: "returns zeros for empty entries", input: [] },
+  ];
+  for (const c of zeroCases) {
+    it(c.name, () =>
+      assert.deepEqual(computeUsageStats(c.input), {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cacheHitRate: null,
+        totalCost: 0,
+      }));
+  }
 
   it("skips non-assistant messages", () => {
     const entries = [

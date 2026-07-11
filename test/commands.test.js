@@ -1,5 +1,5 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import { filterCommands } from "../http-bridge-web/commands.js";
 
 const COMMANDS = [
@@ -12,63 +12,65 @@ const COMMANDS = [
   { name: "pr-respond", description: "Respond to PR review threads", source: "skill" },
 ];
 
-describe("filterCommands - exact match (rank 0)", () => {
-  test("exact name match ranks first", () => {
-    const result = filterCommands(COMMANDS, "compact");
-    assert.equal(result[0].name, "compact");
-  });
-
-  test("exact match is case-insensitive", () => {
-    const result = filterCommands(COMMANDS, "COMPACT");
-    assert.equal(result[0].name, "compact");
-  });
-});
-
-describe("filterCommands - prefix match (rank 1)", () => {
-  test("prefix match ranks after exact", () => {
-    const result = filterCommands(COMMANDS, "pr");
-    assert.ok(result.some((c) => c.name === "pr-review"));
-    assert.ok(result.some((c) => c.name === "pr-respond"));
-    // pr-review and pr-respond should come before any description matches
-    assert.equal(result[0].name, "pr-respond");
-    assert.equal(result[1].name, "pr-review");
-  });
-});
-
-describe("filterCommands - word boundary match (rank 2)", () => {
-  test("matches after separator character", () => {
-    const result = filterCommands(COMMANDS, "gh");
-    assert.ok(result.some((c) => c.name === "skill:gh"));
-  });
-
-  test("matches after hyphen separator", () => {
-    const result = filterCommands(COMMANDS, "tests");
-    assert.ok(result.some((c) => c.name === "fix-tests"));
-  });
-
-  test("separator match does not trigger on mid-word letters", () => {
-    // "ill" appears as a substring in "skill:gh" (rank 3), but NOT as a separator match (rank 2)
-    // There is no separator before "ill" in "skill:gh" — it's mid-word in "skill"
-    const result = filterCommands(COMMANDS, "ill");
-    // skill:gh matches via substring (rank 3), not via separator (rank 2)
-    assert.ok(result.some((c) => c.name === "skill:gh"));
-    // But it should NOT rank above a command where "ill" follows a separator
-    // (none in our test set, so just verify it's present via substring)
-  });
-});
-
-describe("filterCommands - substring match (rank 3)", () => {
-  test("substring in name", () => {
-    const result = filterCommands(COMMANDS, "view");
-    assert.ok(result.some((c) => c.name === "pr-review"));
-  });
-});
-
-describe("filterCommands - description match (rank 4)", () => {
-  test("substring in description", () => {
-    const result = filterCommands(COMMANDS, "ticket");
-    assert.ok(result.some((c) => c.name === "skill:jira"));
-  });
+describe("filterCommands - ranking", () => {
+  const cases = [
+    {
+      name: "exact name match ranks first",
+      query: "compact",
+      assert: (r) => assert.equal(r[0].name, "compact"),
+    },
+    {
+      name: "exact match is case-insensitive",
+      query: "COMPACT",
+      assert: (r) => assert.equal(r[0].name, "compact"),
+    },
+    {
+      name: "prefix match ranks after exact",
+      query: "pr",
+      assert: (r) => {
+        assert.ok(r.some((c) => c.name === "pr-review"));
+        assert.ok(r.some((c) => c.name === "pr-respond"));
+        // pr-review and pr-respond should come before any description matches
+        assert.equal(r[0].name, "pr-respond");
+        assert.equal(r[1].name, "pr-review");
+      },
+    },
+    {
+      name: "matches after separator character",
+      query: "gh",
+      assert: (r) => assert.ok(r.some((c) => c.name === "skill:gh")),
+    },
+    {
+      name: "matches after hyphen separator",
+      query: "tests",
+      assert: (r) => assert.ok(r.some((c) => c.name === "fix-tests")),
+    },
+    {
+      name: "separator match does not trigger on mid-word letters",
+      query: "ill",
+      assert: (r) => {
+        // "ill" appears as a substring in "skill:gh" (rank 3), but NOT as a separator match (rank 2)
+        // There is no separator before "ill" in "skill:gh" — it's mid-word in "skill"
+        // skill:gh matches via substring (rank 3), not via separator (rank 2)
+        assert.ok(r.some((c) => c.name === "skill:gh"));
+        // But it should NOT rank above a command where "ill" follows a separator
+        // (none in our test set, so just verify it's present via substring)
+      },
+    },
+    {
+      name: "substring in name",
+      query: "view",
+      assert: (r) => assert.ok(r.some((c) => c.name === "pr-review")),
+    },
+    {
+      name: "substring in description",
+      query: "ticket",
+      assert: (r) => assert.ok(r.some((c) => c.name === "skill:jira")),
+    },
+  ];
+  for (const c of cases) {
+    test(c.name, () => c.assert(filterCommands(COMMANDS, c.query)));
+  }
 });
 
 describe("filterCommands - ranking order", () => {

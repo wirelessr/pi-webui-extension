@@ -1,5 +1,5 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import { renderMarkdown } from "../http-bridge-web/markdown.js";
 
 describe("renderMarkdown - tables", () => {
@@ -33,28 +33,42 @@ describe("renderMarkdown - tables", () => {
 });
 
 describe("renderMarkdown - fenced code blocks", () => {
-  test("~~~ fence variant", () => {
-    const result = renderMarkdown("~~~\nhello\n~~~");
-    assert.ok(result.includes("<pre><code"));
-    assert.ok(result.includes("hello"));
-  });
-
-  test("fence with language", () => {
-    const result = renderMarkdown("```python\nprint(1)\n```");
-    assert.ok(result.includes('class="language-python"'));
-    assert.ok(result.includes("print(1)"));
-  });
-
-  test("fence with ~~~ and language", () => {
-    const result = renderMarkdown("~~~js\nconst x = 1\n~~~");
-    assert.ok(result.includes('class="language-js"'));
-    assert.ok(result.includes("const x = 1"));
-  });
-
-  test("empty fence", () => {
-    const result = renderMarkdown("```\n```");
-    assert.ok(result.includes("<pre><code"));
-  });
+  const cases = [
+    {
+      name: "~~~ fence variant",
+      md: "~~~\nhello\n~~~",
+      assert: (r) => {
+        assert.ok(r.includes("<pre><code"));
+        assert.ok(r.includes("hello"));
+      },
+    },
+    {
+      name: "fence with language",
+      md: "```python\nprint(1)\n```",
+      assert: (r) => {
+        assert.ok(r.includes('class="language-python"'));
+        assert.ok(r.includes("print(1)"));
+      },
+    },
+    {
+      name: "fence with ~~~ and language",
+      md: "~~~js\nconst x = 1\n~~~",
+      assert: (r) => {
+        assert.ok(r.includes('class="language-js"'));
+        assert.ok(r.includes("const x = 1"));
+      },
+    },
+    {
+      name: "empty fence",
+      md: "```\n```",
+      assert: (r) => {
+        assert.ok(r.includes("<pre><code"));
+      },
+    },
+  ];
+  for (const c of cases) {
+    test(c.name, () => c.assert(renderMarkdown(c.md)));
+  }
 });
 
 describe("renderMarkdown - nested lists", () => {

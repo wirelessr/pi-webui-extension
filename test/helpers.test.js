@@ -1,17 +1,17 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import {
   extractText,
-  extractToolCalls,
   extractThinking,
-  parseHistoryLine,
-  parseHistoryData,
-  paginateHistory,
+  extractToolCalls,
   isPathSafe,
+  paginateHistory,
+  parseHistoryData,
+  parseHistoryLine,
   parsePromptBody,
-  stripFrontmatter,
-  parseSkillCommand,
   parsePromptTemplate,
+  parseSkillCommand,
+  stripFrontmatter,
 } from "../http-bridge-web/helpers.js";
 
 // ── extractText / extractToolCalls / extractThinking ──
@@ -210,35 +210,23 @@ describe("parseHistoryLine", () => {
     assert.deepEqual(entry.toolCalls, [{ id: "tc1", name: "bash", arguments: { cmd: "ls" } }]);
   });
 
-  test("skips system messages", () => {
-    const line = JSON.stringify({
-      type: "message",
-      message: { role: "system", content: "system prompt" },
-    });
-    assert.equal(parseHistoryLine(line), null);
-  });
+  describe("skip cases return null", () => {
+    const cases = [
+      { name: "system messages", input: JSON.stringify({ type: "message", message: { role: "system", content: "system prompt" } }) },
+      { name: "non-message types", input: JSON.stringify({ type: "summary", data: "..." }) },
+      { name: "invalid JSON: not json", input: "not json" },
+      { name: "invalid JSON: broken brace", input: "{broken" },
+      { name: "empty line: empty string", input: "" },
+      { name: "empty line: whitespace only", input: "   " },
+      { name: "no useful content", input: JSON.stringify({ type: "message", message: { role: "assistant", content: [] } }) },
+      { name: "no message field", input: JSON.stringify({ type: "message" }) },
+    ];
 
-  test("skips non-message types", () => {
-    const line = JSON.stringify({ type: "summary", data: "..." });
-    assert.equal(parseHistoryLine(line), null);
-  });
-
-  test("skips invalid JSON", () => {
-    assert.equal(parseHistoryLine("not json"), null);
-    assert.equal(parseHistoryLine("{broken"), null);
-  });
-
-  test("skips empty lines", () => {
-    assert.equal(parseHistoryLine(""), null);
-    assert.equal(parseHistoryLine("   "), null);
-  });
-
-  test("skips entries with no useful content", () => {
-    const line = JSON.stringify({
-      type: "message",
-      message: { role: "assistant", content: [] },
-    });
-    assert.equal(parseHistoryLine(line), null);
+    for (const { name, input } of cases) {
+      test(`skips ${name}`, () => {
+        assert.equal(parseHistoryLine(input), null);
+      });
+    }
   });
 
   test("parses toolResult message", () => {
@@ -268,11 +256,6 @@ describe("parseHistoryLine", () => {
     });
     const entry = parseHistoryLine(line);
     assert.equal(entry.text, "plain result");
-  });
-
-  test("skips message without message field", () => {
-    const line = JSON.stringify({ type: "message" });
-    assert.equal(parseHistoryLine(line), null);
   });
 });
 
@@ -347,38 +330,21 @@ describe("paginateHistory", () => {
 describe("isPathSafe", () => {
   const baseDir = "/var/www/webui";
 
-  test("normal file path is safe", () => {
-    const result = isPathSafe("/index.html", baseDir);
-    assert.ok(result.safe);
-  });
+  const cases = [
+    { name: "normal file path is safe", input: "/index.html", baseDir },
+    { name: "path traversal with ../ is normalized to within baseDir", input: "/../../etc/passwd", baseDir },
+    { name: "multiple ../ without leading slash is normalized safely", input: "../../../etc/shadow", baseDir },
+    { name: "nested subdirectory is safe", input: "/subdir/file.js", baseDir },
+    { name: "root path is safe", input: "/", baseDir },
+    { name: "URL-encoded traversal is treated as filename (safe)", input: "..%2f..%2fetc%2fpasswd", baseDir },
+  ];
 
-  test("path traversal with ../ is normalized to within baseDir", () => {
-    // normalize("/../../etc/passwd") → "/etc/passwd"
-    // join(baseDir, "/etc/passwd") → "/var/www/webui/etc/passwd"
-    // This is safe — the path stays within baseDir
-    const result = isPathSafe("/../../etc/passwd", baseDir);
-    assert.ok(result.safe);
-  });
-
-  test("multiple ../ without leading slash is normalized safely", () => {
-    const result = isPathSafe("../../../etc/shadow", baseDir);
-    assert.ok(result.safe);
-  });
-
-  test("nested subdirectory is safe", () => {
-    const result = isPathSafe("/subdir/file.js", baseDir);
-    assert.ok(result.safe);
-  });
-
-  test("root path is safe", () => {
-    const result = isPathSafe("/", baseDir);
-    assert.ok(result.safe);
-  });
-
-  test("URL-encoded traversal is treated as filename (safe)", () => {
-    const result = isPathSafe("..%2f..%2fetc%2fpasswd", baseDir);
-    assert.ok(result.safe);
-  });
+  for (const { name, input, baseDir: base } of cases) {
+    test(`${name} → safe`, () => {
+      const result = isPathSafe(input, base);
+      assert.equal(result.safe, true);
+    });
+  }
 
   test("path that resolves outside baseDir after normalize is blocked", () => {
     // This is the real guard: if somehow the path resolves outside baseDir
@@ -475,56 +441,43 @@ describe("stripFrontmatter", () => {
 // ── parseSkillCommand / parsePromptTemplate ──
 
 describe("parseSkillCommand", () => {
-  test("parses /skill:name", () => {
-    const result = parseSkillCommand("/skill:gh");
-    assert.ok(result.isSkill);
-    assert.equal(result.skillName, "gh");
-    assert.equal(result.args, "");
-  });
+  const cases = [
+    { name: "parses /skill:name", input: "/skill:gh", expectedIsSkill: true, expectedSkillName: "gh", expectedArgs: "" },
+    { name: "parses /skill:name with args", input: "/skill:gh list open PRs", expectedIsSkill: true, expectedSkillName: "gh", expectedArgs: "list open PRs" },
+    { name: "non-skill text → isSkill false", input: "hello world", expectedIsSkill: false, expectedSkillName: null, expectedArgs: undefined },
+    { name: "/skill: with no name", input: "/skill:", expectedIsSkill: true, expectedSkillName: "", expectedArgs: "" },
+  ];
 
-  test("parses /skill:name with args", () => {
-    const result = parseSkillCommand("/skill:gh list open PRs");
-    assert.ok(result.isSkill);
-    assert.equal(result.skillName, "gh");
-    assert.equal(result.args, "list open PRs");
-  });
-
-  test("non-skill text → isSkill false", () => {
-    const result = parseSkillCommand("hello world");
-    assert.ok(!result.isSkill);
-    assert.equal(result.skillName, null);
-  });
-
-  test("/skill: with no name", () => {
-    const result = parseSkillCommand("/skill:");
-    assert.ok(result.isSkill);
-    assert.equal(result.skillName, "");
-  });
+  for (const { name, input, expectedIsSkill, expectedSkillName, expectedArgs } of cases) {
+    test(name, () => {
+      const result = parseSkillCommand(input);
+      assert.equal(result.isSkill, expectedIsSkill);
+      assert.equal(result.skillName, expectedSkillName);
+      if (expectedArgs !== undefined) {
+        assert.equal(result.args, expectedArgs);
+      }
+    });
+  }
 });
 
 describe("parsePromptTemplate", () => {
-  test("parses /templateName", () => {
-    const result = parsePromptTemplate("/pr");
-    assert.ok(result.isTemplate);
-    assert.equal(result.templateName, "pr");
-    assert.equal(result.args, "");
-  });
+  const cases = [
+    { name: "parses /templateName", input: "/pr", expectedIsTemplate: true, expectedTemplateName: "pr", expectedArgs: "" },
+    { name: "parses /templateName with args", input: "/pr --base develop", expectedIsTemplate: true, expectedTemplateName: "pr", expectedArgs: "--base develop" },
+    { name: "non-slash text → isTemplate false", input: "hello", expectedIsTemplate: false, expectedTemplateName: undefined, expectedArgs: undefined },
+    { name: "bare slash with no name", input: "/", expectedIsTemplate: true, expectedTemplateName: "", expectedArgs: undefined },
+  ];
 
-  test("parses /templateName with args", () => {
-    const result = parsePromptTemplate("/pr --base develop");
-    assert.ok(result.isTemplate);
-    assert.equal(result.templateName, "pr");
-    assert.equal(result.args, "--base develop");
-  });
-
-  test("non-slash text → isTemplate false", () => {
-    const result = parsePromptTemplate("hello");
-    assert.ok(!result.isTemplate);
-  });
-
-  test("bare slash with no name", () => {
-    const result = parsePromptTemplate("/");
-    assert.ok(result.isTemplate);
-    assert.equal(result.templateName, "");
-  });
+  for (const { name, input, expectedIsTemplate, expectedTemplateName, expectedArgs } of cases) {
+    test(name, () => {
+      const result = parsePromptTemplate(input);
+      assert.equal(result.isTemplate, expectedIsTemplate);
+      if (expectedTemplateName !== undefined) {
+        assert.equal(result.templateName, expectedTemplateName);
+      }
+      if (expectedArgs !== undefined) {
+        assert.equal(result.args, expectedArgs);
+      }
+    });
+  }
 });
