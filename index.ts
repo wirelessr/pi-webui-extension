@@ -999,37 +999,12 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function computeUsageStats(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheHitRate: number | null; totalCost: number } {
-		let inputTokens = 0;
-		let outputTokens = 0;
-		let cacheReadTokens = 0;
-		let cacheWriteTokens = 0;
-		let totalCost = 0;
-		let latestCacheHitRate: number | null = null;
-
 		try {
 			const entries = sessionCtx?.sessionManager?.getEntries();
-			if (entries) {
-				for (const entry of entries) {
-					if (entry.type === "message" && entry.message?.role === "assistant") {
-						const usage = entry.message.usage;
-						if (!usage) continue;
-						inputTokens += usage.input ?? 0;
-						outputTokens += usage.output ?? 0;
-						cacheReadTokens += usage.cacheRead ?? 0;
-						cacheWriteTokens += usage.cacheWrite ?? 0;
-						totalCost += usage.cost?.total ?? 0;
-						const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-						if (promptTokens > 0) {
-							latestCacheHitRate = ((usage.cacheRead ?? 0) / promptTokens) * 100;
-						}
-					}
-				}
-			}
+			return helpers.computeUsageStats(entries);
 		} catch {
-			// Best effort
+			return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitRate: null, totalCost: 0 };
 		}
-
-		return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHitRate: latestCacheHitRate, totalCost };
 	}
 
 	function computeContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } {

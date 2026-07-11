@@ -241,3 +241,37 @@ export function parsePromptTemplate(text) {
   const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
   return { isTemplate: true, templateName, args };
 }
+
+/**
+ * Compute cumulative usage stats from session entries.
+ * @param {Array} entries — session entries from sessionManager.getEntries()
+ * @returns {{inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number, cacheHitRate: number|null, totalCost: number}}
+ */
+export function computeUsageStats(entries) {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let totalCost = 0;
+  let latestCacheHitRate = null;
+
+  if (!entries) return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHitRate: latestCacheHitRate, totalCost };
+
+  for (const entry of entries) {
+    if (entry.type === "message" && entry.message?.role === "assistant") {
+      const usage = entry.message.usage;
+      if (!usage) continue;
+      inputTokens += usage.input ?? 0;
+      outputTokens += usage.output ?? 0;
+      cacheReadTokens += usage.cacheRead ?? 0;
+      cacheWriteTokens += usage.cacheWrite ?? 0;
+      totalCost += usage.cost?.total ?? 0;
+      const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      if (promptTokens > 0) {
+        latestCacheHitRate = ((usage.cacheRead ?? 0) / promptTokens) * 100;
+      }
+    }
+  }
+
+  return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHitRate: latestCacheHitRate, totalCost };
+}

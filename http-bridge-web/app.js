@@ -18,6 +18,7 @@ import { createContextMenu } from "./context-menu.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { createSessionsView } from "./sessions.js";
+import { formatStats } from "./utils.js";
 
 (function () {
 
@@ -165,30 +166,8 @@ import { createSessionsView } from "./sessions.js";
 
   // ── Stats formatting ───────────────────────────────
 
-  function formatTokens(n) {
-    if (n < 1000) return String(n);
-    if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
-    if (n < 1000000) return `${Math.round(n / 1000)}k`;
-    if (n < 10000000) return `${(n / 1000000).toFixed(1)}M`;
-    return `${Math.round(n / 1000000)}M`;
-  }
-
   function updateStats(data) {
-    if (!data.usage || !data.context) return;
-    const u = data.usage;
-    const ctx = data.context;
-    const parts = [];
-    if (u.inputTokens) parts.push(`↑${formatTokens(u.inputTokens)}`);
-    if (u.outputTokens) parts.push(`↓${formatTokens(u.outputTokens)}`);
-    if (u.cacheReadTokens) parts.push(`R${formatTokens(u.cacheReadTokens)}`);
-    if (u.cacheWriteTokens) parts.push(`W${formatTokens(u.cacheWriteTokens)}`);
-    if (u.cacheHitRate !== null) parts.push(`CH${u.cacheHitRate.toFixed(1)}%`);
-    if (u.totalCost) parts.push(`$${u.totalCost.toFixed(3)}`);
-    const ctxStr = ctx.percent !== null
-      ? `${ctx.percent.toFixed(1)}%/${formatTokens(ctx.contextWindow)}`
-      : `?/${formatTokens(ctx.contextWindow)}`;
-    parts.push(ctxStr);
-    $statsDisplay.textContent = parts.join(" \u00b7 ");
+    $statsDisplay.textContent = formatStats(data);
   }
 
   // ── Init ──────────────────────────────────────────
