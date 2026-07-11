@@ -17,7 +17,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx biome check http-bridge-web/ index.ts
+      - run: npx biome check http-bridge-web/ index.ts bridge-app.js test/
 
       - run: node --test test/*.test.js
 
