@@ -1,8 +1,45 @@
 /**
  * API client — thin wrappers over fetch for the HTTP bridge endpoints.
+ *
+ * Sessions run on separate ports. Use sessionUrl(s) to get a session's
+ * base URL, then pass it to the cross-session API functions.
  */
 
 import { parseSseBuffer } from "./sse-parser.js";
+
+// ── Helpers ───────────────────────────────────────────
+
+/**
+ * Get the base URL for a session object.
+ * @param {{url?: string, port: number}} s
+ * @returns {string} e.g. "http://192.168.1.130:7331"
+ */
+export function sessionUrl(s) {
+  return s.url || `http://localhost:${s.port}`;
+}
+
+/**
+ * Poll a condition function until it returns truthy or max attempts reached.
+ * Swallows errors — useful for waiting on discovery file updates.
+ * @param {() => Promise<any>} fn — condition check, return truthy to stop
+ * @param {number} intervalMs — delay between attempts
+ * @param {number} maxAttempts — max poll attempts
+ * @returns {Promise<any>} last truthy result, or null if timed out
+ */
+export async function pollUntil(fn, intervalMs = 500, maxAttempts = 10) {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    try {
+      const result = await fn();
+      if (result) return result;
+    } catch {
+      // Keep polling
+    }
+  }
+  return null;
+}
+
+// ── Current session API ───────────────────────────────
 
 export async function getStatus() {
   const res = await fetch("/api/status");
@@ -42,6 +79,8 @@ export async function executeCommand(command) {
   return res.json();
 }
 
+// ── Session management (target current session) ───────
+
 export async function newSession(cwd) {
   const res = await fetch("/api/new-session", {
     method: "POST",
@@ -68,7 +107,9 @@ export async function killSession(pid) {
   return res.json();
 }
 
-export async function renameSession(name, baseUrl = "") {
+// ── Cross-session API (target any session by URL) ─────
+
+export async function renameSession(name, baseUrl) {
   const res = await fetch(`${baseUrl}/api/rename-session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -81,7 +122,7 @@ export async function renameSession(name, baseUrl = "") {
   return res.json();
 }
 
-export async function reloadSession(baseUrl = "") {
+export async function reloadSession(baseUrl) {
   const res = await fetch(`${baseUrl}/api/reload`, { method: "POST" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Request failed" }));
@@ -89,6 +130,8 @@ export async function reloadSession(baseUrl = "") {
   }
   return res.json();
 }
+
+// ── Streaming ─────────────────────────────────────────
 
 /**
  * Send a prompt and stream SSE events.

@@ -1,11 +1,17 @@
 /**
  * Sessions view — left sidebar, lists all active pi bridge sessions.
- * Each session item has a QR button and a close button.
- * The header has an add button to spawn a new session.
- * Double-click a session name to rename it.
+ * Global management: add, close, rename, reload any session.
  */
 
-import { getSessions, killSession, newSession, reloadSession, renameSession } from "./api.js";
+import {
+  getSessions,
+  killSession,
+  newSession,
+  pollUntil,
+  reloadSession,
+  renameSession,
+  sessionUrl,
+} from "./api.js";
 import { createQrCode } from "./qr.js";
 import { escapeHtml } from "./utils.js";
 
@@ -32,6 +38,12 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     }
   }
 
+  async function refreshSessions() {
+    const data = await getSessions();
+    sessions = data.sessions || [];
+    return sessions;
+  }
+
   function render() {
     $list.innerHTML = "";
 
@@ -47,7 +59,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       if (s.port === port) el.classList.add("current");
 
       const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
-      const url = s.url || `http://localhost:${s.port}`;
+      const url = sessionUrl(s);
       el.innerHTML = `
         <div class="session-item-row">
           <div class="session-item-info">
@@ -89,6 +101,8 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     }
   }
 
+  // ── Context menu ────────────────────────────────────
+
   let $sessionMenu = null;
   function closeSessionMenu() {
     if ($sessionMenu) {
@@ -127,6 +141,8 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     document.body.appendChild($sessionMenu);
   }
 
+  // ── Rename ──────────────────────────────────────────
+
   function handleRename(s, nameEl) {
     const currentName = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
     const input = document.createElement("input");
@@ -149,23 +165,18 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         return;
       }
       try {
-        await renameSession(newName, s.url || `http://localhost:${s.port}`);
-        // Poll for discovery file update
-        for (let i = 0; i < 5; i++) {
-          await new Promise((r) => setTimeout(r, 300));
-          try {
-            const data = await getSessions();
-            sessions = data.sessions || [];
-            const updated = sessions.find((x) => x.pid === s.pid);
-            if (updated && updated.sessionName === newName) {
-              render();
-              return;
-            }
-          } catch {
-            // Keep polling
+        await renameSession(newName, sessionUrl(s));
+        // Poll until discovery file reflects the new name
+        const result = await pollUntil(async () => {
+          const all = await refreshSessions();
+          const updated = all.find((x) => x.pid === s.pid);
+          if (updated && updated.sessionName === newName) {
+            render();
+            return true;
           }
-        }
-        render();
+          return false;
+        }, 300, 5);
+        if (!result) render();
       } catch (err) {
         render();
         $list.insertAdjacentHTML(
@@ -189,26 +200,21 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     });
   }
 
+  // ── New session ─────────────────────────────────────
+
   async function handleNew() {
-    let created = false;
     try {
       const prevCount = sessions.length;
       await newSession();
-      for (let i = 0; i < 10; i++) {
-        await new Promise((r) => setTimeout(r, 1000));
-        try {
-          const data = await getSessions();
-          sessions = data.sessions || [];
-          if (sessions.length > prevCount) {
-            created = true;
-            render();
-            break;
-          }
-        } catch {
-          // Server might be temporarily unavailable during reload — keep polling
+      const result = await pollUntil(async () => {
+        const all = await refreshSessions();
+        if (all.length > prevCount) {
+          render();
+          return true;
         }
-      }
-      if (!created) {
+        return false;
+      }, 1000, 10);
+      if (!result) {
         $list.innerHTML = '<div class="cmd-empty">New session not detected — try refresh</div>';
       }
     } catch (err) {
@@ -216,44 +222,40 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     }
   }
 
+  // ── Reload all ──────────────────────────────────────
+
   async function handleReloadAll() {
     if (sessions.length === 0) return;
     if (!confirm(`Reload all ${sessions.length} session(s)?`)) return;
 
     const prevPids = new Set(sessions.map((s) => s.pid));
 
-    // Send reload to all sessions concurrently
-    const results = await Promise.allSettled(
-      sessions.map((s) => reloadSession(s.url || `http://localhost:${s.port}`)),
+    await Promise.allSettled(
+      sessions.map((s) => reloadSession(sessionUrl(s))),
     );
 
-    const failed = results.filter((r) => r.status === "rejected").length;
-    if (failed > 0) {
-      $list.insertAdjacentHTML(
-        "afterbegin",
-        `<div class="cmd-empty">${failed} session(s) failed to reload</div>`,
-      );
-    }
-
-    // Poll until all old sessions are replaced with new ones
-    for (let i = 0; i < 15; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      try {
-        const data = await getSessions();
-        sessions = data.sessions || [];
-        // All old PIDs gone means all have respawned
-        if (sessions.every((s) => !prevPids.has(s.pid))) {
-          render();
-          return;
-        }
-      } catch {
-        // Keep polling
+    // Poll until all old PIDs are replaced
+    const result = await pollUntil(async () => {
+      const all = await refreshSessions();
+      if (all.every((s) => !prevPids.has(s.pid))) {
+        render();
+        return true;
       }
-    }
-    await load();
+      return false;
+    }, 1000, 15);
+    if (!result) await load();
   }
 
+  // ── Close ───────────────────────────────────────────
+
   async function handleClose(s) {
+    if (sessions.length <= 1) {
+      $list.insertAdjacentHTML(
+        "afterbegin",
+        '<div class="cmd-empty">Cannot close the last session</div>',
+      );
+      return;
+    }
     if (!confirm(`Close session "${s.sessionName || s.sessionId?.slice(0, 8)}"?`)) return;
 
     const isCurrent = s.port === getCurrentPort();
@@ -268,28 +270,23 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     if (isCurrent) {
       const other = pickRedirectTarget(sessions, s.pid);
       if (other) {
-        const url = other.url || `http://localhost:${other.port}`;
-        window.location.href = url;
+        window.location.href = sessionUrl(other);
         return;
       }
       $list.innerHTML = '<div class="cmd-empty">Session closed</div>';
       return;
     }
 
-    for (let i = 0; i < 5; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      try {
-        const data = await getSessions();
-        sessions = data.sessions || [];
-        if (!sessions.some((x) => x.pid === s.pid)) {
-          render();
-          return;
-        }
-      } catch {
-        // Keep polling
+    // Poll until the session disappears from discovery
+    const result = await pollUntil(async () => {
+      const all = await refreshSessions();
+      if (!all.some((x) => x.pid === s.pid)) {
+        render();
+        return true;
       }
-    }
-    await load();
+      return false;
+    }, 500, 5);
+    if (!result) await load();
   }
 
   return { load, handleNew, handleReloadAll };
