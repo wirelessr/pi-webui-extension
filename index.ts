@@ -1049,11 +1049,17 @@ export default function (pi: ExtensionAPI) {
 				bySessionFile.set(key, s);
 			}
 		}
-		// Clean up stale discovery files for sessions that lost the dedup
+		// Clean up stale discovery files for sessions that lost the dedup.
+		// Also kill the losing processes to prevent orphans.
 		const winnerPids = new Set(Array.from(bySessionFile.values()).map((s) => s.pid));
 		for (const s of sessions) {
 			if (!winnerPids.has(s.pid)) {
 				try { unlinkSync(join(BRIDGE_DIR, `${s.sessionId}.json`)); } catch {}
+				// Kill the losing process group (pid is sh wrapper PID)
+				try { process.kill(-s.pid, "SIGTERM"); } catch {
+					try { process.kill(s.pid, "SIGTERM"); } catch {}
+				}
+				console.error(`[http-bridge] listAllSessions: killed dedup loser pid=${s.pid} port=${s.port}`);
 			}
 		}
 		return Array.from(bySessionFile.values()).sort((a, b) => a.port - b.port);
