@@ -920,7 +920,7 @@ pi.on("session_info_changed", (event: any) => {
 						return;
 					}
 					// Self-respawn: spawn new process, then exit
-					spawn("sh", ["-c", `sleep 1 && pi --mode rpc --session "${sessionPath}"`], {
+					spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | pi --mode rpc --session "${sessionPath}"`], {
 						detached: true,
 						stdio: "ignore",
 					});
