@@ -100,6 +100,136 @@ export async function doReloadAll(opts) {
   return { action: "reloadPage", reason: "all PIDs replaced" };
 }
 
+/**
+ * Core new-session behavior with injectable side effects.
+ * @param {object} opts
+ * @param {number} opts.prevCount - current session count
+ * @param {function} opts.newSessionFn - () => Promise
+ * @param {function} opts.refreshSessionsFn - () => Promise<Array>
+ * @param {function} opts.pollUntilFn - (fn, interval, max) => Promise
+ * @param {function} opts.renderFn - () => void
+ * @returns {Promise<{action: string, reason: string}>}
+ */
+export async function doNewSession(opts) {
+  const { prevCount, newSessionFn, refreshSessionsFn, pollUntilFn, renderFn } = opts;
+  try {
+    await newSessionFn();
+    const result = await pollUntilFn(async () => {
+      const all = await refreshSessionsFn();
+      if (all.length > prevCount) {
+        renderFn();
+        return true;
+      }
+      return false;
+    }, 1000, 10);
+    if (!result) return { action: "showError", reason: "New session not detected — try refresh" };
+    return { action: "rendered", reason: "new session detected" };
+  } catch (err) {
+    return { action: "showError", reason: `Failed to create: ${err.message}` };
+  }
+}
+
+/**
+ * Core close-session behavior with injectable side effects.
+ * @param {object} opts
+ * @param {Array} opts.sessions - current session list
+ * @param {object} opts.session - the session to close
+ * @param {function} opts.confirmFn - (msg) => boolean
+ * @param {function} opts.killSessionFn - (pid) => Promise
+ * @param {function} opts.sessionUrlFn - (session) => string
+ * @param {function} opts.getCurrentPortFn - () => number
+ * @param {function} opts.refreshSessionsFn - () => Promise<Array>
+ * @param {function} opts.pollUntilFn - (fn, interval, max) => Promise
+ * @param {function} opts.renderFn - () => void
+ * @param {function} opts.loadFn - () => Promise
+ * @param {function} opts.redirectFn - (url) => void (window.location.href = url)
+ * @returns {Promise<{action: string, reason: string}>}
+ */
+export async function doCloseSession(opts) {
+  const {
+    sessions, session, confirmFn, killSessionFn, sessionUrlFn,
+    getCurrentPortFn, refreshSessionsFn, pollUntilFn, renderFn, loadFn, redirectFn,
+  } = opts;
+
+  if (sessions.length <= 1) return { action: "showError", reason: "Cannot close the last session" };
+
+  const label = session.sessionName || session.sessionId?.slice(0, 8);
+  if (!confirmFn(`Close session "${label}"?`)) return { action: "noop", reason: "user cancelled" };
+
+  const isCurrent = session.port === getCurrentPortFn();
+
+  try {
+    await killSessionFn(session.pid);
+  } catch (err) {
+    return { action: "showError", reason: `Failed to close: ${err.message}` };
+  }
+
+  if (isCurrent) {
+    const other = pickRedirectTarget(sessions, session.pid);
+    if (other) {
+      redirectFn(sessionUrlFn(other));
+      return { action: "redirect", reason: "closed current session" };
+    }
+    return { action: "showError", reason: "Session closed" };
+  }
+
+  const result = await pollUntilFn(async () => {
+    const all = await refreshSessionsFn();
+    if (!all.some((x) => x.pid === session.pid)) {
+      renderFn();
+      return true;
+    }
+    return false;
+  }, 500, 5);
+  if (!result) {
+    await loadFn();
+    return { action: "loadList", reason: "poll timed out" };
+  }
+  return { action: "rendered", reason: "session disappeared from discovery" };
+}
+
+/**
+ * Core rename-session behavior with injectable side effects.
+ * @param {object} opts
+ * @param {object} opts.session - the session to rename
+ * @param {string} opts.newName - the new name (already trimmed)
+ * @param {string} opts.currentName - the current name for comparison
+ * @param {function} opts.renameSessionFn - (name, baseUrl) => Promise
+ * @param {function} opts.sessionUrlFn - (session) => string
+ * @param {function} opts.refreshSessionsFn - () => Promise<Array>
+ * @param {function} opts.pollUntilFn - (fn, interval, max) => Promise
+ * @param {function} opts.renderFn - () => void
+ * @returns {Promise<{action: string, reason: string}>}
+ */
+export async function doRenameSession(opts) {
+  const { session, newName, currentName, renameSessionFn, sessionUrlFn, refreshSessionsFn, pollUntilFn, renderFn } = opts;
+
+  if (!newName || newName === currentName) {
+    return { action: "rendered", reason: "no change" };
+  }
+
+  try {
+    await renameSessionFn(newName, sessionUrlFn(session));
+    const result = await pollUntilFn(async () => {
+      const all = await refreshSessionsFn();
+      const updated = all.find((x) => x.pid === session.pid);
+      if (updated && updated.sessionName === newName) {
+        renderFn();
+        return true;
+      }
+      return false;
+    }, 300, 5);
+    if (!result) {
+      renderFn();
+      return { action: "rendered", reason: "poll timed out" };
+    }
+    return { action: "rendered", reason: "name updated" };
+  } catch (err) {
+    renderFn();
+    return { action: "showError", reason: `Rename failed: ${err.message}` };
+  }
+}
+
 export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   let sessions = [];
   const qr = createQrCode();
@@ -236,28 +366,20 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       if (done) return;
       done = true;
       const newName = input.value.trim();
-      if (!newName || newName === currentName) {
-        render();
-        return;
-      }
-      try {
-        await renameSession(newName, sessionUrl(s));
-        // Poll until discovery file reflects the new name
-        const result = await pollUntil(async () => {
-          const all = await refreshSessions();
-          const updated = all.find((x) => x.pid === s.pid);
-          if (updated && updated.sessionName === newName) {
-            render();
-            return true;
-          }
-          return false;
-        }, 300, 5);
-        if (!result) render();
-      } catch (err) {
-        render();
+      const result = await doRenameSession({
+        session: s,
+        newName,
+        currentName,
+        renameSessionFn: renameSession,
+        sessionUrlFn: sessionUrl,
+        refreshSessionsFn: refreshSessions,
+        pollUntilFn: pollUntil,
+        renderFn: render,
+      });
+      if (result.action === "showError") {
         $list.insertAdjacentHTML(
           "afterbegin",
-          `<div class="cmd-empty">Rename failed: ${escapeHtml(err.message)}</div>`,
+          `<div class="cmd-empty">${escapeHtml(result.reason)}</div>`,
         );
       }
     }
@@ -279,22 +401,16 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   // ── New session ─────────────────────────────────────
 
   async function handleNew() {
-    try {
-      const prevCount = sessions.length;
-      await newSession();
-      const result = await pollUntil(async () => {
-        const all = await refreshSessions();
-        if (all.length > prevCount) {
-          render();
-          return true;
-        }
-        return false;
-      }, 1000, 10);
-      if (!result) {
-        $list.innerHTML = '<div class="cmd-empty">New session not detected — try refresh</div>';
-      }
-    } catch (err) {
-      $list.innerHTML = `<div class="cmd-empty">Failed to create: ${escapeHtml(err.message)}</div>`;
+    const prevCount = sessions.length;
+    const result = await doNewSession({
+      prevCount,
+      newSessionFn: newSession,
+      refreshSessionsFn: refreshSessions,
+      pollUntilFn: pollUntil,
+      renderFn: render,
+    });
+    if (result.action === "showError") {
+      $list.innerHTML = `<div class="cmd-empty">${escapeHtml(result.reason)}</div>`;
     }
   }
 
@@ -317,44 +433,25 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   // ── Close ───────────────────────────────────────────
 
   async function handleClose(s) {
-    if (sessions.length <= 1) {
+    const result = await doCloseSession({
+      sessions,
+      session: s,
+      confirmFn: (msg) => confirm(msg),
+      killSessionFn: killSession,
+      sessionUrlFn: sessionUrl,
+      getCurrentPortFn: getCurrentPort,
+      refreshSessionsFn: refreshSessions,
+      pollUntilFn: pollUntil,
+      renderFn: render,
+      loadFn: load,
+      redirectFn: (url) => { window.location.href = url; },
+    });
+    if (result.action === "showError") {
       $list.insertAdjacentHTML(
         "afterbegin",
-        '<div class="cmd-empty">Cannot close the last session</div>',
+        `<div class="cmd-empty">${escapeHtml(result.reason)}</div>`,
       );
-      return;
     }
-    if (!confirm(`Close session "${s.sessionName || s.sessionId?.slice(0, 8)}"?`)) return;
-
-    const isCurrent = s.port === getCurrentPort();
-
-    try {
-      await killSession(s.pid);
-    } catch (err) {
-      $list.innerHTML = `<div class="cmd-empty">Failed to close: ${escapeHtml(err.message)}</div>`;
-      return;
-    }
-
-    if (isCurrent) {
-      const other = pickRedirectTarget(sessions, s.pid);
-      if (other) {
-        window.location.href = sessionUrl(other);
-        return;
-      }
-      $list.innerHTML = '<div class="cmd-empty">Session closed</div>';
-      return;
-    }
-
-    // Poll until the session disappears from discovery
-    const result = await pollUntil(async () => {
-      const all = await refreshSessions();
-      if (!all.some((x) => x.pid === s.pid)) {
-        render();
-        return true;
-      }
-      return false;
-    }, 500, 5);
-    if (!result) await load();
   }
 
   return { load, handleNew, handleReloadAll };
