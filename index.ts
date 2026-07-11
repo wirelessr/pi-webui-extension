@@ -434,8 +434,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	app.openapi(commandRoute, async (c) => {
-		const body = await c.req.json();
-		const cmdName = body.command;
+		let cmdName: string;
+		try {
+			cmdName = (await c.req.json()).command;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
 		if (!WEBUI_EXECUTABLE.has(cmdName)) {
 			return c.json({ error: `Command "${cmdName}" is not executable from WebUI` }, 400);
 		}
@@ -543,8 +547,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	app.openapi(killSessionRoute, async (c) => {
-		const body = await c.req.json();
-		const pid = body.pid;
+		let pid: unknown;
+		try {
+			pid = (await c.req.json()).pid;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
 		if (!pid || typeof pid !== "number") {
 			return c.json({ error: "Missing or invalid pid" }, 400);
 		}
@@ -553,8 +561,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	app.openapi(renameSessionRoute, async (c) => {
-		const body = await c.req.json();
-		const name = body.name;
+		let name: unknown;
+		try {
+			name = (await c.req.json()).name;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
 		if (!name || typeof name !== "string") {
 			return c.json({ error: "Missing or invalid name" }, 400);
 		}
