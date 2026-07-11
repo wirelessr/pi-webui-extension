@@ -39,6 +39,7 @@ Each pi session is a separate process with its own extension instance. There is 
 │   ├── sessions.js             # Left sidebar: session list + QR code button
 │   ├── input.js                # Textarea handling, keyboard shortcuts, auto-resize
 │   ├── mobile-nav.js           # Bottom tab bar for mobile view switching
+│   ├── context-menu.js         # Right-click menu on messages (copy text)
 │   ├── qr.js                   # QR code modal (canvas-based)
 │   ├── qrcode-lib.js           # Vendored QR generator (Kazuhiko Arase, MIT)
 │   └── markdown.js             # Minimal markdown renderer (zero dependencies)
@@ -57,6 +58,7 @@ Each pi session is a separate process with its own extension instance. There is 
 | `GET` | `/api/commands` | Available skills, prompt templates, and built-in commands |
 | `GET` | `/api/history` | Conversation history from session JSONL (paginated) |
 | `POST` | `/api/command` | Execute a built-in command (compact, reload) |
+| `POST` | `/api/abort` | Abort the current agent operation |
 | `POST` | `/api/prompt` | Send message to agent |
 
 ### GET /api/history
@@ -144,7 +146,7 @@ Three-column layout:
 └──────────┴─────────────────────────┴────────────────┘
 ```
 
-- **Left sidebar**: All active sessions. Current session highlighted. Click to open in new tab.
+- **Left sidebar**: All active sessions. Current session highlighted. Click to switch in-place.
 - **Center**: Chat area with markdown rendering, streaming, tool/thinking blocks. History persists across refresh (loaded from session JSONL).
 - **Right sidebar**: All skills and prompt templates. Filters in real-time as you type `/` in the input box. Free-text matching (substring, word boundary, description). Arrow keys to navigate, Enter/Tab to insert.
 

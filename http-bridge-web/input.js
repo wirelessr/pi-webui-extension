@@ -78,7 +78,13 @@ export function createInput({
     filterCommands();
   });
 
+  let composing = false;
+  $input.addEventListener("compositionstart", () => { composing = true; });
+  $input.addEventListener("compositionend", () => { composing = false; });
+
   $input.addEventListener("keydown", (e) => {
+    if (composing || e.isComposing) return;
+
     const hasFilter = commandsView.hasFilter() && getCommandToken();
 
     if (hasFilter) {

@@ -55,7 +55,7 @@ import { createContextMenu } from "./context-menu.js";
     getCurrentPort: () => currentPort,
     onOpen: (s) => {
       const url = s.url || `http://localhost:${s.port}`;
-      window.open(url, "_blank");
+      window.location.href = url;
     },
   });
 

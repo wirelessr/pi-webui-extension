@@ -36,9 +36,22 @@ export function createContextMenu({ $messages }) {
       const copyItem = document.createElement("button");
       copyItem.className = "context-menu-item";
       copyItem.textContent = "Copy text";
-      copyItem.addEventListener("click", () => {
-        navigator.clipboard.writeText(text);
+      copyItem.addEventListener("click", async () => {
         close();
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+          }
+        } catch {}
       });
       $menu.appendChild(copyItem);
     }
