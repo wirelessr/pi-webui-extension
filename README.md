@@ -247,18 +247,18 @@ pi auto-discovers `extensions/*/index.ts` on startup. No additional configuratio
 
 ## Development
 
-Tests for pure-logic functions (markdown rendering, command filtering, HTML escaping, session API helpers, SSE parsing, history parsing):
+Tests for extracted pure-logic modules (SSE parsing, stream accumulation, command filtering, session management, flow control, UI behaviors, HTTP integration) plus markdown rendering and HTML escaping:
 
 ```bash
 node --test test/*.test.js
 ```
 
-Uses Node.js built-in test runner. No external test framework or dependencies required.
+Uses Node.js built-in test runner. No external test framework or dependencies required. Behavior modules are maintained at 100% line coverage (CI-enforced).
 
 Lint:
 
 ```bash
-npx biome check http-bridge-web/ index.ts
+npx biome check http-bridge-web/ index.ts bridge-app.js test/
 ```
 
 CI runs on every push and PR via GitHub Actions.
