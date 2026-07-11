@@ -394,7 +394,12 @@ export default function (pi: ExtensionAPI) {
 		c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 		c.header("Access-Control-Allow-Headers", "Content-Type");
 	});
-	app.options("*", (c) => c.text("", 204));
+	app.options("*", (c) => {
+		c.header("Access-Control-Allow-Origin", "*");
+		c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		c.header("Access-Control-Allow-Headers", "Content-Type");
+		return c.body(null, 204);
+	});
 
 	// Swagger UI
 	app.doc("/api/openapi.json", {
