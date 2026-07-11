@@ -712,6 +712,7 @@ pi.on("session_info_changed", (event: any) => {
 		sessionCtx = ctx;
 		sessionFile = ctx.sessionManager?.getSessionFile() ?? undefined;
 		sessionId = event.sessionId ?? ctx.sessionManager?.getSessionId();
+		sessionName = ctx.sessionManager?.getSessionName() ?? undefined;
 
 		try {
 			mkdirSync(BRIDGE_DIR, { recursive: true });
