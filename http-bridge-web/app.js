@@ -34,6 +34,7 @@ import { formatStats } from "./utils.js";
   const $sendBtn = document.getElementById("send-btn");
   const $busyIndicator = document.getElementById("busy-indicator");
   const $portDisplay = document.getElementById("port-display");
+  const $expandToolsBtn = document.getElementById("expand-tools-btn");
   const $pidDisplay = document.getElementById("pid-display");
   const $sessionName = document.getElementById("session-name");
   const $statsDisplay = document.getElementById("stats-display");
@@ -88,6 +89,22 @@ import { formatStats } from "./utils.js";
   $refreshSessions?.addEventListener("click", () => sessionsView.load());
   $newSession?.addEventListener("click", () => sessionsView.handleNew());
   $reloadAll?.addEventListener("click", () => sessionsView.handleReloadAll());
+
+  // ── Expand/collapse all tool blocks ──
+
+  let toolsExpanded = false;
+  $expandToolsBtn?.addEventListener("click", () => {
+    toolsExpanded = !toolsExpanded;
+    if (toolsExpanded) {
+      chat.expandAllTools();
+      $expandToolsBtn.textContent = "▲";
+      $expandToolsBtn.title = "Collapse all tool/thinking blocks";
+    } else {
+      chat.collapseAllTools();
+      $expandToolsBtn.textContent = "▼";
+      $expandToolsBtn.title = "Expand all tool/thinking blocks";
+    }
+  });
 
   // ── Command selection ──
 

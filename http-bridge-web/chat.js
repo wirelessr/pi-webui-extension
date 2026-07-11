@@ -278,6 +278,16 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     scrollToBottom();
   }
 
+  function expandAllTools() {
+    $messages.querySelectorAll(".tool-block").forEach((el) => el.classList.add("expanded"));
+    $messages.querySelectorAll(".thinking-block").forEach((el) => el.classList.add("expanded"));
+  }
+
+  function collapseAllTools() {
+    $messages.querySelectorAll(".tool-block").forEach((el) => el.classList.remove("expanded"));
+    $messages.querySelectorAll(".thinking-block").forEach((el) => el.classList.remove("expanded"));
+  }
+
   return {
     addMessage,
     loadHistory,
@@ -286,5 +296,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
     handleEvent,
     showError,
     scrollToBottom,
+    expandAllTools,
+    collapseAllTools,
   };
 }
