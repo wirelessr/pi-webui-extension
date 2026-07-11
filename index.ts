@@ -6,7 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -610,13 +610,13 @@ export default function (pi: ExtensionAPI) {
 			return c.json({ error: "No session file to resume" }, 500);
 		}
 		// Self-respawn: spawn new process, then exit
-		const respawn = spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc --session "${sessionPath}"`], {
+		// stderr is redirected to a log file inside the sh command itself,
+		// because Node's stdio pipe breaks when the spawner exits.
+		const logFile = sessionLogPath(actualPort);
+		spawn("sh", ["-c", `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${actualPort} pi --mode rpc --session "${sessionPath}" 2>>"${logFile}"`], {
 			detached: true,
-			stdio: ["ignore", "ignore", "pipe"],
+			stdio: "ignore",
 		});
-		// Pipe stderr to log file
-		const logStream = createWriteStream(sessionLogPath(respawn.pid!), { flags: "a" });
-		respawn.stderr?.pipe(logStream);
 		// Clean up discovery file before exiting
 		if (discoveryFile) {
 			try { unlinkSync(discoveryFile); } catch {}
@@ -646,24 +646,18 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Session spawn helper ─────────────────────────────────────────
 
-	function sessionLogPath(pid: number): string {
-		return join(BRIDGE_DIR, `session-${pid}.stderr.log`);
+	function sessionLogPath(id: string | number): string {
+		return join(BRIDGE_DIR, `session-${id}.stderr.log`);
 	}
 
 	function spawnNewSession(cwd?: string): { pid: number } {
 		const child = spawn("sh", ["-c", "tail -f /dev/null | pi --mode rpc"], {
 			cwd: cwd || process.cwd(),
 			detached: true,
-			stdio: ["ignore", "ignore", "pipe"],
+			stdio: "ignore",
 		});
 		child.unref();
-		const pid = child.pid!;
-		// Pipe stderr to a log file for debugging
-		const logStream = createWriteStream(sessionLogPath(pid), { flags: "a" });
-		child.stderr?.pipe(logStream);
-		// Return the sh wrapper PID, not the pi node PID.
-		// killSession will use process.kill(-pid) to kill the entire process group.
-		return { pid };
+		return { pid: child.pid! };
 	}
 
 	function killSession(pid: number): boolean {
