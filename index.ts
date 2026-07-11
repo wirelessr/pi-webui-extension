@@ -120,7 +120,8 @@ export default function (pi: ExtensionAPI) {
 			stdio: "ignore",
 		});
 		child.unref();
-		return { pid: child.pid! };
+		if (!child.pid) throw new Error("Failed to spawn new session");
+		return { pid: child.pid };
 	}
 
 	function killSession(pid: number): boolean {
@@ -153,7 +154,7 @@ export default function (pi: ExtensionAPI) {
 		// If spawn fails, the old process is still alive with its discovery file intact,
 		// preventing orphan sessions with no discovery file.
 		const oldDiscoveryFile = discoveryFile;
-		console.error(`[http-bridge] reload: pi pid=${process.pid} ppid=${process.ppid} pgid=${process.getgid?.()}`);
+		console.error(`[http-bridge] reload: pi pid=${process.pid} ppid=${process.ppid} pgid=${process.ppid}`);
 		const oldShPid = process.ppid;
 		process.on("exit", () => {
 			if (oldDiscoveryFile) {
