@@ -13,6 +13,7 @@ import {
   sessionUrl,
 } from "./api.js";
 import { createQrCode } from "./qr.js";
+import { clampMenuPosition, decideSessionClick } from "./ui-behaviors.js";
 import { escapeHtml } from "./utils.js";
 
 /**
@@ -278,12 +279,13 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       `;
 
       el.addEventListener("click", (e) => {
-        if (e.target.classList.contains("qr-btn")) {
+        const action = decideSessionClick({ targetClass: e.target.className });
+        if (action === "qr") {
           e.stopPropagation();
           qr.show(url);
           return;
         }
-        if (e.target.classList.contains("close-btn")) {
+        if (action === "close") {
           e.stopPropagation();
           handleClose(s);
           return;
@@ -342,8 +344,9 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     });
     $sessionMenu.appendChild(closeItem);
 
-    $sessionMenu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
-    $sessionMenu.style.top = `${Math.min(e.clientY, window.innerHeight - 150)}px`;
+    const pos = clampMenuPosition(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    $sessionMenu.style.left = `${pos.left}px`;
+    $sessionMenu.style.top = `${pos.top}px`;
     document.body.appendChild($sessionMenu);
   }
 

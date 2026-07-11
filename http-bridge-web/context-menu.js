@@ -5,6 +5,8 @@
  * Shows a custom menu with actions depending on the message role.
  */
 
+import { clampMenuPosition, doCopy } from "./ui-behaviors.js";
+
 export function createContextMenu({ $messages }) {
   let $menu = null;
 
@@ -38,29 +40,28 @@ export function createContextMenu({ $messages }) {
       copyItem.textContent = "Copy text";
       copyItem.addEventListener("click", async () => {
         close();
-        try {
-          if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(text);
-          } else {
+        await doCopy({
+          text,
+          writeTextFn: navigator.clipboard?.writeText?.bind(navigator.clipboard),
+          execCommandFn: document.execCommand?.bind(document),
+          createTextareaFn: () => {
             const ta = document.createElement("textarea");
-            ta.value = text;
             ta.style.position = "fixed";
             ta.style.opacity = "0";
             document.body.appendChild(ta);
-            ta.select();
-            document.execCommand("copy");
-            document.body.removeChild(ta);
-          }
-        } catch {}
+            return ta;
+          },
+          removeTextareaFn: (ta) => document.body.removeChild(ta),
+        });
       });
       $menu.appendChild(copyItem);
     }
 
     if ($menu.children.length === 0) return;
 
-    // Position — keep within viewport
-    $menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
-    $menu.style.top = `${Math.min(e.clientY, window.innerHeight - 150)}px`;
+    const pos = clampMenuPosition(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    $menu.style.left = `${pos.left}px`;
+    $menu.style.top = `${pos.top}px`;
     document.body.appendChild($menu);
   });
 
