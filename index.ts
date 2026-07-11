@@ -1017,7 +1017,26 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// Dir doesn't exist
 		}
-		return sessions.sort((a, b) => a.port - b.port);
+		// Deduplicate by sessionFile — multiple processes may share the same
+		// session file (e.g. after multiple reloads). Keep the newest by startedAt.
+		const bySessionFile = new Map<string, any>();
+		const allFiles = new Set<string>();
+		for (const s of sessions) {
+			const key = s.sessionFile ?? s.sessionId;
+			allFiles.add(key);
+			const existing = bySessionFile.get(key);
+			if (!existing || (s.startedAt ?? 0) > (existing.startedAt ?? 0)) {
+				bySessionFile.set(key, s);
+			}
+		}
+		// Clean up stale discovery files for sessions that lost the dedup
+		const winnerPids = new Set(Array.from(bySessionFile.values()).map((s) => s.pid));
+		for (const s of sessions) {
+			if (!winnerPids.has(s.pid)) {
+				try { unlinkSync(join(BRIDGE_DIR, `${s.sessionId}.json`)); } catch {}
+			}
+		}
+		return Array.from(bySessionFile.values()).sort((a, b) => a.port - b.port);
 	}
 
 	function computeUsageStats(): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cacheHitRate: number | null; totalCost: number } {
