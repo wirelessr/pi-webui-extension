@@ -1,5 +1,5 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import { renderMarkdown } from "../http-bridge-web/markdown.js";
 
 describe("renderMarkdown - HTML escaping", () => {
@@ -18,51 +18,32 @@ describe("renderMarkdown - HTML escaping", () => {
 });
 
 describe("renderMarkdown - link scheme filtering", () => {
-  test("allows http links", () => {
-    const result = renderMarkdown("[text](http://example.com)");
-    assert.ok(result.includes('href="http://example.com"'));
-  });
+  const allowed = [
+    { name: "allows http links", md: "[text](http://example.com)", href: 'href="http://example.com"' },
+    { name: "allows https links", md: "[text](https://example.com)", href: 'href="https://example.com"' },
+    { name: "allows mailto links", md: "[text](mailto:a@b.com)", href: 'href="mailto:a@b.com"' },
+    { name: "allows relative links", md: "[text](/path/to/page)", href: 'href="/path/to/page"' },
+    { name: "allows anchor links", md: "[text](#section)", href: 'href="#section"' },
+  ];
+  for (const c of allowed) {
+    test(c.name, () => {
+      assert.ok(renderMarkdown(c.md).includes(c.href));
+    });
+  }
 
-  test("allows https links", () => {
-    const result = renderMarkdown("[text](https://example.com)");
-    assert.ok(result.includes('href="https://example.com"'));
-  });
-
-  test("allows mailto links", () => {
-    const result = renderMarkdown("[text](mailto:a@b.com)");
-    assert.ok(result.includes('href="mailto:a@b.com"'));
-  });
-
-  test("allows relative links", () => {
-    const result = renderMarkdown("[text](/path/to/page)");
-    assert.ok(result.includes('href="/path/to/page"'));
-  });
-
-  test("allows anchor links", () => {
-    const result = renderMarkdown("[text](#section)");
-    assert.ok(result.includes('href="#section"'));
-  });
-
-  test("blocks javascript: scheme", () => {
-    const result = renderMarkdown("[click](javascript:alert(1))");
-    assert.ok(!result.includes('href="javascript:'));
-    assert.ok(result.includes('href="#"'));
-  });
-
-  test("blocks data: scheme", () => {
-    const result = renderMarkdown("[click](data:text/html,<script>alert(1)</script>)");
-    assert.ok(!result.includes('href="data:'));
-  });
-
-  test("blocks vbscript: scheme", () => {
-    const result = renderMarkdown("[click](vbscript:msgbox(1))");
-    assert.ok(!result.includes('href="vbscript:'));
-  });
-
-  test("blocks javascript with uppercase", () => {
-    const result = renderMarkdown("[click](JavaScript:alert(1))");
-    assert.ok(!result.includes('href="JavaScript:'));
-  });
+  const blocked = [
+    { name: "blocks javascript: scheme", md: "[click](javascript:alert(1))", blocked: 'href="javascript:', expect: 'href="#"' },
+    { name: "blocks data: scheme", md: "[click](data:text/html,<script>alert(1)</script>)", blocked: 'href="data:' },
+    { name: "blocks vbscript: scheme", md: "[click](vbscript:msgbox(1))", blocked: 'href="vbscript:' },
+    { name: "blocks javascript with uppercase", md: "[click](JavaScript:alert(1))", blocked: 'href="JavaScript:' },
+  ];
+  for (const c of blocked) {
+    test(c.name, () => {
+      const result = renderMarkdown(c.md);
+      assert.ok(!result.includes(c.blocked));
+      if (c.expect) assert.ok(result.includes(c.expect));
+    });
+  }
 });
 
 describe("renderMarkdown - basic formatting", () => {

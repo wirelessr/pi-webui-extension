@@ -1,23 +1,17 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { sessionUrl, pollUntil } from "../http-bridge-web/api.js";
+import { describe, test } from "node:test";
+import { pollUntil, sessionUrl } from "../http-bridge-web/api.js";
 
 describe("sessionUrl", () => {
-  test("uses s.url when present", () => {
-    assert.equal(sessionUrl({ url: "http://192.168.1.130:7331", port: 7331 }), "http://192.168.1.130:7331");
-  });
-
-  test("falls back to localhost when url missing", () => {
-    assert.equal(sessionUrl({ port: 7332 }), "http://localhost:7332");
-  });
-
-  test("falls back to localhost when url is empty string", () => {
-    assert.equal(sessionUrl({ url: "", port: 7333 }), "http://localhost:7333");
-  });
-
-  test("falls back to localhost when url is null", () => {
-    assert.equal(sessionUrl({ url: null, port: 7334 }), "http://localhost:7334");
-  });
+  const cases = [
+    { name: "uses s.url when present", session: { url: "http://192.168.1.130:7331", port: 7331 }, expected: "http://192.168.1.130:7331" },
+    { name: "falls back to localhost when url missing", session: { port: 7332 }, expected: "http://localhost:7332" },
+    { name: "falls back to localhost when url is empty string", session: { url: "", port: 7333 }, expected: "http://localhost:7333" },
+    { name: "falls back to localhost when url is null", session: { url: null, port: 7334 }, expected: "http://localhost:7334" },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.equal(sessionUrl(c.session), c.expected));
+  }
 });
 
 describe("pollUntil", () => {

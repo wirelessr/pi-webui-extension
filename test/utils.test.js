@@ -1,27 +1,20 @@
-import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import { escapeHtml } from "../http-bridge-web/utils.js";
 
 describe("escapeHtml", () => {
-  test("escapes ampersand", () => {
-    assert.equal(escapeHtml("a & b"), "a &amp; b");
-  });
-
-  test("escapes less-than", () => {
-    assert.equal(escapeHtml("a < b"), "a &lt; b");
-  });
-
-  test("escapes greater-than", () => {
-    assert.equal(escapeHtml("a > b"), "a &gt; b");
-  });
-
-  test("escapes double quote", () => {
-    assert.equal(escapeHtml('say "hi"'), "say &quot;hi&quot;");
-  });
-
-  test("escapes single quote", () => {
-    assert.equal(escapeHtml("it's"), "it&#39;s");
-  });
+  const singleCharCases = [
+    { name: "escapes ampersand", input: "a & b", expected: "a &amp; b" },
+    { name: "escapes less-than", input: "a < b", expected: "a &lt; b" },
+    { name: "escapes greater-than", input: "a > b", expected: "a &gt; b" },
+    { name: "escapes double quote", input: 'say "hi"', expected: "say &quot;hi&quot;" },
+    { name: "escapes single quote", input: "it's", expected: "it&#39;s" },
+  ];
+  for (const c of singleCharCases) {
+    test(c.name, () => {
+      assert.equal(escapeHtml(c.input), c.expected);
+    });
+  }
 
   test("escapes all characters together", () => {
     assert.equal(
