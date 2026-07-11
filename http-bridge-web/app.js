@@ -130,6 +130,17 @@ import { createSessionsView } from "./sessions.js";
       chat.finishAssistantMessage();
       input.setStreaming(false);
       setBusy(false);
+      // Reload history as a safety net — SSE may have dropped events
+      try {
+        const data = await getHistory();
+        if (data.history && data.history.length > 0) {
+          chat.loadHistory(data.history);
+        }
+        const status = await getStatus();
+        updateStats(status);
+      } catch {
+        // Best effort
+      }
     }
   }
 
