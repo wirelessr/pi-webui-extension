@@ -15,7 +15,7 @@ import { abortAgent, executeCommand, getHistory, getStatus, sendPromptStream } f
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { createContextMenu } from "./context-menu.js";
-import { doInit, doSelectCommand, doSendPrompt, doStop, reapplyExpandState } from "./flow.js";
+import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { createSessionsView } from "./sessions.js";
@@ -93,16 +93,20 @@ import { formatStats } from "./utils.js";
   // ── Expand/collapse all tool blocks ──
 
   let toolsExpanded = false;
+  function setExpandButtonState(expanded) {
+    toolsExpanded = expanded;
+    if ($expandToolsBtn) {
+      $expandToolsBtn.textContent = expanded ? "▲" : "▼";
+      $expandToolsBtn.title = expanded ? "Collapse all tool/thinking blocks" : "Expand all tool/thinking blocks";
+    }
+  }
   $expandToolsBtn?.addEventListener("click", () => {
-    toolsExpanded = !toolsExpanded;
     if (toolsExpanded) {
-      chat.expandAllTools();
-      $expandToolsBtn.textContent = "▲";
-      $expandToolsBtn.title = "Collapse all tool/thinking blocks";
-    } else {
       chat.collapseAllTools();
-      $expandToolsBtn.textContent = "▼";
-      $expandToolsBtn.title = "Expand all tool/thinking blocks";
+      setExpandButtonState(false);
+    } else {
+      chat.expandAllTools();
+      setExpandButtonState(true);
     }
   });
 
@@ -164,7 +168,13 @@ import { formatStats } from "./utils.js";
       loadSessionsFn: () => sessionsView.load(),
       loadHistoryFn: (history) => {
         chat.loadHistory(history);
-        reapplyExpandState({ toolsExpanded, expandAllToolsFn: chat.expandAllTools });
+        syncExpandButtonState({
+          toolsExpanded,
+          countAllFn: () => $messages.querySelectorAll(".tool-block, .thinking-block").length,
+          countExpandedFn: () => $messages.querySelectorAll(".tool-block.expanded, .thinking-block.expanded").length,
+          expandAllToolsFn: chat.expandAllTools,
+          onStateChange: setExpandButtonState,
+        });
       },
       autoResizeFn: () => input.autoResize(),
       onStatusFn: (data) => {

@@ -150,24 +150,48 @@ export async function doStop(opts) {
 }
 
 /**
- * Re-apply expand-all-tools state after history loads.
+ * Sync the expand/collapse all button state to the actual DOM state.
  *
  * Behavioral spec:
- * 1. If toolsExpanded is true → call expandAllToolsFn (tool blocks loaded async)
- * 2. If toolsExpanded is false → do nothing
+ * 1. Count tool + thinking blocks in the DOM (via countExpandedFn / countAllFn)
+ * 2. If no blocks exist → state is false (no-op, button shows "expand")
+ * 3. If all blocks are expanded → state is true (button shows "collapse")
+ * 4. If any block is collapsed → state is false (button shows "expand")
+ * 5. If toolsExpanded was true but DOM has collapsed blocks → re-expand all
  *
- * This fixes the bug where switching sessions caused the expand/collapse
- * all button to desync from the DOM: history loads asynchronously after
- * page navigation, so tool blocks don't exist when expandAllTools() first runs.
+ * This fixes the desync between the button and the DOM after switching
+ * sessions: history renders thinking blocks as expanded by default,
+ * but the button state resets to false on page load. The user sees
+ * expanded blocks but the button says "expand" — first click does nothing.
  *
  * @param {object} opts
- * @param {boolean} opts.toolsExpanded — current button state
+ * @param {boolean} opts.toolsExpanded — current button state (pre-sync)
+ * @param {function} opts.countAllFn — () => number, count of tool+thinking blocks
+ * @param {function} opts.countExpandedFn — () => number, count of expanded blocks
  * @param {function} opts.expandAllToolsFn — () => void
- * @returns {{applied: boolean}}
+ * @param {function} opts.onStateChange — (expanded: boolean) => void, update button
+ * @returns {{expanded: boolean, reason: string}}
  */
-export function reapplyExpandState({ toolsExpanded, expandAllToolsFn }) {
-  if (toolsExpanded) expandAllToolsFn();
-  return { applied: toolsExpanded };
+export function syncExpandButtonState({ toolsExpanded, countAllFn, countExpandedFn, expandAllToolsFn, onStateChange }) {
+  const total = countAllFn();
+  if (total === 0) {
+    onStateChange(false);
+    return { expanded: false, reason: "no blocks" };
+  }
+
+  const expandedCount = countExpandedFn();
+  const allExpanded = expandedCount === total;
+
+  if (toolsExpanded && !allExpanded) {
+    // Button says expanded but DOM has collapsed blocks → re-expand
+    expandAllToolsFn();
+    onStateChange(true);
+    return { expanded: true, reason: "re-expanded to match button" };
+  }
+
+  // Sync button to DOM reality
+  onStateChange(allExpanded);
+  return { expanded: allExpanded, reason: allExpanded ? "all expanded" : "some collapsed" };
 }
 
 /**
@@ -189,8 +213,6 @@ export function reapplyExpandState({ toolsExpanded, expandAllToolsFn }) {
  * @param {function} opts.loadHistoryFn — (history) => void
  * @param {function} opts.autoResizeFn — () => void
  * @param {function} opts.onStatusFn — (status) => void (update port/pid/name/stats display)
- * @param {boolean} [opts.toolsExpanded] — whether expand-all is active (re-applied after history load)
- * @param {function} [opts.expandAllToolsFn] — () => void, called after history load if toolsExpanded
  * @returns {Promise<{statusLoaded: boolean, historyLoaded: boolean, commandsLoaded: boolean, sessionsLoaded: boolean}>}
  */
 export async function doInit(opts) {
@@ -202,8 +224,6 @@ export async function doInit(opts) {
     loadHistoryFn,
     autoResizeFn,
     onStatusFn,
-    toolsExpanded,
-    expandAllToolsFn,
   } = opts;
 
   const result = { statusLoaded: false, historyLoaded: false, commandsLoaded: false, sessionsLoaded: false };
@@ -236,7 +256,6 @@ export async function doInit(opts) {
     const data = await getHistoryFn();
     if (data.history && data.history.length > 0) {
       loadHistoryFn(data.history);
-      reapplyExpandState({ toolsExpanded, expandAllToolsFn });
       result.historyLoaded = true;
     }
   } catch {
