@@ -4,6 +4,7 @@
  */
 
 import { getCommands } from "./api.js";
+import { createSelectionState } from "./selection-state.js";
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -35,23 +36,21 @@ export function filterCommands(commands, query) {
 }
 
 export function createCommandsView({ $list, $count, $title, onSelect }) {
-  let availableCommands = [];
-  let filteredCommands = [];
-  let selectedIndex = -1;
+  const state = createSelectionState(onSelect);
 
   async function load() {
     try {
       const data = await getCommands();
-      availableCommands = data.commands || [];
-      filteredCommands = availableCommands;
+      state.setCommands(data.commands || []);
       render();
     } catch {
-      availableCommands = [];
+      state.setCommands([]);
       $list.innerHTML = '<div class="cmd-empty">Failed to load</div>';
     }
   }
 
   function render() {
+    const filteredCommands = state.getFiltered();
     $list.innerHTML = "";
     $count.textContent = String(filteredCommands.length);
 
@@ -83,11 +82,11 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
 
       el.addEventListener("mousedown", (e) => {
         e.preventDefault();
-        selectedIndex = i;
-        select();
+        moveToIndex(i);
+        state.select();
       });
       el.addEventListener("mouseenter", () => {
-        selectedIndex = i;
+        moveToIndex(i);
         highlight();
       });
 
@@ -95,50 +94,46 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
     });
   }
 
+  function moveToIndex(i) {
+    // Directly set selection — uses move(0) trick isn't clean,
+    // so we expose index via a small internal hack
+    // Actually we need to set selectedIndex directly. Let's use
+    // move with a computed delta.
+    const current = state.getSelectedIndex();
+    const len = state.getFiltered().length;
+    if (len === 0) return;
+    const delta = (i - current + len) % len;
+    state.move(delta);
+  }
+
   function highlight() {
     const items = $list.querySelectorAll(".cmd-item");
-    items.forEach((el, i) => { el.classList.toggle("selected", i === selectedIndex); });
-    if (selectedIndex >= 0 && items[selectedIndex]) {
-      items[selectedIndex].scrollIntoView({ block: "nearest" });
+    const idx = state.getSelectedIndex();
+    items.forEach((el, i) => { el.classList.toggle("selected", i === idx); });
+    if (idx >= 0 && items[idx]) {
+      items[idx].scrollIntoView({ block: "nearest" });
     }
   }
 
   function move(delta) {
-    if (filteredCommands.length === 0) return;
-    selectedIndex = (selectedIndex + delta + filteredCommands.length) % filteredCommands.length;
+    state.move(delta);
     highlight();
   }
 
   function select() {
-    if (selectedIndex < 0 || selectedIndex >= filteredCommands.length) return;
-    onSelect(filteredCommands[selectedIndex]);
+    state.select();
   }
 
-  /**
-   * Filter commands based on the current / token in the input.
-   * @param {string|null} query — text after /, or null to show all
-   */
   function filter(query) {
-    if (query === null) {
-      filteredCommands = availableCommands;
-      selectedIndex = -1;
-      $title.textContent = "commands";
-      render();
-      return;
-    }
-
-    filteredCommands = filterCommands(availableCommands, query);
-
-    selectedIndex = -1;
-    $title.textContent = filteredCommands.length > 0
-      ? `commands · "/${query}"`
-      : `commands · no match`;
+    state.filter(query, filterCommands);
+    const filteredCommands = state.getFiltered();
+    $title.textContent = query === null
+      ? "commands"
+      : filteredCommands.length > 0
+        ? `commands · "/${query}"`
+        : `commands · no match`;
     render();
   }
 
-  function hasFilter() {
-    return filteredCommands.length > 0;
-  }
-
-  return { load, filter, move, select, hasFilter, getSelectedIndex: () => selectedIndex };
+  return { load, filter, move, select, hasFilter: state.hasFilter, getSelectedIndex: state.getSelectedIndex };
 }

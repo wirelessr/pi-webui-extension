@@ -1,7 +1,8 @@
 /**
  * Input controller — textarea handling, keyboard shortcuts, auto-resize.
- * Coordinates between the input box and the commands view.
  */
+
+import { decideKeyAction, decideMobileViewOnFilter, decideMobileViewOnSelect, decideSendClick, shouldSend } from "./selection-state.js";
 
 /**
  * Compute the result of inserting a command into the input text.
@@ -63,10 +64,8 @@ export function createInput({
     }
     commandsView.filter(ctx.token.slice(1));
 
-    // On mobile, switch to commands view while typing /
-    if (mobileNav.isMobile() && commandsView.hasFilter()) {
-      mobileNav.switchView("commands");
-    }
+    const mobileView = decideMobileViewOnFilter(mobileNav.isMobile(), commandsView.hasFilter());
+    if (mobileView) mobileNav.switchView(mobileView);
   }
 
   function selectCommand(cmd) {
@@ -78,20 +77,16 @@ export function createInput({
     filterCommands();
     onSelectCommand();
 
-    // On mobile, switch back to chat after selecting
-    if (mobileNav.isMobile()) {
-      mobileNav.switchView("chat");
-    }
+    const mobileView = decideMobileViewOnSelect(mobileNav.isMobile());
+    if (mobileView) mobileNav.switchView(mobileView);
   }
 
   // ── Event handlers ──
 
   $sendBtn.addEventListener("click", () => {
-    if (isStreaming) {
-      onStop();
-    } else {
-      sendMessage();
-    }
+    const action = decideSendClick(isStreaming);
+    if (action === "stop") onStop();
+    else sendMessage();
   });
 
   $input.addEventListener("input", () => {
@@ -107,16 +102,18 @@ export function createInput({
     if (composing || e.isComposing) return;
 
     const hasFilter = commandsView.hasFilter() && getCommandToken();
+    const action = decideKeyAction({
+      key: e.key,
+      shiftKey: e.shiftKey,
+      hasFilter: !!hasFilter,
+      selectedIndex: commandsView.getSelectedIndex(),
+    });
 
-    if (hasFilter) {
-      if (e.key === "ArrowDown") { e.preventDefault(); commandsView.move(1); return; }
-      if (e.key === "ArrowUp") { e.preventDefault(); commandsView.move(-1); return; }
-      if ((e.key === "Enter" || e.key === "Tab") && commandsView.getSelectedIndex() >= 0) {
-        e.preventDefault();
-        commandsView.select();
-        return;
-      }
-      if (e.key === "Escape") {
+    switch (action) {
+      case "move:1": e.preventDefault(); commandsView.move(1); return;
+      case "move:-1": e.preventDefault(); commandsView.move(-1); return;
+      case "select": e.preventDefault(); commandsView.select(); return;
+      case "escape": {
         e.preventDefault();
         const ctx = getCommandToken();
         if (ctx) {
@@ -126,17 +123,14 @@ export function createInput({
         }
         return;
       }
-    }
-
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
+      case "send": e.preventDefault(); sendMessage(); return;
+      default: return;
     }
   });
 
   function sendMessage() {
     const text = $input.value.trim();
-    if (!text || isStreaming) return;
+    if (!shouldSend(text, isStreaming)) return;
 
     $input.value = "";
     autoResize();
