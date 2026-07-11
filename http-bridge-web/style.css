@@ -82,8 +82,8 @@ body {
 .status-area { display: flex; align-items: center; gap: 10px; }
 
 .stats {
-  font-size: 10px;
-  color: var(--text-dim);
+  font-size: 12px;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
