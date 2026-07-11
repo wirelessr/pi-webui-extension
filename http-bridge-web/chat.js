@@ -60,7 +60,11 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     el.className = `message ${role}`;
     el.innerHTML = renderContent(role, text);
     $messages.appendChild(el);
-    scrollToBottom();
+    if (role === "user") {
+      forceScrollToBottom();
+    } else {
+      scrollToBottom();
+    }
   }
 
   function startAssistantMessage() {
