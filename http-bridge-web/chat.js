@@ -28,13 +28,18 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     }
   }
 
+  function forceScrollToBottom() {
+    userAtBottom = true;
+    $chat.scrollTop = $chat.scrollHeight;
+  }
+
   $chat.addEventListener("scroll", () => {
     const atBottom = $chat.scrollHeight - $chat.scrollTop - $chat.clientHeight < 60;
     userAtBottom = atBottom;
     $scrollBottom.classList.toggle("hidden", atBottom);
   });
 
-  $scrollBottom.addEventListener("click", scrollToBottom);
+  $scrollBottom.addEventListener("click", forceScrollToBottom);
 
   // ── Rendering ──
 
