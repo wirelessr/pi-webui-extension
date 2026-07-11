@@ -102,7 +102,7 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
 
   function highlight() {
     const items = $list.querySelectorAll(".cmd-item");
-    items.forEach((el, i) => el.classList.toggle("selected", i === selectedIndex));
+    items.forEach((el, i) => { el.classList.toggle("selected", i === selectedIndex); });
     if (selectedIndex >= 0 && items[selectedIndex]) {
       items[selectedIndex].scrollIntoView({ block: "nearest" });
     }

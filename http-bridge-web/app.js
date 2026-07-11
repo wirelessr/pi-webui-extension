@@ -11,16 +11,15 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { getStatus, sendPromptStream, getHistory, executeCommand, abortAgent } from "./api.js";
+import { abortAgent, executeCommand, getHistory, getStatus, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
-import { createSessionsView } from "./sessions.js";
 import { createCommandsView } from "./commands.js";
+import { createContextMenu } from "./context-menu.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
-import { createContextMenu } from "./context-menu.js";
+import { createSessionsView } from "./sessions.js";
 
 (function () {
-  "use strict";
 
   // ── DOM refs ──────────────────────────────────────
 

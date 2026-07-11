@@ -13,7 +13,7 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   let currentTextEl = null;
   let currentThinkingEl = null;
   let currentThinkingContent = null;
-  let currentToolMap = new Map();
+  const currentToolMap = new Map();
   let textBuffer = "";
   let committedText = "";
   let thinkingBuffer = "";
