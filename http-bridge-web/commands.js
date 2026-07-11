@@ -9,6 +9,31 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Filter and rank commands by query match quality.
+ * Pure function — no DOM dependency.
+ * @param {Array} commands — available commands
+ * @param {string} query — text after /, already lowercased
+ * @returns {Array} filtered commands sorted by rank then name
+ */
+export function filterCommands(commands, query) {
+  const q = query.toLowerCase();
+  return commands
+    .map((cmd) => {
+      const name = cmd.name.toLowerCase();
+      if (name === q) return { cmd, rank: 0 };
+      if (name.startsWith(q)) return { cmd, rank: 1 };
+      if (name.match(new RegExp("[/\\\\\\-_]" + escapeRegex(q)))) return { cmd, rank: 2 };
+      if (name.includes(q)) return { cmd, rank: 3 };
+      const desc = (cmd.description || "").toLowerCase();
+      if (desc.includes(q)) return { cmd, rank: 4 };
+      return null;
+    })
+    .filter((m) => m !== null)
+    .sort((a, b) => a.rank - b.rank || a.cmd.name.localeCompare(b.cmd.name))
+    .map((m) => m.cmd);
+}
+
 export function createCommandsView({ $list, $count, $title, onSelect }) {
   let availableCommands = [];
   let filteredCommands = [];
@@ -77,7 +102,7 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
 
   function highlight() {
     const items = $list.querySelectorAll(".cmd-item");
-    items.forEach((el, i) => el.classList.toggle("selected", i === selectedIndex));
+    items.forEach((el, i) => { el.classList.toggle("selected", i === selectedIndex); });
     if (selectedIndex >= 0 && items[selectedIndex]) {
       items[selectedIndex].scrollIntoView({ block: "nearest" });
     }
@@ -107,22 +132,7 @@ export function createCommandsView({ $list, $count, $title, onSelect }) {
       return;
     }
 
-    const q = query.toLowerCase();
-
-    filteredCommands = availableCommands
-      .map((cmd) => {
-        const name = cmd.name.toLowerCase();
-        if (name === q) return { cmd, rank: 0 };
-        if (name.startsWith(q)) return { cmd, rank: 1 };
-        if (name.match(new RegExp("[/\\\-_]" + escapeRegex(q)))) return { cmd, rank: 2 };
-        if (name.includes(q)) return { cmd, rank: 3 };
-        const desc = (cmd.description || "").toLowerCase();
-        if (desc.includes(q)) return { cmd, rank: 4 };
-        return null;
-      })
-      .filter((m) => m !== null)
-      .sort((a, b) => a.rank - b.rank || a.cmd.name.localeCompare(b.cmd.name))
-      .map((m) => m.cmd);
+    filteredCommands = filterCommands(availableCommands, query);
 
     selectedIndex = -1;
     $title.textContent = filteredCommands.length > 0

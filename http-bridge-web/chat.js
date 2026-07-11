@@ -6,13 +6,14 @@
  */
 
 import { renderMarkdown } from "./markdown.js";
+import { escapeHtml } from "./utils.js";
 
 export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   let currentAssistantEl = null;
   let currentTextEl = null;
   let currentThinkingEl = null;
   let currentThinkingContent = null;
-  let currentToolMap = new Map();
+  const currentToolMap = new Map();
   let textBuffer = "";
   let committedText = "";
   let thinkingBuffer = "";
@@ -34,12 +35,6 @@ export function createChat({ $messages, $chat, $autoScroll, $scrollBottom }) {
   $scrollBottom.addEventListener("click", scrollToBottom);
 
   // ── Rendering ──
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
 
   function renderContent(role, text) {
     if (role === "user") return escapeHtml(text);

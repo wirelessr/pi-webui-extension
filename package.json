@@ -1,0 +1,13 @@
+{
+  "name": "pi-webui-extension",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "biome check http-bridge-web/ index.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0"
+  }
+}

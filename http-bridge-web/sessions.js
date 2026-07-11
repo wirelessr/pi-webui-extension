@@ -5,6 +5,7 @@
 
 import { getSessions } from "./api.js";
 import { createQrCode } from "./qr.js";
+import { escapeHtml } from "./utils.js";
 
 export function createSessionsView({ $list, getCurrentPort, onOpen }) {
   let sessions = [];
@@ -55,12 +56,6 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
 
       $list.appendChild(el);
     }
-  }
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
   }
 
   return { load };

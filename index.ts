@@ -89,12 +89,12 @@
  *   - Default response timeout is 5 minutes. Override with {"timeout": ms}.
  */
 
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { join, extname, normalize, dirname, basename } from "node:path";
 import { networkInterfaces } from "node:os";
+import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -988,7 +988,7 @@ pi.on("session_info_changed", (event: any) => {
 				}
 
 				// Decide SSE vs JSON
-				const accept = req.headers["accept"] || "";
+				const accept = req.headers.accept || "";
 				const useSse = parsed.stream || accept.includes("text/event-stream");
 
 				try {
@@ -1039,7 +1039,7 @@ pi.on("session_info_changed", (event: any) => {
 			if (err.code === "EADDRINUSE") {
 				// Port was grabbed between findFreePort and listen — retry next port
 				actualPort++;
-				server!.listen(actualPort, HOST);
+				server?.listen(actualPort, HOST);
 			} else if (ctx.hasUI) {
 				ctx.ui.notify(`HTTP bridge error: ${err}`, "error");
 			}
