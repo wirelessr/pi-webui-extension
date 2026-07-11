@@ -126,6 +126,22 @@ body {
   color: var(--text-dim);
 }
 
+.expand-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 1px 5px;
+  line-height: 1;
+}
+
+.expand-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
 .pid {
   font-family: var(--mono);
   font-size: 11px;
