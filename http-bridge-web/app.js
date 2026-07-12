@@ -188,7 +188,8 @@ import { formatStats } from "./utils.js";
         $portDisplay.textContent = `:${data.port}`;
         if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
         if (data.cwd) {
-          $cwdDisplay.textContent = data.cwd;
+          const parts = data.cwd.split("/");
+          $cwdDisplay.textContent = parts[parts.length - 1] || data.cwd;
           $cwdDisplay.title = data.cwd;
         }
         if (data.sessionName) $sessionName.textContent = data.sessionName;
