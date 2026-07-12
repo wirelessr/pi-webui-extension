@@ -22,6 +22,9 @@ export function createContextMenu({ $messages }) {
   window.addEventListener("blur", close);
 
   $messages.addEventListener("contextmenu", (e) => {
+    // Don't intercept on links — let browser show native menu (Copy Link, etc.)
+    if (e.target.closest("a")) return;
+
     const msgEl = e.target.closest(".message");
     if (!msgEl) return;
 
