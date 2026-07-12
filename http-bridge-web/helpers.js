@@ -293,6 +293,33 @@ export function computeUsageStats(entries) {
  * @param {string} text — user message text
  * @returns {{name: string, location: string, content: string, userMessage: string|undefined} | null}
  */
+/**
+ * Detect if a tool call is a read of a SKILL.md file.
+ * @param {string} toolName
+ * @param {object} args — tool call arguments
+ * @returns {string|null} the file path if it's a SKILL.md read, null otherwise
+ */
+export function isSkillRead(toolName, args) {
+  if (toolName !== "read") return null;
+  const filePath = args?.file_path || args?.path;
+  if (!filePath?.endsWith("SKILL.md")) return null;
+  return filePath;
+}
+
+/**
+ * Parse SKILL.md frontmatter to extract skill name and body content.
+ * @param {string} text — raw SKILL.md file content
+ * @returns {{name: string, content: string} | null}
+ */
+export function parseSkillFrontmatter(text) {
+  if (!text) return null;
+  const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]+)$/);
+  if (!match) return null;
+  const nameMatch = match[1].match(/^name:\s*(\S+)/m);
+  if (!nameMatch) return null;
+  return { name: nameMatch[1], content: match[2].trim() };
+}
+
 export function parseSkillBlock(text) {
   const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
   if (!match) return null;

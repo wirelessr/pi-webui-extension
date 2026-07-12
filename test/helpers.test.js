@@ -5,6 +5,7 @@ import {
   extractThinking,
   extractToolCalls,
   isPathSafe,
+  isSkillRead,
   paginateHistory,
   parseHistoryData,
   parseHistoryLine,
@@ -12,6 +13,7 @@ import {
   parsePromptTemplate,
   parseSkillBlock,
   parseSkillCommand,
+  parseSkillFrontmatter,
   stripFrontmatter,
 } from "../http-bridge-web/helpers.js";
 
@@ -539,6 +541,67 @@ describe("parseSkillBlock", () => {
         assert.equal(result.location, c.expected.location);
         assert.equal(result.content, c.expected.content);
         assert.equal(result.userMessage, c.expected.userMessage);
+      }
+    });
+  }
+});
+
+// ── isSkillRead ──────────────────────────────────────
+
+describe("isSkillRead", () => {
+  const cases = [
+    { name: "read SKILL.md via path", toolName: "read", args: { path: "/skills/gh/SKILL.md" }, expected: "/skills/gh/SKILL.md" },
+    { name: "read SKILL.md via file_path", toolName: "read", args: { file_path: "/skills/gh/SKILL.md" }, expected: "/skills/gh/SKILL.md" },
+    { name: "read non-skill file", toolName: "read", args: { path: "/skills/gh/README.md" }, expected: null },
+    { name: "bash tool", toolName: "bash", args: { command: "cat SKILL.md" }, expected: null },
+    { name: "no args", toolName: "read", args: null, expected: null },
+    { name: "empty path", toolName: "read", args: { path: "" }, expected: null },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      assert.equal(isSkillRead(c.toolName, c.args), c.expected);
+    });
+  }
+});
+
+// ── parseSkillFrontmatter ────────────────────────────
+
+describe("parseSkillFrontmatter", () => {
+  const cases = [
+    {
+      name: "standard frontmatter",
+      text: "---\nname: pr-respond\ndescription: Use when handling\n---\n# PR Respond\n\nSkill content",
+      expected: { name: "pr-respond", content: "# PR Respond\n\nSkill content" },
+    },
+    {
+      name: "minimal frontmatter",
+      text: "---\nname: gh\n---\nGH content",
+      expected: { name: "gh", content: "GH content" },
+    },
+    {
+      name: "no frontmatter",
+      text: "Just some markdown content",
+      expected: null,
+    },
+    {
+      name: "frontmatter without name",
+      text: "---\ndescription: something\n---\ncontent",
+      expected: null,
+    },
+    {
+      name: "empty string",
+      text: "",
+      expected: null,
+    },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      const result = parseSkillFrontmatter(c.text);
+      if (c.expected === null) {
+        assert.equal(result, null);
+      } else {
+        assert.equal(result.name, c.expected.name);
+        assert.equal(result.content, c.expected.content);
       }
     });
   }
