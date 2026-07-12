@@ -72,7 +72,18 @@ export function parseHistoryLine(line) {
   } catch {
     return null;
   }
-  if (obj.type !== "message") return null;
+  if (obj.type !== "message") {
+    // Compaction entries: show as a system message marker
+    if (obj.type === "compaction" && obj.summary) {
+      return {
+        id: obj.id,
+        timestamp: obj.timestamp,
+        role: "system",
+        text: `--- Compacted (${obj.tokensBefore ?? "?"} tokens before) ---\n\n${obj.summary}`,
+      };
+    }
+    return null;
+  }
   const msg = obj.message;
   if (!msg) return null;
   const role = msg.role;

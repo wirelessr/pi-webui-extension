@@ -257,6 +257,27 @@ describe("parseHistoryLine", () => {
     const entry = parseHistoryLine(line);
     assert.equal(entry.text, "plain result");
   });
+
+  test("parses compaction entry as system message", () => {
+    const line = JSON.stringify({
+      type: "compaction",
+      id: "comp1",
+      timestamp: "2026-01-01T00:00:00Z",
+      summary: "Previous work summary...",
+      tokensBefore: 50000,
+    });
+    const entry = parseHistoryLine(line);
+    assert.ok(entry);
+    assert.equal(entry.role, "system");
+    assert.match(entry.text, /Compacted/);
+    assert.match(entry.text, /50000/);
+    assert.match(entry.text, /Previous work summary/);
+  });
+
+  test("skips compaction entry without summary", () => {
+    const line = JSON.stringify({ type: "compaction", id: "comp2" });
+    assert.equal(parseHistoryLine(line), null);
+  });
 });
 
 describe("parseHistoryData", () => {
