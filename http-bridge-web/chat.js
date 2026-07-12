@@ -214,7 +214,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
       case "done": renderText(state); renderThinking(state); removeStreamingCursor(); break;
       case "error": showError(event.message); break;
       case "text_start": break;
-      case "text_delta": renderText(state); break;
+      case "text_delta": appendTextDelta(state); break;
       case "text_end": renderTextCommitted(state); break;
       case "thinking_start": ensureThinkingBlock(); break;
       case "thinking_delta": renderThinking(state); break;
@@ -236,6 +236,15 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
   function renderText(state) {
     if (!currentTextEl) return;
     currentTextEl.innerHTML = renderContent("assistant", state.committedText + state.pendingText);
+    addStreamingCursor();
+    scrollToBottom();
+  }
+
+  function appendTextDelta(state) {
+    if (!currentTextEl) return;
+    // During streaming, use textContent for performance — avoid full
+    // markdown re-parse on every delta. Markdown is rendered on text_end / done.
+    currentTextEl.textContent = state.committedText + state.pendingText;
     addStreamingCursor();
     scrollToBottom();
   }
