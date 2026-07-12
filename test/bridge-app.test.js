@@ -65,7 +65,7 @@ function createMockDeps(overrides = {}) {
 			res.write('data: {"type":"done","text":"hello","toolCalls":[],"thinking":"","messageCount":1}\n\n');
 			res.end();
 		},
-		compactAndStream: async (res) => {
+		compactAndStream: async (res, _args) => {
 			calls.compact.push(true);
 			res.write('data: {"type":"done","text":"compacted","toolCalls":[],"compact":true,"tokensBefore":50000}\n\n');
 			res.end();
@@ -229,6 +229,35 @@ test("POST /api/prompt with /compact via SSE returns done event", async () => {
 	assert.ok(text.includes("\"type\":\"done\""));
 	assert.ok(text.includes("\"compact\":true"));
 	assert.strictEqual(deps.calls.compact.length, 1);
+});
+
+test("POST /api/prompt with /compact args passes customInstructions", async () => {
+	let receivedArgs = null;
+	const deps = createMockDeps({
+		compactAndStream: async (res, args) => {
+			receivedArgs = args;
+			res.write('data: {"type":"done","text":"ok","toolCalls":[],"compact":true,"tokensBefore":1000}\n\n');
+			res.end();
+		},
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/prompt", {
+		method: "POST",
+		headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+		body: JSON.stringify({ message: "/compact focus on API changes" }),
+	}));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(receivedArgs, "focus on API changes");
+});
+
+test("POST /api/prompt with /nonexistent does not intercept", async () => {
+	const deps = createMockDeps({
+		sendAndWait: async () => [{ role: "assistant", content: [{ type: "text", text: "ok" }] }],
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/prompt", { message: "/nonexistent cmd" }));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(deps.calls.compact.length, 0);
 });
 
 test("POST /api/prompt (plain text) returns response", async () => {

@@ -490,31 +490,35 @@ export function createBridgeApp(deps) {
 
 		// Intercept executable builtins (e.g. /compact) typed in the prompt box
 		const trimmed = parsed.message.trim();
-		if (trimmed.startsWith("/") && WEBUI_EXECUTABLE.has(trimmed.slice(1))) {
-			const cmdName = trimmed.slice(1);
-			const accept = c.req.header("accept") || "";
-			const useSse = accept.includes("text/event-stream");
-			if (cmdName === "compact") {
-				if (useSse) {
-					const { readable, writable } = new TransformStream();
-					const writer = writable.getWriter();
-					const encoder = new TextEncoder();
-					const res = {
-						write: (chunk) => writer.write(encoder.encode(chunk)),
-						end: () => writer.close(),
-					};
-					deps.compactAndStream(res);
-					return new Response(readable, {
-						headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-					});
-				}
-				try {
-					if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
-						return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+		if (trimmed.startsWith("/")) {
+			const spaceIdx = trimmed.indexOf(" ");
+			const cmdName = spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx);
+			const cmdArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+			if (WEBUI_EXECUTABLE.has(cmdName)) {
+				const accept = c.req.header("accept") || "";
+				const useSse = accept.includes("text/event-stream");
+				if (cmdName === "compact") {
+					if (useSse) {
+						const { readable, writable } = new TransformStream();
+						const writer = writable.getWriter();
+						const encoder = new TextEncoder();
+						const res = {
+							write: (chunk) => writer.write(encoder.encode(chunk)),
+							end: () => writer.close(),
+						};
+						deps.compactAndStream(res, cmdArgs);
+						return new Response(readable, {
+							headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+						});
 					}
-					return c.json({ ok: true });
-				} catch (err) {
-					return c.json({ error: err.message }, 500);
+					try {
+						if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
+							return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+						}
+						return c.json({ ok: true });
+					} catch (err) {
+						return c.json({ error: err.message }, 500);
+					}
 				}
 			}
 		}
