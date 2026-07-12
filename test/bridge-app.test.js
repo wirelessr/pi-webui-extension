@@ -210,6 +210,21 @@ test("POST /api/prompt with /compact intercepts and calls ctx.compact", async ()
 	assert.strictEqual(deps.calls.sendUserMessage.length, 0);
 });
 
+test("POST /api/prompt with /compact via SSE returns done event", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/prompt", {
+		method: "POST",
+		headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+		body: JSON.stringify({ message: "/compact" }),
+	}));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(res.headers.get("content-type"), "text/event-stream");
+	const text = await res.text();
+	assert.ok(text.includes("\"type\":\"done\""));
+	assert.strictEqual(deps.calls.compact.length, 1);
+});
+
 test("POST /api/prompt (plain text) returns response", async () => {
 	const deps = createMockDeps({
 		sendAndWait: async (msg) => {

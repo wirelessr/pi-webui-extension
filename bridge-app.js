@@ -496,6 +496,13 @@ export function createBridgeApp(deps) {
 				if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
 					return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
 				}
+				const accept = c.req.header("accept") || "";
+				if (accept.includes("text/event-stream")) {
+					return new Response(
+						"data: {\"type\":\"done\",\"text\":\"\",\"toolCalls\":[]}\n\n",
+						{ headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } },
+					);
+				}
 				return c.json({ ok: true });
 			} catch (err) {
 				return c.json({ error: err.message }, 500);
