@@ -169,6 +169,23 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Resize handle ────────────────────────────────── */
+
+.resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+  transition: background 0.15s;
+}
+
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: var(--accent);
+}
+
 #sidebar-right {
   border-right: none;
   border-left: 1px solid var(--border);
@@ -895,6 +912,9 @@ body {
     border-right: none;
     border-left: none;
   }
+
+  /* Hide resize handle on mobile */
+  .resize-handle { display: none; }
 
   #sidebar-right { border-left: none; }
 

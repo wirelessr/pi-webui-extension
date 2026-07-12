@@ -18,6 +18,7 @@ import { createContextMenu } from "./context-menu.js";
 import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
+import { initResize } from "./resize.js";
 import { createSessionsView } from "./sessions.js";
 import { formatStats } from "./utils.js";
 
@@ -54,6 +55,9 @@ import { formatStats } from "./utils.js";
   const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded });
 
   const mobileNav = createMobileNav({ $app });
+
+  // Sidebar resize (desktop only)
+  initResize({ $sidebar: $sessionsList.parentElement, $handle: document.getElementById("sidebar-resize") });
 
   const sessionsView = createSessionsView({
     $list: $sessionsList,
