@@ -336,7 +336,22 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
           lastAssistantEl = el;
         }
       } else if (entry.role === "system") {
-        addMessage("system", entry.text);
+        if (entry.text?.startsWith("--- Compacted")) {
+          const block = document.createElement("div");
+          block.className = "compaction-block";
+          const header = document.createElement("div");
+          header.className = "compaction-header";
+          header.textContent = entry.text.split("\n")[0];
+          header.addEventListener("click", () => block.classList.toggle("expanded"));
+          const content = document.createElement("div");
+          content.className = "compaction-content";
+          content.textContent = entry.text.split("\n").slice(1).join("\n").trim();
+          block.appendChild(header);
+          block.appendChild(content);
+          $messages.appendChild(block);
+        } else {
+          addMessage("system", entry.text);
+        }
       } else if (entry.role === "toolResult") {
         if (entry.toolCallId && entry.text && lastAssistantEl) {
           const resultEl = lastAssistantEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);

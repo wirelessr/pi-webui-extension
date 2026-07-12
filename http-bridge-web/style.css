@@ -538,6 +538,40 @@ body {
 
 .thinking-block.expanded .thinking-content { display: block; }
 
+.compaction-block {
+  margin-bottom: 8px;
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+
+.compaction-header {
+  cursor: pointer;
+  user-select: none;
+  color: var(--accent);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compaction-header::before {
+  content: "▶";
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.compaction-block.expanded .compaction-header::before { transform: rotate(90deg); }
+
+.compaction-content {
+  display: none;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.compaction-block.expanded .compaction-content { display: block; }
+
 /* ── Tool call block ──────────────────────────────── */
 
 .tool-block {
