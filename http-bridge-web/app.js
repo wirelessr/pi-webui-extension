@@ -36,6 +36,7 @@ import { formatStats } from "./utils.js";
   const $portDisplay = document.getElementById("port-display");
   const $expandToolsBtn = document.getElementById("expand-tools-btn");
   const $pidDisplay = document.getElementById("pid-display");
+  const $cwdDisplay = document.getElementById("cwd-display");
   const $sessionName = document.getElementById("session-name");
   const $statsDisplay = document.getElementById("stats-display");
   const $sessionsList = document.getElementById("sessions-list");
@@ -186,6 +187,10 @@ import { formatStats } from "./utils.js";
         currentPort = data.port;
         $portDisplay.textContent = `:${data.port}`;
         if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
+        if (data.cwd) {
+          $cwdDisplay.textContent = data.cwd;
+          $cwdDisplay.title = data.cwd;
+        }
         if (data.sessionName) $sessionName.textContent = data.sessionName;
         else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
         updateStats(data);

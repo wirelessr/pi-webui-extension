@@ -74,6 +74,7 @@ const StatusResponse = z.object({
 	pid: z.number(),
 	startedAt: z.number(),
 	model: z.string().nullable(),
+	cwd: z.string(),
 	usage: UsageStats,
 	context: ContextUsageInfo,
 }).openapi("Status");
@@ -411,6 +412,7 @@ export function createBridgeApp(deps) {
 			pid: deps.getPid(),
 			startedAt: deps.getStartedAt(),
 			model: deps.getSessionCtx()?.model?.id ?? null,
+			cwd: deps.getCwd(),
 			usage: deps.computeUsageStats(),
 			context: deps.computeContextUsage(),
 		});

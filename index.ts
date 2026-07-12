@@ -84,6 +84,7 @@ export default function (pi: ExtensionAPI) {
 		getActualPort: () => actualPort,
 		getPid: () => process.pid,
 		getStartedAt: () => sessionStartTime,
+	getCwd: () => sessionCtx?.cwd ?? process.cwd(),
 		getIsBusy: () => isBusy,
 		getSessionFile: () => sessionFile,
 		getSessionId: () => sessionId,
