@@ -213,6 +213,15 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
       case "turn_end": renderText(state); renderThinking(state); break;
       case "done": renderText(state); renderThinking(state); removeStreamingCursor(); break;
       case "error": showError(event.message); break;
+      case "compact_start": {
+        const statusEl = document.createElement("div");
+        statusEl.className = "compact-status";
+        statusEl.textContent = "Compacting...";
+        if (currentAssistantEl) currentAssistantEl.appendChild(statusEl);
+        else $messages.appendChild(statusEl);
+        scrollToBottom();
+        break;
+      }
       case "text_start": break;
       case "text_delta": appendTextDelta(state); break;
       case "text_end": renderTextCommitted(state); break;
