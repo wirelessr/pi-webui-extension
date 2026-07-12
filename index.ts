@@ -604,7 +604,7 @@ export default function (pi: ExtensionAPI) {
 		return responsePromise;
 	}
 
-	async function compactAndStream(res: any): Promise<void> {
+	async function compactAndStream(res: any, customInstructions?: string): Promise<void> {
 		if (!sessionCtx) {
 			try { res.write('data: {"type":"error","message":"No session context"}\n\n'); } catch {}
 			try { res.end(); } catch {}
@@ -622,6 +622,7 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			sessionCtx.compact({
+				customInstructions: customInstructions || undefined,
 				onComplete: (result: any) => {
 					clearInterval(heartbeat);
 					const tokensBefore = result?.tokensBefore ?? null;
