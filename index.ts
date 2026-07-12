@@ -38,7 +38,6 @@ interface IdleWaiter {
 interface SseState {
 	res: any;
 	heartbeat: ReturnType<typeof setInterval>;
-	timeout: ReturnType<typeof setTimeout>;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -332,7 +331,6 @@ export default function (pi: ExtensionAPI) {
 	function closeSse(): void {
 		if (!sse) return;
 		clearInterval(sse.heartbeat);
-		clearTimeout(sse.timeout);
 		try {
 			sse.res.end();
 		} catch (err) {
@@ -607,7 +605,7 @@ export default function (pi: ExtensionAPI) {
 
 	async function sendAndStream(
 		message: string,
-		timeoutMs: number,
+		_timeoutMs: number,
 		res: any,
 	): Promise<void> {
 		try {
@@ -629,13 +627,7 @@ export default function (pi: ExtensionAPI) {
 			}
 		}, 15000);
 
-		const timeout = setTimeout(() => {
-			console.error("[http-bridge] SSE response timeout, aborting agent");
-			try { sessionCtx?.abort(); } catch {}
-			sendSseError("Agent response timeout");
-		}, timeoutMs);
-
-		sse = { res, heartbeat, timeout };
+		sse = { res, heartbeat };
 
 		const expanded = expandInput(message);
 		waitingForExtensionInput = true;
