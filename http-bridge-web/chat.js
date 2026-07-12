@@ -9,7 +9,7 @@ import { renderMarkdown } from "./markdown.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
-export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {} }) {
   let currentAssistantEl = null;
   let currentTextEl = null;
   let currentThinkingEl = null;
@@ -590,8 +590,21 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
 
   function handleEvent(event) {
     if (!accumulator) return;
-    accumulator.handleEvent(event);
+    try {
+      accumulator.handleEvent(event);
+    } catch (err) {
+      logFn("error", "handleEvent: accumulator error", { type: event.type, error: err.message, stack: err.stack?.split("\n")[0] });
+    }
     const state = accumulator.getState();
+
+    try {
+      _handleEventInner(event, state);
+    } catch (err) {
+      logFn("error", "handleEvent: render error", { type: event.type, error: err.message, stack: err.stack?.split("\n")[0] });
+    }
+  }
+
+  function _handleEventInner(event, state) {
 
     switch (event.type) {
       case "agent_start": break;
