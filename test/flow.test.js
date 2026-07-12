@@ -126,6 +126,23 @@ describe("doSendPrompt — core send flow", () => {
     assert.match(sysMsg.text, /summary/);
   });
 
+  test("compact error (tokensBefore=null) → shows error text, not 'compacted'", async () => {
+    const chat = mockChat();
+    const opts = makeOpts({
+      chat,
+      sendPromptStreamFn: async (_msg, onEvent) => onEvent({
+        type: "done", text: "Compact failed: nothing to compact", compact: true, tokensBefore: null,
+      }),
+      getHistoryFn: async () => { throw new Error("should not be called"); },
+    });
+    const result = await doSendPrompt(opts);
+    assert.equal(result.completed, true);
+    const sysMsg = chat.calls.addMessage.find((c) => c.role === "system");
+    assert.ok(sysMsg);
+    assert.match(sysMsg.text, /Compact failed/);
+    assert.doesNotMatch(sysMsg.text, /Session compacted/);
+  });
+
   test("compact done event + history fetch fails → no crash", async () => {
     const chat = mockChat();
     const opts = makeOpts({
