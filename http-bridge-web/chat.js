@@ -23,17 +23,18 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
   let userAtBottom = true;
   let programmaticScroll = false;
 
+  function doScroll() {
+    programmaticScroll = true;
+    $chat.scrollTop = $chat.scrollHeight;
+  }
+
   function scrollToBottom() {
-    if (userAtBottom) {
-      programmaticScroll = true;
-      $chat.scrollTop = $chat.scrollHeight;
-    }
+    if (userAtBottom) requestAnimationFrame(doScroll);
   }
 
   function forceScrollToBottom() {
     userAtBottom = true;
-    programmaticScroll = true;
-    $chat.scrollTop = $chat.scrollHeight;
+    requestAnimationFrame(doScroll);
   }
 
   $chat.addEventListener("scroll", () => {
