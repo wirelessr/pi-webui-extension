@@ -28,6 +28,7 @@ function createMockDeps(overrides = {}) {
 		getActualPort: () => 7331,
 		getPid: () => 12345,
 		getStartedAt: () => 1700000000000,
+		getCwd: () => "/tmp/test-cwd",
 		getIsBusy: () => false,
 		getSessionFile: () => "/tmp/test-session.jsonl",
 		getSessionId: () => "test-session-id",
@@ -121,6 +122,7 @@ test("GET /api/status returns session info", async () => {
 	assert.strictEqual(body.sessionId, "test-session-id");
 	assert.strictEqual(body.sessionName, "test-name");
 	assert.strictEqual(body.model, "test-model");
+	assert.strictEqual(body.cwd, "/tmp/test-cwd");
 	assert.strictEqual(body.usage.inputTokens, 100);
 	assert.strictEqual(body.context.tokens, 5000);
 });
