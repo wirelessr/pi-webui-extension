@@ -345,7 +345,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
           header.addEventListener("click", () => block.classList.toggle("expanded"));
           const content = document.createElement("div");
           content.className = "compaction-content";
-          content.textContent = entry.text.split("\n").slice(1).join("\n").trim();
+          content.innerHTML = renderMarkdown(entry.text.split("\n").slice(1).join("\n").trim());
           block.appendChild(header);
           block.appendChild(content);
           $messages.appendChild(block);
