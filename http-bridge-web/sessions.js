@@ -112,18 +112,26 @@ export async function doReloadAll(opts) {
  * @returns {Promise<{action: string, reason: string}>}
  */
 export async function doNewSession(opts) {
-  const { prevCount, newSessionFn, refreshSessionsFn, pollUntilFn, renderFn } = opts;
+  const { prevCount, newSessionFn, refreshSessionsFn, pollUntilFn, renderFn, sessionUrlFn, redirectFn, checkReadyFn } = opts;
   try {
     await newSessionFn();
     const result = await pollUntilFn(async () => {
       const all = await refreshSessionsFn();
       if (all.length > prevCount) {
         renderFn();
-        return true;
+        return all[all.length - 1];
       }
       return false;
     }, 1000, 10);
     if (!result) return { action: "showError", reason: "New session not detected — try refresh" };
+    // Wait for the new session's HTTP server to be ready, then redirect
+    if (redirectFn && checkReadyFn) {
+      const url = sessionUrlFn(result);
+      const ready = await pollUntilFn(async () => {
+        try { await checkReadyFn(url); return true; } catch { return false; }
+      }, 500, 20);
+      if (ready) redirectFn(url);
+    }
     return { action: "rendered", reason: "new session detected" };
   } catch (err) {
     return { action: "showError", reason: `Failed to create: ${err.message}` };
@@ -412,6 +420,12 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       refreshSessionsFn: refreshSessions,
       pollUntilFn: pollUntil,
       renderFn: render,
+      sessionUrlFn: sessionUrl,
+      redirectFn: (url) => { window.location.href = url; },
+      checkReadyFn: async (url) => {
+        const res = await fetch(`${url}/api/status`);
+        if (!res.ok) throw new Error("not ready");
+      },
     });
     if (result.action === "showError") {
       $list.innerHTML = `<div class="cmd-empty">${escapeHtml(result.reason)}</div>`;
