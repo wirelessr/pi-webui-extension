@@ -119,27 +119,52 @@ export function renderMarkdown(md) {
       continue;
     }
 
-    // Ordered list
+    // Ordered list (tolerates blank lines between items)
     if (line.match(/^\s*\d+\.\s/)) {
       const items = [];
-      while (i < lines.length && lines[i].match(/^\s*\d+\.\s/)) {
-        items.push(`<li>${renderInline(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>`);
-        i++;
+      while (i < lines.length) {
+        if (lines[i].match(/^\s*\d+\.\s/)) {
+          items.push(`<li>${renderInline(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>`);
+          i++;
+        } else if (lines[i].trim() === "") {
+          // Skip blank line only if next non-blank line is also a list item
+          let j = i;
+          while (j < lines.length && lines[j].trim() === "") j++;
+          if (j < lines.length && lines[j].match(/^\s*\d+\.\s/)) {
+            i = j;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
       }
       html.push(`<ol>${items.join("")}</ol>`);
       continue;
     }
 
-    // Unordered list
+    // Unordered list (tolerates blank lines between items)
     if (line.match(/^\s*[-*]\s/)) {
       const items = [];
-      while (i < lines.length && lines[i].match(/^\s*[-*]\s/)) {
-        const itemText = lines[i].replace(/^\s*[-*]\s+/, "");
-        const indent = lines[i].match(/^(\s*)/)[1].length;
-        items.push(indent > 0
-          ? `<li style="margin-left:${indent * 1.5}em">${renderInline(itemText)}</li>`
-          : `<li>${renderInline(itemText)}</li>`);
-        i++;
+      while (i < lines.length) {
+        if (lines[i].match(/^\s*[-*]\s/)) {
+          const itemText = lines[i].replace(/^\s*[-*]\s+/, "");
+          const indent = lines[i].match(/^(\s*)/)[1].length;
+          items.push(indent > 0
+            ? `<li style="margin-left:${indent * 1.5}em">${renderInline(itemText)}</li>`
+            : `<li>${renderInline(itemText)}</li>`);
+          i++;
+        } else if (lines[i].trim() === "") {
+          let j = i;
+          while (j < lines.length && lines[j].trim() === "") j++;
+          if (j < lines.length && lines[j].match(/^\s*[-*]\s/)) {
+            i = j;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
       }
       html.push(`<ul>${items.join("")}</ul>`);
       continue;

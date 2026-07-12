@@ -136,3 +136,38 @@ describe("renderMarkdown - bare URL autolinking", () => {
     });
   }
 });
+
+// ── List tolerance (blank lines between items) ──────
+
+describe("renderMarkdown - list tolerance for blank lines", () => {
+  const cases = [
+    {
+      name: "ordered list with blank lines merges into one ol",
+      md: "1. first\n\n1. second\n",
+      expect: "<ol><li>first</li><li>second</li></ol>",
+    },
+    {
+      name: "unordered list with blank lines merges into one ul",
+      md: "- first\n\n- second\n\n- third\n",
+      expect: "<ul><li>first</li><li>second</li><li>third</li></ul>",
+    },
+    {
+      name: "ordered list followed by paragraph does not merge",
+      md: "1. item one\n\nThis is a paragraph.\n",
+      expect: "<ol><li>item one</li></ol>",
+      notExpect: "<ol><li>item one</li><li>",
+    },
+    {
+      name: "consecutive same-number items without blank line still work",
+      md: "1. first\n1. second\n",
+      expect: "<ol><li>first</li><li>second</li></ol>",
+    },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      const result = renderMarkdown(c.md);
+      assert.ok(result.includes(c.expect), `expected ${c.expect} in ${result}`);
+      if (c.notExpect) assert.ok(!result.includes(c.notExpect), `expected NOT ${c.notExpect} in ${result}`);
+    });
+  }
+});
