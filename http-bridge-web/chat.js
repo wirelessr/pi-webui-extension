@@ -98,6 +98,22 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     };
   }
 
+  function isSkillRead(toolName, args) {
+    if (toolName !== "read") return null;
+    const filePath = args?.file_path || args?.path;
+    if (!filePath?.endsWith("SKILL.md")) return null;
+    return filePath;
+  }
+
+  function parseSkillFrontmatter(text) {
+    if (!text) return null;
+    const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]+)$/);
+    if (!match) return null;
+    const nameMatch = match[1].match(/^name:\s*(\S+)/m);
+    if (!nameMatch) return null;
+    return { name: nameMatch[1], content: match[2].trim() };
+  }
+
   function createCollapsibleBlock(label, name, content) {
     const block = document.createElement("div");
     block.className = `${label}-block`;
@@ -188,6 +204,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     block.appendChild(header);
     block.appendChild(argsEl);
     block.appendChild(resultEl);
+    if (isSkillRead(toolName, args)) block.dataset.skillRead = "true";
     currentAssistantEl.insertBefore(block, currentTextEl);
 
     if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan, resultEl });
@@ -208,6 +225,18 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     const entry = currentToolMap.get(toolCallId);
     if (!entry?.resultEl) return;
     if (!resultText) return;
+
+    if (!isPartial && entry.block.dataset.skillRead === "true") {
+      const skill = parseSkillFrontmatter(resultText);
+      if (skill) {
+        const skillBlock = createCollapsibleBlock("skill", skill.name, skill.content);
+        entry.block.parentElement.replaceChild(skillBlock, entry.block);
+        currentToolMap.delete(toolCallId);
+        scrollToBottom();
+        return;
+      }
+    }
+
     entry.resultEl.textContent = resultText;
     entry.resultEl.classList.toggle("partial", isPartial);
     scrollToBottom();
@@ -373,6 +402,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
             block.appendChild(header);
             block.appendChild(argsEl);
             block.appendChild(resultEl);
+            if (isSkillRead(tc.name, tc.arguments)) block.dataset.skillRead = "true";
             el.appendChild(block);
           }
         }
@@ -401,6 +431,15 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
         if (entry.toolCallId && entry.text && lastAssistantEl) {
           const resultEl = lastAssistantEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);
           if (resultEl) {
+            const toolBlock = resultEl.closest(".tool-block");
+            if (toolBlock?.dataset.skillRead === "true") {
+              const skill = parseSkillFrontmatter(entry.text);
+              if (skill) {
+                const skillBlock = createCollapsibleBlock("skill", skill.name, skill.content);
+                toolBlock.parentElement.replaceChild(skillBlock, toolBlock);
+                continue;
+              }
+            }
             resultEl.textContent = entry.text;
             resultEl.classList.toggle("error", entry.isError);
           }
