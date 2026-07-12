@@ -267,11 +267,16 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     $messages.appendChild(header);
 
     const entries = parseSubagentMessages(view.messages);
+    _lastSubagentAssistantEl = null;
+    subagentToolResultMap.clear();
     for (const entry of entries) {
       renderSubagentEntry(entry);
     }
     forceScrollToBottom();
   }
+
+  let _lastSubagentAssistantEl = null;
+  const subagentToolResultMap = new Map();
 
   function renderSubagentEntry(entry) {
     if (entry.role === "user") {
@@ -279,6 +284,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
       el.className = "message user";
       el.innerHTML = escapeHtml(entry.text || "");
       $messages.appendChild(el);
+      _lastSubagentAssistantEl = null;
     } else if (entry.role === "assistant") {
       const el = document.createElement("div");
       el.className = "message assistant";
@@ -319,22 +325,36 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
           const argsEl = document.createElement("div");
           argsEl.className = "tool-args";
           argsEl.textContent = formatArgs(tc.arguments);
+          const resultEl = document.createElement("div");
+          resultEl.className = "tool-result";
+          resultEl.dataset.toolCallId = tc.id || "";
           header.addEventListener("click", () => block.classList.toggle("expanded"));
           block.appendChild(header);
           block.appendChild(argsEl);
+          block.appendChild(resultEl);
           el.appendChild(block);
+          if (tc.id) subagentToolResultMap.set(tc.id, resultEl);
         }
       }
-      if (el.children.length > 0) $messages.appendChild(el);
+      if (el.children.length > 0) {
+        $messages.appendChild(el);
+        _lastSubagentAssistantEl = el;
+      }
     } else if (entry.role === "toolResult") {
-      const el = document.createElement("div");
-      el.className = "message assistant";
-      const resultEl = document.createElement("div");
-      resultEl.className = "tool-result";
-      resultEl.textContent = entry.text || "";
-      if (entry.isError) resultEl.classList.add("error");
-      el.appendChild(resultEl);
-      $messages.appendChild(el);
+      if (entry.toolCallId && subagentToolResultMap.has(entry.toolCallId)) {
+        const resultEl = subagentToolResultMap.get(entry.toolCallId);
+        resultEl.textContent = entry.text || "";
+        if (entry.isError) resultEl.classList.add("error");
+      } else if (entry.text) {
+        const el = document.createElement("div");
+        el.className = "message assistant";
+        const resultEl = document.createElement("div");
+        resultEl.className = "tool-result";
+        resultEl.textContent = entry.text;
+        if (entry.isError) resultEl.classList.add("error");
+        el.appendChild(resultEl);
+        $messages.appendChild(el);
+      }
     }
   }
 
@@ -369,6 +389,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
           $messages.innerHTML = "";
           $messages.appendChild(headerEl);
           const entries = parseSubagentMessages(view.messages);
+          _lastSubagentAssistantEl = null;
+          subagentToolResultMap.clear();
           for (const entry of entries) renderSubagentEntry(entry);
           forceScrollToBottom();
         }
