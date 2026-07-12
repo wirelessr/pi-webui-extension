@@ -60,17 +60,18 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     if (role === "user") {
       const skill = parseSkillBlock(text);
       if (skill) {
-        const el = document.createElement("div");
-        el.className = "message user";
-        const block = createCollapsibleBlock("skill", skill.name, skill.content);
-        el.appendChild(block);
+        // Skill block: neutral full-width, like compaction marker
+        const skillEl = document.createElement("div");
+        skillEl.className = "message skill-invocation";
+        skillEl.appendChild(createCollapsibleBlock("skill", skill.name, skill.content));
+        $messages.appendChild(skillEl);
+        // User args: separate right-aligned user bubble
         if (skill.userMessage) {
-          const argsEl = document.createElement("div");
-          argsEl.className = "text";
-          argsEl.innerHTML = renderContent("user", skill.userMessage);
-          el.appendChild(argsEl);
+          const userEl = document.createElement("div");
+          userEl.className = "message user";
+          userEl.innerHTML = renderContent("user", skill.userMessage);
+          $messages.appendChild(userEl);
         }
-        $messages.appendChild(el);
         forceScrollToBottom();
         return;
       }

@@ -983,3 +983,7 @@ body {
 }
 
 .skill-block.expanded .skill-content { display: block; }
+
+.message.skill-invocation {
+  max-width: 100%;
+}
