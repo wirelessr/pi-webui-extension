@@ -615,6 +615,11 @@ export default function (pi: ExtensionAPI) {
 			try { res.write(": heartbeat\n\n"); } catch {}
 		}, 15000);
 
+		// Send a system message so the browser shows immediate feedback
+		try {
+			res.write(`data: ${JSON.stringify({ type: "compact_start" })}\n\n`);
+		} catch {}
+
 		try {
 			sessionCtx.compact({
 				onComplete: (result: any) => {
