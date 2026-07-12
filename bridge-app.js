@@ -478,6 +478,23 @@ export function createBridgeApp(deps) {
 			return c.json({ error: "Another request is being processed" }, 409);
 		}
 
+		// Intercept executable builtins (e.g. /compact) typed in the prompt box
+		const trimmed = parsed.message.trim();
+		if (trimmed.startsWith("/") && WEBUI_EXECUTABLE.has(trimmed.slice(1))) {
+			const cmdName = trimmed.slice(1);
+			try {
+				const ctx = deps.getSessionCtx();
+				if (cmdName === "compact" && ctx) {
+					ctx.compact();
+				} else {
+					return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+				}
+				return c.json({ ok: true });
+			} catch (err) {
+				return c.json({ error: err.message }, 500);
+			}
+		}
+
 		const accept = c.req.header("accept") || "";
 		const useSse = parsed.stream || accept.includes("text/event-stream");
 

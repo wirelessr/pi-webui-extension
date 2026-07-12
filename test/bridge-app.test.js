@@ -199,6 +199,17 @@ test("POST /api/prompt (JSON, no stream) returns response", async () => {
 	assert.strictEqual(body.messageCount, 1);
 });
 
+test("POST /api/prompt with /compact intercepts and calls ctx.compact", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/prompt", { message: "/compact" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(deps.calls.compact.length, 1);
+	assert.strictEqual(deps.calls.sendUserMessage.length, 0);
+});
+
 test("POST /api/prompt (plain text) returns response", async () => {
 	const deps = createMockDeps({
 		sendAndWait: async (msg) => {
