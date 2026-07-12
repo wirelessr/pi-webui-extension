@@ -53,7 +53,7 @@ import { formatStats } from "./utils.js";
 
   // ── Module instances ──────────────────────────────
 
-  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded });
+  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog });
 
   const mobileNav = createMobileNav({ $app });
 

@@ -111,6 +111,8 @@ export async function doSendPrompt(opts) {
     // Best effort
   }
 
+  await clientLogFn("info", "doSendPrompt: flow done", { eventCount, streamComplete, historyReloaded });
+
   return { completed: streamComplete, historyReloaded, error: errorMsg };
 }
 
