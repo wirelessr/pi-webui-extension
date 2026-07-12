@@ -122,8 +122,8 @@ body {
 
 .port {
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text-dim);
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .expand-btn {
@@ -144,16 +144,14 @@ body {
 
 .pid {
   font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-dim);
-  opacity: 0.7;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .cwd {
   font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-dim);
-  opacity: 0.7;
+  font-size: 13px;
+  color: var(--text-muted);
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
