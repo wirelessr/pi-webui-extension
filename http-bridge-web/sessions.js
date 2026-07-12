@@ -270,7 +270,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       el.innerHTML = `
         <div class="session-item-row">
           <div class="session-item-info">
-            <div class="item-name" title="Double-click to rename">${escapeHtml(name)}</div>
+            <div class="item-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
           </div>
           <button class="qr-btn" title="Show QR code" data-url="${escapeHtml(url)}">&#9641;</button>
           <button class="close-btn" title="Close session" data-pid="${s.pid}">&times;</button>
