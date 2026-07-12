@@ -5,7 +5,6 @@
  * methods for the main app to drive.
  */
 
-import { parseSkillBlock } from "./helpers.js";
 import { renderMarkdown } from "./markdown.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { escapeHtml } from "./utils.js";
@@ -85,6 +84,17 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     } else {
       scrollToBottom();
     }
+  }
+
+  function parseSkillBlock(text) {
+    const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
+    if (!match) return null;
+    return {
+      name: match[1],
+      location: match[2],
+      content: match[3],
+      userMessage: match[4]?.trim() || undefined,
+    };
   }
 
   function createCollapsibleBlock(label, name, content) {
