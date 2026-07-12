@@ -124,12 +124,10 @@ describe("renderMarkdown - inline formatting edge cases", () => {
     assert.ok(result.includes("<strong>outer </strong>"));
   });
 
-  test("italic with underscore in word (known limitation)", () => {
-    // The (?<!_) lookbehind only checks the char before _, not word boundaries.
-    // snake_case_var renders _case_ as italic — this is a known limitation
-    // of the simple regex approach.
+  test("underscore in word is NOT italic (removed _ italic support)", () => {
     const result = renderMarkdown("snake_case_var");
-    assert.ok(result.includes("<em>case</em>"));
+    assert.ok(result.includes("snake_case_var"));
+    assert.ok(!result.includes("<em>"));
   });
 
   test("strikethrough", () => {
@@ -143,14 +141,16 @@ describe("renderMarkdown - inline formatting edge cases", () => {
     assert.ok(result.includes("<code>code</code>"));
   });
 
-  test("bold with __ underscores", () => {
+  test("__ underscores do NOT make bold (use ** instead)", () => {
     const result = renderMarkdown("__bold__");
-    assert.ok(result.includes("<strong>bold</strong>"));
+    assert.ok(result.includes("__bold__"));
+    assert.ok(!result.includes("<strong>"));
   });
 
-  test("italic with _ underscores", () => {
+  test("_ underscores do NOT make italic (use * instead)", () => {
     const result = renderMarkdown("_italic_");
-    assert.ok(result.includes("<em>italic</em>"));
+    assert.ok(result.includes("_italic_"));
+    assert.ok(!result.includes("<em>"));
   });
 });
 

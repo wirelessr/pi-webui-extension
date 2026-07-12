@@ -19,10 +19,8 @@ function renderInline(text) {
 
   text = escapeHtml(text);
 
-  text = text.replace(/\*\*([^\*]+)\*\*/g, "<strong>$1</strong>");
-  text = text.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-  text = text.replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, "<em>$1</em>");
-  text = text.replace(/(?<!_)_([^_]+)_(?!_)/g, "<em>$1</em>");
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
   text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
   text = text.replace(
     /\[([^\]]+)\]\(([^)\s]+)\)/g,

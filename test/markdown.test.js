@@ -62,6 +62,15 @@ describe("renderMarkdown - basic formatting", () => {
     assert.ok(result.includes("<em>italic</em>"));
   });
 
+  test("underscore italic NOT supported (technical names)", () => {
+    assert.ok(renderMarkdown("V2_SWITCH_FF").includes("V2_SWITCH_FF"));
+    assert.ok(!renderMarkdown("V2_SWITCH_FF").includes("<em>"));
+    assert.ok(renderMarkdown("def __init__(self):").includes("__init__"));
+    assert.ok(!renderMarkdown("def __init__(self):").includes("<strong>"));
+    assert.ok(renderMarkdown("_clear_cache").includes("_clear_cache"));
+    assert.ok(!renderMarkdown("_clear_cache").includes("<em>"));
+  });
+
   test("inline code", () => {
     const result = renderMarkdown("`code`");
     assert.ok(result.includes("<code>code</code>"));
