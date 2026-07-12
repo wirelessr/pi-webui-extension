@@ -335,6 +335,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
           $messages.appendChild(el);
           lastAssistantEl = el;
         }
+      } else if (entry.role === "system") {
+        addMessage("system", entry.text);
       } else if (entry.role === "toolResult") {
         if (entry.toolCallId && entry.text && lastAssistantEl) {
           const resultEl = lastAssistantEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);
