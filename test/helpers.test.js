@@ -10,6 +10,7 @@ import {
   parseHistoryLine,
   parsePromptBody,
   parsePromptTemplate,
+  parseSkillBlock,
   parseSkillCommand,
   stripFrontmatter,
 } from "../http-bridge-web/helpers.js";
@@ -498,6 +499,46 @@ describe("parsePromptTemplate", () => {
       }
       if (expectedArgs !== undefined) {
         assert.equal(result.args, expectedArgs);
+      }
+    });
+  }
+});
+
+// ── parseSkillBlock ──────────────────────────────────
+
+describe("parseSkillBlock", () => {
+  const cases = [
+    {
+      name: "skill block with args",
+      text: '<skill name="gh" location="/path/to/skill.md">\nSkill content here\n</skill>\n\nlist open PRs',
+      expected: { name: "gh", location: "/path/to/skill.md", content: "Skill content here", userMessage: "list open PRs" },
+    },
+    {
+      name: "skill block without args",
+      text: '<skill name="jira" location="/path/to/jira.md">\nJira skill content\n</skill>',
+      expected: { name: "jira", location: "/path/to/jira.md", content: "Jira skill content", userMessage: undefined },
+    },
+    {
+      name: "non-skill text returns null",
+      text: "just a regular message",
+      expected: null,
+    },
+    {
+      name: "empty string returns null",
+      text: "",
+      expected: null,
+    },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      const result = parseSkillBlock(c.text);
+      if (c.expected === null) {
+        assert.equal(result, null);
+      } else {
+        assert.equal(result.name, c.expected.name);
+        assert.equal(result.location, c.expected.location);
+        assert.equal(result.content, c.expected.content);
+        assert.equal(result.userMessage, c.expected.userMessage);
       }
     });
   }

@@ -286,3 +286,20 @@ export function computeUsageStats(entries) {
 
   return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHitRate: latestCacheHitRate, totalCost };
 }
+
+/**
+ * Parse a skill block from user message text.
+ * Matches pi's parseSkillBlock format: <skill name="..." location="...">...</skill>
+ * @param {string} text — user message text
+ * @returns {{name: string, location: string, content: string, userMessage: string|undefined} | null}
+ */
+export function parseSkillBlock(text) {
+  const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
+  if (!match) return null;
+  return {
+    name: match[1],
+    location: match[2],
+    content: match[3],
+    userMessage: match[4]?.trim() || undefined,
+  };
+}

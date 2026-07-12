@@ -950,3 +950,36 @@ body {
   background: var(--accent, #4a9eff);
   color: #fff;
 }
+
+.skill-block {
+  margin-bottom: 8px;
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+
+.skill-header {
+  cursor: pointer;
+  user-select: none;
+  color: var(--accent);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.skill-header::before {
+  content: "▶";
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.skill-block.expanded .skill-header::before { transform: rotate(90deg); }
+
+.skill-content {
+  display: none;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.skill-block.expanded .skill-content { display: block; }
