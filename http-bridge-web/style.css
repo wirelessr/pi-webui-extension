@@ -154,12 +154,10 @@ body {
   font-size: 11px;
   color: var(--text-dim);
   opacity: 0.7;
-  max-width: 300px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl;
-  text-align: left;
 }
 
 /* ── Main layout ──────────────────────────────────── */
