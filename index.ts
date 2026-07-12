@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./http-bridge-web/helpers.js";
+import { generateSessionName } from "./name-generator.js";
 import { buildReloadCommand, buildSpawnCommand, dedupSessions } from "./session-helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -62,6 +63,7 @@ export default function (pi: ExtensionAPI) {
 	let discoveryFile: string | undefined;
 	let sessionCtx: any = null;
 	let sessionStartTime = Date.now();
+	let autoNameAttempted = false;
 
 	// Built-in commands loaded from pi's internal module
 	let builtinCommands: { name: string; description: string }[] = [];
@@ -241,6 +243,20 @@ export default function (pi: ExtensionAPI) {
 				clearTimeout(inputWatchdog);
 				inputWatchdog = null;
 			}
+		}
+
+		// Auto-name session on first user prompt (fire-and-forget)
+		if (!autoNameAttempted && !sessionName && typeof event.text === "string" && event.text.trim().length > 0) {
+			autoNameAttempted = true;
+			const apiKey = process.env.FIREWORKS_API_KEY;
+			generateSessionName(event.text, apiKey).then((name) => {
+				if (name) {
+					sessionName = name;
+					pi.setSessionName(name);
+					console.error(`[http-bridge] auto-named session: ${name}`);
+					try { writeDiscovery(); } catch { /* best effort */ }
+				}
+			});
 		}
 	});
 
