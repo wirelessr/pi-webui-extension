@@ -99,6 +99,7 @@ export default function (pi: ExtensionAPI) {
 		computeContextUsage,
 		sendAndWait,
 		sendAndStream,
+		compactAndStream,
 		isPendingOrSse: () => !!(pending || sse),
 		reload: doReload,
 		clientLog,
@@ -601,6 +602,56 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		return responsePromise;
+	}
+
+	async function compactAndStream(res: any): Promise<void> {
+		if (!sessionCtx) {
+			try { res.write('data: {"type":"error","message":"No session context"}\n\n'); } catch {}
+			try { res.end(); } catch {}
+			return;
+		}
+
+		const heartbeat = setInterval(() => {
+			try { res.write(": heartbeat\n\n"); } catch {}
+		}, 15000);
+
+		try {
+			sessionCtx.compact({
+				onComplete: (result: any) => {
+					clearInterval(heartbeat);
+					const tokensBefore = result?.tokensBefore ?? null;
+					const summary = result?.summary ?? "";
+					const doneEvent = {
+						type: "done",
+						text: summary,
+						toolCalls: [],
+						thinking: "",
+						messageCount: 0,
+						compact: true,
+						tokensBefore,
+					};
+					try {
+						res.write(`data: ${JSON.stringify(doneEvent)}\n\n`);
+						res.end();
+					} catch (err) {
+						console.error("[http-bridge] compactAndStream: write failed:", err);
+					}
+				},
+				onError: (err: Error) => {
+					clearInterval(heartbeat);
+					try {
+						res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
+						res.end();
+					} catch {}
+				},
+			});
+		} catch (err: any) {
+			clearInterval(heartbeat);
+			try {
+				res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
+				res.end();
+			} catch {}
+		}
 	}
 
 	async function sendAndStream(
