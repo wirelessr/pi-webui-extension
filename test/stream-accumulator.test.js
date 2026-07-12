@@ -370,3 +370,59 @@ describe("stream accumulator — full lifecycle", () => {
     assert.equal(state.tools[1].status, "error");
   });
 });
+
+// ── Subagent details ─────────────────────────────────
+
+describe("stream accumulator — subagent details", () => {
+  test("tool_execution_update stores subagent details", () => {
+    const acc = feed([
+      { type: "tool_execution_start", toolCallId: "sa1", toolName: "subagent", args: { agent: "runner", task: "compute" } },
+      { type: "tool_execution_update", toolCallId: "sa1", partialResult: {
+        content: [{ type: "text", text: "running..." }],
+        details: { mode: "single", results: [{ agent: "runner", exitCode: -1, messages: [{ role: "user", content: "hi" }] }] },
+      } },
+    ]);
+    const state = acc.getState();
+    assert.ok(state.subagentDetails.sa1);
+    assert.equal(state.subagentDetails.sa1.mode, "single");
+    assert.equal(state.subagentDetails.sa1.results[0].agent, "runner");
+  });
+
+  test("tool_execution_end stores final subagent details", () => {
+    const acc = feed([
+      { type: "tool_execution_start", toolCallId: "sa2", toolName: "subagent", args: {} },
+      { type: "tool_execution_end", toolCallId: "sa2", isError: false, result: {
+        content: [{ type: "text", text: "done" }],
+        details: { mode: "single", results: [{ agent: "vision", exitCode: 0, messages: [{ role: "user", content: "hi" }, { role: "assistant", content: [{ type: "text", text: "result" }] }] }] },
+      } },
+    ]);
+    const state = acc.getState();
+    assert.ok(state.subagentDetails.sa2);
+    assert.equal(state.subagentDetails.sa2.results[0].exitCode, 0);
+    assert.equal(state.subagentDetails.sa2.results[0].messages.length, 2);
+  });
+
+  test("non-subagent tools do not store details", () => {
+    const acc = feed([
+      { type: "tool_execution_start", toolCallId: "bash1", toolName: "bash", args: { command: "ls" } },
+      { type: "tool_execution_update", toolCallId: "bash1", partialResult: { content: [{ type: "text", text: "output" }] } },
+      { type: "tool_execution_end", toolCallId: "bash1", isError: false, result: { content: [{ type: "text", text: "output" }] } },
+    ]);
+    const state = acc.getState();
+    assert.equal(Object.keys(state.subagentDetails).length, 0);
+  });
+
+  test("update without details does not overwrite existing", () => {
+    const acc = feed([
+      { type: "tool_execution_start", toolCallId: "sa3", toolName: "subagent", args: {} },
+      { type: "tool_execution_update", toolCallId: "sa3", partialResult: {
+        content: [{ type: "text", text: "running" }],
+        details: { mode: "single", results: [{ agent: "runner", exitCode: -1, messages: [] }] },
+      } },
+      { type: "tool_execution_update", toolCallId: "sa3", partialResult: { content: [{ type: "text", text: "still running" }] } },
+    ]);
+    const state = acc.getState();
+    assert.ok(state.subagentDetails.sa3);
+    assert.equal(state.subagentDetails.sa3.results[0].agent, "runner");
+  });
+});

@@ -988,3 +988,96 @@ body {
 .message.skill-invocation {
   max-width: 100%;
 }
+
+/* ── Subagent blocks ── */
+
+.subagent-container {
+  margin-bottom: 8px;
+}
+
+.subagent-block {
+  margin-bottom: 8px;
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+
+.subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+  padding: 4px 0;
+}
+
+.subagent-icon {
+  font-size: 14px;
+}
+
+.subagent-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.subagent-stats {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.subagent-open-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.subagent-open-btn:hover {
+  background: rgba(124, 108, 240, 0.15);
+}
+
+/* ── Subagent view (column switch) ── */
+
+.subagent-view-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.subagent-back-btn {
+  display: block;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.subagent-back-btn:hover {
+  background: rgba(124, 108, 240, 0.15);
+}
+
+.subagent-view-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.subagent-view-model {
+  color: var(--text-dim);
+  font-weight: normal;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.subagent-view-task {
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
