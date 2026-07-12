@@ -37,6 +37,7 @@ export function createStreamAccumulator() {
   let pendingThinking = "";
   let thinkingActive = false;
   const tools = new Map();
+  const subagentDetails = new Map();
   let done = false;
   let error = null;
 
@@ -118,6 +119,9 @@ export function createStreamAccumulator() {
           const tool = tools.get(event.toolCallId);
           tool.resultText = extractResultText(event.partialResult);
           tool.isPartial = true;
+          if (tool.toolName === "subagent" && event.partialResult?.details) {
+            subagentDetails.set(event.toolCallId, event.partialResult.details);
+          }
         }
         break;
 
@@ -127,6 +131,9 @@ export function createStreamAccumulator() {
           tool.status = event.isError ? "error" : "done";
           tool.resultText = extractResultText(event.result);
           tool.isPartial = false;
+          if (tool.toolName === "subagent" && event.result?.details) {
+            subagentDetails.set(event.toolCallId, event.result.details);
+          }
         }
         break;
 
@@ -143,6 +150,7 @@ export function createStreamAccumulator() {
       pendingThinking,
       thinkingActive,
       tools: Array.from(tools.values()),
+      subagentDetails: Object.fromEntries(subagentDetails),
       done,
       error,
     };

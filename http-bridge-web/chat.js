@@ -7,7 +7,7 @@
 
 import { renderMarkdown } from "./markdown.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, formatTokens } from "./utils.js";
 
 export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded }) {
   let currentAssistantEl = null;
@@ -17,6 +17,12 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
   const currentToolMap = new Map();
   let cursorEl = null;
   let accumulator = null;
+
+  // ── Subagent view state ──
+  const subagentViews = new Map();
+  let activeSubagentId = null;
+  let parentScrollTop = 0;
+  let savedMessagesHTML = "";
 
   // ── Scroll ──
 
@@ -114,6 +120,266 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     return { name: nameMatch[1], content: match[2].trim() };
   }
 
+  // ── Subagent inline helpers (avoid node:path import from helpers.js) ──
+
+  function subagentStatus(result) {
+    const code = result.exitCode ?? 0;
+    if (code === -1) return "running";
+    if (code !== 0 || result.stopReason === "error" || result.stopReason === "aborted") return "error";
+    return "done";
+  }
+
+  function extractSubagentViews(toolCallId, details) {
+    if (!details?.results) return [];
+    return details.results.map((r, i) => ({
+      id: `${toolCallId}-${i}`,
+      agent: r.agent || "unknown",
+      task: r.task || "",
+      status: subagentStatus(r),
+      usage: r.usage || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+      model: r.model || "",
+      messages: r.messages || [],
+    }));
+  }
+
+  function parseSubagentMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    const entries = [];
+    for (const msg of messages) {
+      const role = msg.role;
+      const content = msg.content;
+      const entry = { role };
+      if (typeof content === "string") {
+        entry.text = content;
+      } else if (Array.isArray(content)) {
+        const texts = [];
+        const toolCalls = [];
+        const thinking = [];
+        for (const part of content) {
+          if (part.type === "text" && part.text) texts.push(part.text);
+          else if (part.type === "thinking" && part.thinking) thinking.push(part.thinking);
+          else if (part.type === "toolCall") toolCalls.push({ id: part.id, name: part.name, arguments: part.arguments });
+        }
+        if (texts.length) entry.text = texts.join("");
+        if (thinking.length) entry.thinking = thinking.join("");
+        if (toolCalls.length) entry.toolCalls = toolCalls;
+      }
+      if (role === "toolResult") {
+        entry.toolCallId = msg.toolCallId;
+        entry.toolName = msg.toolName;
+        entry.isError = msg.isError;
+        if (Array.isArray(content)) entry.text = content.map((c) => c.text || "").join("");
+        else if (typeof content === "string") entry.text = content;
+      }
+      if (entry.text || entry.toolCalls || entry.thinking) entries.push(entry);
+    }
+    return entries;
+  }
+
+  function formatUsage(usage) {
+    const parts = [];
+    if (usage.turns) parts.push(`${usage.turns} turns`);
+    if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
+    if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
+    if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
+    return parts.join("  ");
+  }
+
+  function statusIcon(status) {
+    if (status === "running") return "⏳";
+    if (status === "error") return "✗";
+    return "✓";
+  }
+
+  function createSubagentBlock(view) {
+    const block = document.createElement("div");
+    block.className = "subagent-block";
+    block.dataset.subagentId = view.id;
+
+    const header = document.createElement("div");
+    header.className = "subagent-header";
+
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "subagent-icon";
+    iconSpan.textContent = statusIcon(view.status);
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "subagent-name";
+    nameSpan.textContent = `subagent ${view.agent}`;
+
+    const statsSpan = document.createElement("span");
+    statsSpan.className = "subagent-stats";
+    const stats = formatUsage(view.usage);
+    if (stats) statsSpan.textContent = stats;
+
+    const openBtn = document.createElement("button");
+    openBtn.className = "subagent-open-btn";
+    openBtn.textContent = "open";
+    openBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSubagentView(view.id);
+    });
+
+    header.appendChild(iconSpan);
+    header.appendChild(nameSpan);
+    header.appendChild(statsSpan);
+    header.appendChild(openBtn);
+    block.appendChild(header);
+    return block;
+  }
+
+  function updateSubagentBlock(block, view) {
+    const icon = block.querySelector(".subagent-icon");
+    const stats = block.querySelector(".subagent-stats");
+    if (icon) icon.textContent = statusIcon(view.status);
+    if (stats) stats.textContent = formatUsage(view.usage);
+  }
+
+  function openSubagentView(id) {
+    const view = subagentViews.get(id);
+    if (!view) return;
+    activeSubagentId = id;
+    parentScrollTop = $chat.scrollTop;
+    savedMessagesHTML = $messages.innerHTML;
+    $messages.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "subagent-view-header";
+    const backBtn = document.createElement("button");
+    backBtn.className = "subagent-back-btn";
+    backBtn.textContent = "← back to main session";
+    backBtn.addEventListener("click", closeSubagentView);
+    const title = document.createElement("div");
+    title.className = "subagent-view-title";
+    title.textContent = `${statusIcon(view.status)} subagent: ${view.agent}  ${formatUsage(view.usage)}`;
+    if (view.model) {
+      const modelSpan = document.createElement("span");
+      modelSpan.className = "subagent-view-model";
+      modelSpan.textContent = view.model;
+      title.appendChild(modelSpan);
+    }
+    const taskEl = document.createElement("div");
+    taskEl.className = "subagent-view-task";
+    taskEl.textContent = view.task.length > 200 ? `${view.task.slice(0, 200)}...` : view.task;
+    header.appendChild(backBtn);
+    header.appendChild(title);
+    header.appendChild(taskEl);
+    $messages.appendChild(header);
+
+    const entries = parseSubagentMessages(view.messages);
+    for (const entry of entries) {
+      renderSubagentEntry(entry);
+    }
+    forceScrollToBottom();
+  }
+
+  function renderSubagentEntry(entry) {
+    if (entry.role === "user") {
+      const el = document.createElement("div");
+      el.className = "message user";
+      el.innerHTML = escapeHtml(entry.text || "");
+      $messages.appendChild(el);
+    } else if (entry.role === "assistant") {
+      const el = document.createElement("div");
+      el.className = "message assistant";
+      const textEl = document.createElement("div");
+      textEl.className = "text";
+      if (entry.thinking) {
+        const thinkBlock = document.createElement("div");
+        thinkBlock.className = "thinking-block";
+        const thinkHeader = document.createElement("div");
+        thinkHeader.className = "thinking-header";
+        thinkHeader.textContent = "thinking";
+        thinkHeader.addEventListener("click", () => thinkBlock.classList.toggle("expanded"));
+        const thinkContent = document.createElement("div");
+        thinkContent.className = "thinking-content";
+        thinkContent.textContent = entry.thinking;
+        thinkBlock.appendChild(thinkHeader);
+        thinkBlock.appendChild(thinkContent);
+        el.appendChild(thinkBlock);
+      }
+      if (entry.text) {
+        textEl.innerHTML = renderMarkdown(entry.text);
+        el.appendChild(textEl);
+      }
+      if (entry.toolCalls) {
+        for (const tc of entry.toolCalls) {
+          const block = document.createElement("div");
+          block.className = "tool-block";
+          const header = document.createElement("div");
+          header.className = "tool-header";
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "tool-name";
+          nameSpan.textContent = tc.name;
+          const statusSpan = document.createElement("span");
+          statusSpan.className = "tool-status done";
+          statusSpan.textContent = "done";
+          header.appendChild(nameSpan);
+          header.appendChild(statusSpan);
+          const argsEl = document.createElement("div");
+          argsEl.className = "tool-args";
+          argsEl.textContent = formatArgs(tc.arguments);
+          header.addEventListener("click", () => block.classList.toggle("expanded"));
+          block.appendChild(header);
+          block.appendChild(argsEl);
+          el.appendChild(block);
+        }
+      }
+      if (el.children.length > 0) $messages.appendChild(el);
+    } else if (entry.role === "toolResult") {
+      const el = document.createElement("div");
+      el.className = "message assistant";
+      const resultEl = document.createElement("div");
+      resultEl.className = "tool-result";
+      resultEl.textContent = entry.text || "";
+      if (entry.isError) resultEl.classList.add("error");
+      el.appendChild(resultEl);
+      $messages.appendChild(el);
+    }
+  }
+
+  function closeSubagentView() {
+    activeSubagentId = null;
+    $messages.innerHTML = savedMessagesHTML;
+    savedMessagesHTML = "";
+    $chat.scrollTop = parentScrollTop;
+  }
+
+  function updateSubagentViews(toolCallId, details) {
+    const views = extractSubagentViews(toolCallId, details);
+    for (const view of views) {
+      subagentViews.set(view.id, view);
+      if (activeSubagentId === view.id) {
+        // Re-render the subagent view if currently viewing this subagent
+        const header = $messages.querySelector(".subagent-view-header");
+        if (header) {
+          // Update title stats
+          const title = header.querySelector(".subagent-view-title");
+          if (title) {
+            title.textContent = `${statusIcon(view.status)} subagent: ${view.agent}  ${formatUsage(view.usage)}`;
+            if (view.model) {
+              const modelSpan = document.createElement("span");
+              modelSpan.className = "subagent-view-model";
+              modelSpan.textContent = view.model;
+              title.appendChild(modelSpan);
+            }
+          }
+          // Re-render messages (simple approach: clear and redraw)
+          const headerEl = $messages.querySelector(".subagent-view-header");
+          $messages.innerHTML = "";
+          $messages.appendChild(headerEl);
+          const entries = parseSubagentMessages(view.messages);
+          for (const entry of entries) renderSubagentEntry(entry);
+          forceScrollToBottom();
+        }
+      } else {
+        // Update the subagent block in parent view
+        const block = $messages.querySelector(`.subagent-block[data-subagent-id="${view.id}"]`);
+        if (block) updateSubagentBlock(block, view);
+      }
+    }
+  }
+
   function createCollapsibleBlock(label, name, content) {
     const block = document.createElement("div");
     block.className = `${label}-block`;
@@ -174,6 +440,30 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
   function addToolBlock(toolCallId, toolName, args) {
     if (!currentAssistantEl) return;
     removeStreamingCursor();
+
+    // Subagent tools get a special block with open button
+    if (toolName === "subagent") {
+      const block = document.createElement("div");
+      block.className = "subagent-container";
+      block.dataset.toolCallId = toolCallId || "";
+      // Create placeholder block, updated when details arrive
+      const placeholderView = {
+        id: `${toolCallId}-0`,
+        agent: args?.agent || "...",
+        task: args?.task || "",
+        status: "running",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+        model: "",
+        messages: [],
+      };
+      subagentViews.set(placeholderView.id, placeholderView);
+      const saBlock = createSubagentBlock(placeholderView);
+      block.appendChild(saBlock);
+      currentAssistantEl.insertBefore(block, currentTextEl);
+      if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan: null, resultEl: null });
+      scrollToBottom();
+      return;
+    }
 
     const block = document.createElement("div");
     block.className = "tool-block";
@@ -305,11 +595,23 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
       case "toolcall_start": break;
       case "toolcall_end": break;
       case "tool_execution_start": addToolBlock(event.toolCallId, event.toolName, event.args); break;
-      case "tool_execution_update": updateToolResult(event.toolCallId, state.tools.find((t) => t.toolCallId === event.toolCallId)?.resultText, true); break;
+      case "tool_execution_update": {
+        if (event.toolName === "subagent" || state.subagentDetails[event.toolCallId]) {
+          const details = state.subagentDetails[event.toolCallId];
+          if (details) updateSubagentViews(event.toolCallId, details);
+        }
+        updateToolResult(event.toolCallId, state.tools.find((t) => t.toolCallId === event.toolCallId)?.resultText, true);
+        break;
+      }
       case "tool_execution_end": {
         const tool = state.tools.find((t) => t.toolCallId === event.toolCallId);
-        updateToolBlock(event.toolCallId, event.isError);
-        if (tool?.resultText) updateToolResult(event.toolCallId, tool.resultText, false);
+        if (event.toolName === "subagent" || state.subagentDetails[event.toolCallId]) {
+          const details = state.subagentDetails[event.toolCallId];
+          if (details) updateSubagentViews(event.toolCallId, details);
+        } else {
+          updateToolBlock(event.toolCallId, event.isError);
+          if (tool?.resultText) updateToolResult(event.toolCallId, tool.resultText, false);
+        }
         break;
       }
       default: break;
@@ -428,7 +730,26 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
           addMessage("system", entry.text);
         }
       } else if (entry.role === "toolResult") {
-        if (entry.toolCallId && entry.text && lastAssistantEl) {
+        if (entry.subagentDetails) {
+          // Subagent tool result — render as subagent block(s)
+          const toolCallId = entry.toolCallId || "";
+          const views = extractSubagentViews(toolCallId, entry.subagentDetails);
+          for (const view of views) {
+            subagentViews.set(view.id, view);
+            const saBlock = createSubagentBlock(view);
+            if (lastAssistantEl) {
+              // Replace the corresponding tool block if it exists
+              const toolBlock = lastAssistantEl.querySelector(`.tool-block [data-tool-call-id="${toolCallId}"]`)?.closest(".tool-block");
+              if (toolBlock) {
+                toolBlock.parentElement.replaceChild(saBlock, toolBlock);
+              } else {
+                lastAssistantEl.appendChild(saBlock);
+              }
+            } else {
+              $messages.appendChild(saBlock);
+            }
+          }
+        } else if (entry.toolCallId && entry.text && lastAssistantEl) {
           const resultEl = lastAssistantEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);
           if (resultEl) {
             const toolBlock = resultEl.closest(".tool-block");
@@ -469,5 +790,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     scrollToBottom,
     expandAllTools,
     collapseAllTools,
+    closeSubagentView,
   };
 }
