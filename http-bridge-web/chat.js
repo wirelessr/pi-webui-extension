@@ -21,26 +21,23 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
   // ── Scroll ──
 
   let userAtBottom = true;
-  let programmaticScroll = false;
+  let programmaticScrollUntil = 0;
 
   function scrollToBottom() {
     if (userAtBottom) {
-      programmaticScroll = true;
+      programmaticScrollUntil = Date.now() + 100;
       $chat.scrollTop = $chat.scrollHeight;
     }
   }
 
   function forceScrollToBottom() {
     userAtBottom = true;
-    programmaticScroll = true;
+    programmaticScrollUntil = Date.now() + 100;
     $chat.scrollTop = $chat.scrollHeight;
   }
 
   $chat.addEventListener("scroll", () => {
-    if (programmaticScroll) {
-      programmaticScroll = false;
-      return;
-    }
+    if (Date.now() < programmaticScrollUntil) return;
     const atBottom = $chat.scrollHeight - $chat.scrollTop - $chat.clientHeight < 60;
     userAtBottom = atBottom;
     $scrollBottom.classList.toggle("hidden", atBottom);
