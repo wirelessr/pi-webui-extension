@@ -540,6 +540,7 @@ body {
 
 .compaction-block {
   margin-bottom: 8px;
+  margin-left: 16px;
   border-left: 2px solid var(--accent);
   padding-left: 12px;
 }
