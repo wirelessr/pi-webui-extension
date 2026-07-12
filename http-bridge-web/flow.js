@@ -96,16 +96,14 @@ export async function doSendPrompt(opts) {
 
   if (compactInfo) {
     const tokensMsg = compactInfo.tokensBefore != null ? ` (${compactInfo.tokensBefore} tokens before)` : "";
-    chat.addMessage("system", `Session compacted${tokensMsg}`);
-    try {
-      const data = await getHistoryFn();
-      if (data.history) {
-        chat.loadHistory(data.history);
-        historyReloaded = true;
-      }
-    } catch {
-      // Best effort
-    }
+    const summaryText = compactInfo.summary || "";
+    const msg = summaryText
+      ? `Session compacted${tokensMsg}\n\n${summaryText}`
+      : `Session compacted${tokensMsg}`;
+    chat.addMessage("system", msg);
+    // Don't reload history here — loadHistory clears the DOM which would
+    // remove the user's /compact message and this system message.
+    // User can refresh to see the compacted history.
   }
 
   try {

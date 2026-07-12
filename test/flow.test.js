@@ -106,23 +106,24 @@ describe("doSendPrompt — core send flow", () => {
     assert.equal(chat.calls.loadHistory.length, 0);
   });
 
-  test("compact done event → shows system message + reloads history", async () => {
+  test("compact done event → shows system message, no history reload", async () => {
     const chat = mockChat();
     const opts = makeOpts({
       chat,
       sendPromptStreamFn: async (_msg, onEvent) => onEvent({
         type: "done", text: "summary", compact: true, tokensBefore: 50000,
       }),
-      getHistoryFn: async () => ({ history: [{ role: "user", text: "hi" }] }),
+      getHistoryFn: async () => { throw new Error("should not be called"); },
     });
     const result = await doSendPrompt(opts);
     assert.equal(result.completed, true);
-    assert.equal(result.historyReloaded, true);
-    assert.equal(chat.calls.loadHistory.length, 1);
+    assert.equal(result.historyReloaded, false);
+    assert.equal(chat.calls.loadHistory.length, 0);
     const sysMsg = chat.calls.addMessage.find((c) => c.role === "system");
     assert.ok(sysMsg, "system message added");
     assert.match(sysMsg.text, /compacted/);
     assert.match(sysMsg.text, /50000/);
+    assert.match(sysMsg.text, /summary/);
   });
 
   test("compact done event + history fetch fails → no crash", async () => {
