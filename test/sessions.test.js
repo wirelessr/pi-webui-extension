@@ -242,6 +242,46 @@ describe("doNewSession", () => {
     assert.equal(result.action, "showError");
     assert.match(result.reason, /spawn failed/);
   });
+
+  test("redirects to new session when HTTP server is ready", async () => {
+    const newSession = { port: 7399, pid: 999, url: "http://localhost:7399" };
+    let redirectedUrl = null;
+    const opts = makeOpts({
+      prevCount: 2,
+      refreshSessionsFn: async () => [...SESSIONS, newSession],
+      sessionUrlFn: (s) => s.url,
+      redirectFn: (url) => { redirectedUrl = url; },
+      checkReadyFn: async () => {}, // always ready
+    });
+    const result = await doNewSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(redirectedUrl, "http://localhost:7399");
+  });
+
+  test("does not redirect if HTTP server not ready", async () => {
+    const newSession = { port: 7399, pid: 999, url: "http://localhost:7399" };
+    let redirectedUrl = null;
+    const opts = makeOpts({
+      prevCount: 2,
+      refreshSessionsFn: async () => [...SESSIONS, newSession],
+      pollUntilFn: async (fn) => {
+        // First poll (session detection) succeeds, second poll (ready check) fails
+        const result = await fn();
+        return result;
+      },
+      sessionUrlFn: (s) => s.url,
+      redirectFn: (url) => { redirectedUrl = url; },
+      checkReadyFn: async () => { throw new Error("not ready"); },
+    });
+    // Override pollUntilFn to handle two phases
+    opts.pollUntilFn = async (fn) => {
+      const result = await fn();
+      return result;
+    };
+    const result = await doNewSession(opts);
+    assert.equal(result.action, "rendered");
+    assert.equal(redirectedUrl, null);
+  });
 });
 
 // ── doCloseSession ────────────────────────────────────
