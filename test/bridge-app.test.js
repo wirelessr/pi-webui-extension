@@ -65,6 +65,11 @@ function createMockDeps(overrides = {}) {
 			res.write('data: {"type":"done","text":"hello","toolCalls":[],"thinking":"","messageCount":1}\n\n');
 			res.end();
 		},
+		compactAndStream: async (res) => {
+			calls.compact.push(true);
+			res.write('data: {"type":"done","text":"compacted","toolCalls":[],"compact":true,"tokensBefore":50000}\n\n');
+			res.end();
+		},
 		isPendingOrSse: () => false,
 		reload: () => { calls.reload.push(true); },
 		clientLog: (level, message, data) => { calls.clientLog.push({ level, message, data }); },
@@ -222,6 +227,7 @@ test("POST /api/prompt with /compact via SSE returns done event", async () => {
 	assert.strictEqual(res.headers.get("content-type"), "text/event-stream");
 	const text = await res.text();
 	assert.ok(text.includes("\"type\":\"done\""));
+	assert.ok(text.includes("\"compact\":true"));
 	assert.strictEqual(deps.calls.compact.length, 1);
 });
 

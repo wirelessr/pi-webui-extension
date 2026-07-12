@@ -57,11 +57,15 @@ export async function doSendPrompt(opts) {
   let errorMsg = null;
   let historyReloaded = false;
   let eventCount = 0;
+  let compactInfo = null;
 
   try {
     await sendPromptStreamFn(text, (event) => {
       eventCount++;
-      if (event.type === "done") streamComplete = true;
+      if (event.type === "done") {
+        streamComplete = true;
+        if (event.compact) compactInfo = { tokensBefore: event.tokensBefore, summary: event.text };
+      }
       if (event.type === "error") errorMsg = event.message;
       chat.handleEvent(event);
     });
@@ -88,6 +92,20 @@ export async function doSendPrompt(opts) {
     }
   } else {
     await clientLogFn("info", "doSendPrompt: stream complete", { eventCount });
+  }
+
+  if (compactInfo) {
+    const tokensMsg = compactInfo.tokensBefore != null ? ` (${compactInfo.tokensBefore} tokens before)` : "";
+    chat.addMessage("system", `Session compacted${tokensMsg}`);
+    try {
+      const data = await getHistoryFn();
+      if (data.history) {
+        chat.loadHistory(data.history);
+        historyReloaded = true;
+      }
+    } catch {
+      // Best effort
+    }
   }
 
   try {

@@ -492,20 +492,30 @@ export function createBridgeApp(deps) {
 		const trimmed = parsed.message.trim();
 		if (trimmed.startsWith("/") && WEBUI_EXECUTABLE.has(trimmed.slice(1))) {
 			const cmdName = trimmed.slice(1);
-			try {
-				if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
-					return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+			const accept = c.req.header("accept") || "";
+			const useSse = accept.includes("text/event-stream");
+			if (cmdName === "compact") {
+				if (useSse) {
+					const { readable, writable } = new TransformStream();
+					const writer = writable.getWriter();
+					const encoder = new TextEncoder();
+					const res = {
+						write: (chunk) => writer.write(encoder.encode(chunk)),
+						end: () => writer.close(),
+					};
+					deps.compactAndStream(res);
+					return new Response(readable, {
+						headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+					});
 				}
-				const accept = c.req.header("accept") || "";
-				if (accept.includes("text/event-stream")) {
-					return new Response(
-						"data: {\"type\":\"done\",\"text\":\"\",\"toolCalls\":[]}\n\n",
-						{ headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } },
-					);
+				try {
+					if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
+						return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+					}
+					return c.json({ ok: true });
+				} catch (err) {
+					return c.json({ error: err.message }, 500);
 				}
-				return c.json({ ok: true });
-			} catch (err) {
-				return c.json({ error: err.message }, 500);
 			}
 		}
 
