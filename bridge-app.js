@@ -35,6 +35,18 @@ const MIME_TYPES = {
 
 const WEBUI_EXECUTABLE = new Set(["compact"]);
 
+/**
+ * Execute a WebUI-executable builtin command.
+ * Returns true if handled, false if no handler.
+ */
+function executeBuiltin(cmdName, ctx) {
+	if (cmdName === "compact" && ctx) {
+		ctx.compact();
+		return true;
+	}
+	return false;
+}
+
 // ── Zod schemas ───────────────────────────────────────────────────
 
 const UsageStats = z.object({
@@ -450,9 +462,7 @@ export function createBridgeApp(deps) {
 			return c.json({ error: `Command "${cmdName}" is not executable from WebUI` }, 400);
 		}
 		try {
-			if (cmdName === "compact" && deps.getSessionCtx()) {
-				deps.getSessionCtx().compact();
-			} else {
+			if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
 				return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
 			}
 			return c.json({ ok: true });
@@ -483,10 +493,7 @@ export function createBridgeApp(deps) {
 		if (trimmed.startsWith("/") && WEBUI_EXECUTABLE.has(trimmed.slice(1))) {
 			const cmdName = trimmed.slice(1);
 			try {
-				const ctx = deps.getSessionCtx();
-				if (cmdName === "compact" && ctx) {
-					ctx.compact();
-				} else {
+				if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
 					return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
 				}
 				return c.json({ ok: true });
