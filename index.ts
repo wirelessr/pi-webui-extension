@@ -644,8 +644,18 @@ export default function (pi: ExtensionAPI) {
 				},
 				onError: (err: Error) => {
 					clearInterval(heartbeat);
+					// Send as done (not error) so browser doesn't trigger history reload
+					const doneEvent = {
+						type: "done",
+						text: `Compact failed: ${err.message}`,
+						toolCalls: [],
+						thinking: "",
+						messageCount: 0,
+						compact: true,
+						tokensBefore: null,
+					};
 					try {
-						res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
+						res.write(`data: ${JSON.stringify(doneEvent)}\n\n`);
 						res.end();
 					} catch {}
 				},
