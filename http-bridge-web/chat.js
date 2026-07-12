@@ -5,6 +5,7 @@
  * methods for the main app to drive.
  */
 
+import { parseSkillBlock } from "./helpers.js";
 import { renderMarkdown } from "./markdown.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { escapeHtml } from "./utils.js";
@@ -57,6 +58,24 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
   }
 
   function addMessage(role, text) {
+    if (role === "user") {
+      const skill = parseSkillBlock(text);
+      if (skill) {
+        const el = document.createElement("div");
+        el.className = "message user";
+        const block = createCollapsibleBlock("skill", skill.name, skill.content);
+        el.appendChild(block);
+        if (skill.userMessage) {
+          const argsEl = document.createElement("div");
+          argsEl.className = "text";
+          argsEl.innerHTML = renderContent("user", skill.userMessage);
+          el.appendChild(argsEl);
+        }
+        $messages.appendChild(el);
+        forceScrollToBottom();
+        return;
+      }
+    }
     const el = document.createElement("div");
     el.className = `message ${role}`;
     el.innerHTML = renderContent(role, text);
@@ -66,6 +85,21 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded })
     } else {
       scrollToBottom();
     }
+  }
+
+  function createCollapsibleBlock(label, name, content) {
+    const block = document.createElement("div");
+    block.className = `${label}-block`;
+    const header = document.createElement("div");
+    header.className = `${label}-header`;
+    header.textContent = `[${label}] ${name}`;
+    header.addEventListener("click", () => block.classList.toggle("expanded"));
+    const contentEl = document.createElement("div");
+    contentEl.className = `${label}-content`;
+    contentEl.innerHTML = renderMarkdown(content);
+    block.appendChild(header);
+    block.appendChild(contentEl);
+    return block;
   }
 
   function startAssistantMessage() {
