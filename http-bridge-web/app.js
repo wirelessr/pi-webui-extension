@@ -50,6 +50,7 @@ import { formatStats } from "./utils.js";
   // ── State ─────────────────────────────────────────
 
   let currentPort = null;
+  let lastKnownSessionName = null;
 
   // ── Module instances ──────────────────────────────
 
@@ -192,14 +193,43 @@ import { formatStats } from "./utils.js";
           $cwdDisplay.textContent = parts[parts.length - 1] || data.cwd;
           $cwdDisplay.title = data.cwd;
         }
+        const prevName = lastKnownSessionName;
         if (data.sessionName) $sessionName.textContent = data.sessionName;
         else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
+        if (data.sessionName && data.sessionName !== prevName) {
+          lastKnownSessionName = data.sessionName;
+          sessionsView.load();
+        }
         updateStats(data);
       },
     });
   }
 
   init();
+
+  // Periodic status poll — detects auto-name changes and other updates
+  setInterval(async () => {
+    try {
+      const status = await getStatus();
+      currentPort = status.port;
+      $portDisplay.textContent = `:${status.port}`;
+      if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
+      if (status.cwd) {
+        const parts = status.cwd.split("/");
+        $cwdDisplay.textContent = parts[parts.length - 1] || status.cwd;
+        $cwdDisplay.title = status.cwd;
+      }
+      if (status.sessionName) $sessionName.textContent = status.sessionName;
+      else if (status.sessionId) $sessionName.textContent = status.sessionId.slice(0, 8);
+      if (status.sessionName && status.sessionName !== lastKnownSessionName) {
+        lastKnownSessionName = status.sessionName;
+        sessionsView.load();
+      }
+      updateStats(status);
+    } catch {
+      // Server might be temporarily unavailable
+    }
+  }, 5000);
 
   // ── Global error logging ───────────────────────────
 
