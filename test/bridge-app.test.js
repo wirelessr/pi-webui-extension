@@ -50,7 +50,7 @@ function createMockDeps(overrides = {}) {
 		],
 		listAllSessions: () => [],
 		spawnNewSession: (cwd) => { calls.spawnNewSession.push(cwd); return { pid: 99999 }; },
-	openSession: (sessionId, name) => { calls.openSession.push({ sessionId, name }); return { pid: 88888 }; },
+	openSession: (sessionId, name, cwd) => { calls.openSession.push({ sessionId, name, cwd }); return { pid: 88888 }; },
 		killSession: (pid) => { calls.killSession.push(pid); return true; },
 		readSessionHistory: async () => ({ history: [], total: 0 }),
 		computeUsageStats: () => ({
@@ -387,6 +387,16 @@ test("POST /api/open-session opens session by ID", async () => {
 	assert.strictEqual(body.pid, 88888);
 	assert.strictEqual(deps.calls.openSession[0].sessionId, "019f5aad");
 	assert.strictEqual(deps.calls.openSession[0].name, "test");
+	assert.strictEqual(deps.calls.openSession[0].cwd, undefined);
+});
+
+test("POST /api/open-session passes cwd through", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/open-session", { sessionId: "019f5aad", cwd: "/Users/ctw/Workdir/Codebase/service" }));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(deps.calls.openSession[0].sessionId, "019f5aad");
+	assert.strictEqual(deps.calls.openSession[0].cwd, "/Users/ctw/Workdir/Codebase/service");
 });
 
 test("POST /api/open-session rejects missing sessionId", async () => {

@@ -158,6 +158,7 @@ const NewSessionResponse = z.object({
 const OpenSessionBody = z.object({
 	sessionId: z.string(),
 	name: z.string().optional(),
+	cwd: z.string().optional(),
 }).openapi("OpenSessionBody");
 
 const KillSessionBody = z.object({
@@ -627,7 +628,7 @@ export function createBridgeApp(deps) {
 			return c.json({ error: "sessionId is required" }, 500);
 		}
 		try {
-			const { pid } = deps.openSession(body.sessionId, body.name);
+			const { pid } = deps.openSession(body.sessionId, body.name, body.cwd);
 			return c.json({ ok: true, pid });
 		} catch (err) {
 			return c.json({ error: err.message }, 500);
