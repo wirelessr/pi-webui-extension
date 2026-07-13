@@ -100,6 +100,16 @@ export async function newSession(cwd, fetchFn = fetch) {
   return res.json();
 }
 
+export async function openSession(sessionId, name, fetchFn = fetch) {
+  const res = await fetchFn("/api/open-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, ...(name ? { name } : {}) }),
+  });
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
 export async function killSession(pid, fetchFn = fetch) {
   const res = await fetchFn("/api/kill-session", {
     method: "POST",

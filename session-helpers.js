@@ -24,7 +24,29 @@ export function buildSpawnCommand({ logFile, port }) {
 }
 
 /**
- * Build the sh command string for reloading a session.
+ * Build the sh command string for opening an existing session by ID.
+ *
+ * Behavioral spec:
+ * 1. Includes `pi --mode rpc --session "<sessionId>"`
+ * 2. Includes `--name "<name>"` only when name is provided
+ * 3. Stderr redirected to logFile with `[new] ` prefix
+ * 4. Uses `tail -f /dev/null |` as stdin keepalive
+ * 5. Escapes double quotes in sessionId and name
+ *
+ * @param {object} opts
+ * @param {string} opts.sessionId — session UUID or path
+ * @param {string|undefined} opts.name — session display name
+ * @param {string} opts.logFile — stderr log file path
+ * @returns {string} sh command string
+ */
+export function buildOpenSessionCommand({ sessionId, name, logFile }) {
+  const escapedId = sessionId.replace(/"/g, '\\"');
+  const escapedLog = logFile.replace(/"/g, '\\"');
+  const nameArg = name ? ` --name "${name.replace(/"/g, '\\"')}"` : "";
+  return `tail -f /dev/null | pi --mode rpc${nameArg} --session "${escapedId}" 2>&1 1>/dev/null | sed -u "s/^/[new] /" >> "${escapedLog}"`;
+}
+
+/**
  *
  * Behavioral spec:
  * 1. Always includes `pi --mode rpc --session "<sessionPath>"`

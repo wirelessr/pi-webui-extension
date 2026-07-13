@@ -15,7 +15,8 @@ function createMockDeps(overrides = {}) {
 	const calls = {
 		setSessionName: [],
 		sendUserMessage: [],
-		spawnNewSession: [],
+	spawnNewSession: [],
+	openSession: [],
 		killSession: [],
 		reload: [],
 		clientLog: [],
@@ -49,6 +50,7 @@ function createMockDeps(overrides = {}) {
 		],
 		listAllSessions: () => [],
 		spawnNewSession: (cwd) => { calls.spawnNewSession.push(cwd); return { pid: 99999 }; },
+	openSession: (sessionId, name) => { calls.openSession.push({ sessionId, name }); return { pid: 88888 }; },
 		killSession: (pid) => { calls.killSession.push(pid); return true; },
 		readSessionHistory: async () => ({ history: [], total: 0 }),
 		computeUsageStats: () => ({
@@ -373,6 +375,25 @@ test("POST /api/new-session with empty body spawns with undefined cwd", async ()
 	const res = await app.fetch(req("/api/new-session", { method: "POST", body: "" }));
 	assert.strictEqual(res.status, 200);
 	assert.strictEqual(deps.calls.spawnNewSession[0], undefined);
+});
+
+test("POST /api/open-session opens session by ID", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/open-session", { sessionId: "019f5aad", name: "test" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(body.pid, 88888);
+	assert.strictEqual(deps.calls.openSession[0].sessionId, "019f5aad");
+	assert.strictEqual(deps.calls.openSession[0].name, "test");
+});
+
+test("POST /api/open-session rejects missing sessionId", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/open-session", {}));
+	assert.strictEqual(res.status, 400);
 });
 
 test("POST /api/kill-session calls killSession with pid", async () => {
