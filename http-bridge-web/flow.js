@@ -146,7 +146,6 @@ export async function doSelectCommand(opts) {
     }
   }
 
-  input.selectCommand(cmd);
   return { action: "inserted", reason: "command inserted into input" };
 }
 
