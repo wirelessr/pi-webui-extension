@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
-import { networkInterfaces } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -152,9 +152,36 @@ export default function (pi: ExtensionAPI) {
 		return { pid: child.pid };
 	}
 
-	function openSession(sessionId: string, name?: string): { pid: number } {
+	function findSessionCwd(sessionId: string): string | undefined {
+		const sessionsRoot = join(homedir(), ".pi", "agent", "sessions");
+		if (!existsSync(sessionsRoot)) return undefined;
+		try {
+			const dirs = readdirSync(sessionsRoot, { withFileTypes: true });
+			for (const dir of dirs) {
+				if (!dir.isDirectory()) continue;
+				const dirPath = join(sessionsRoot, dir.name);
+				try {
+					const files = readdirSync(dirPath);
+					for (const f of files) {
+						if (!f.endsWith(".jsonl")) continue;
+						// Filenames: <timestamp>_<uuid>.jsonl
+						if (f.includes(sessionId)) {
+							const firstLine = readFileSync(join(dirPath, f), "utf-8").split("\n", 1)[0];
+							const meta = JSON.parse(firstLine);
+							if (meta.cwd) return meta.cwd;
+						}
+					}
+				} catch {}
+			}
+		} catch {}
+		return undefined;
+	}
+
+	function openSession(sessionId: string, name?: string, cwd?: string): { pid: number } {
+		const resolvedCwd = cwd || findSessionCwd(sessionId);
 		const cmd = buildOpenSessionCommand({ sessionId, name, logFile: bridgeLogPath() });
 		const child = spawn("sh", ["-c", cmd], {
+			cwd: resolvedCwd || process.cwd(),
 			detached: true,
 			stdio: "ignore",
 		});
@@ -469,6 +496,7 @@ export default function (pi: ExtensionAPI) {
 						sessionFile,
 						sessionId,
 						sessionName,
+						cwd: process.cwd(),
 						pid: process.ppid || process.pid,
 						startedAt: Date.now(),
 					},
