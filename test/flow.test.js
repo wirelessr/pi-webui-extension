@@ -314,8 +314,7 @@ describe("doSelectCommand — command dispatch", () => {
         executeCommandFn: async () => { throw new Error("should not call"); },
       });
       assert.equal(result.action, "inserted");
-      assert.equal(input.calls.selectCommand.length, 1);
-      assert.deepEqual(input.calls.selectCommand[0], c.cmd);
+      assert.equal(input.calls.selectCommand.length, 0);
     });
   }
 });

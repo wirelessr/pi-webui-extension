@@ -69,7 +69,7 @@ export function createInput({
     $input.focus();
     autoResize();
     filterCommands();
-    onSelectCommand();
+    onSelectCommand(cmd);
 
     const mobileView = decideMobileViewOnSelect(mobileNav.isMobile());
     if (mobileView) mobileNav.switchView(mobileView);
