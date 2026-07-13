@@ -190,9 +190,34 @@ export default function (pi: ExtensionAPI) {
 		return { pid: child.pid };
 	}
 
+	function markDiscoveryForClose(pid: number): void {
+		try {
+			const files = readdirSync(BRIDGE_DIR);
+			for (const f of files) {
+				if (!f.endsWith(".json")) continue;
+				const fullPath = join(BRIDGE_DIR, f);
+				try {
+					const content = JSON.parse(readFileSync(fullPath, "utf-8"));
+					// Match by piPid (process.pid from /api/status) or pid (shell ppid)
+					if (content.piPid === pid || content.pid === pid) {
+						content.intentionalClose = true;
+						writeFileSync(fullPath, JSON.stringify(content, null, 2));
+						serverLog(`killSession: marked ${f} as intentionalClose`);
+						return;
+					}
+				} catch {
+					// Skip
+				}
+			}
+		} catch {
+			// Dir doesn't exist
+		}
+	}
+
 	function killSession(pid: number): boolean {
 		try {
 			serverLog(`killSession: pid=${pid}`);
+			markDiscoveryForClose(pid);
 			try {
 				process.kill(-pid, "SIGTERM");
 				serverLog(`killSession: killed process group -${pid}`);
@@ -498,6 +523,7 @@ export default function (pi: ExtensionAPI) {
 						sessionName,
 						cwd: process.cwd(),
 						pid: process.ppid || process.pid,
+						piPid: process.pid,
 						startedAt: Date.now(),
 					},
 					null,
@@ -940,9 +966,16 @@ export default function (pi: ExtensionAPI) {
 
 		if (discoveryFile && existsSync(discoveryFile)) {
 			try {
-				unlinkSync(discoveryFile);
+				const content = JSON.parse(readFileSync(discoveryFile, "utf-8"));
+				if (content.intentionalClose) {
+					unlinkSync(discoveryFile);
+					serverLog("session_shutdown: intentional close, deleted discovery file");
+				} else {
+					serverLog("session_shutdown: keeping discovery file for auto-recover");
+				}
 			} catch {
-				// Best effort
+				// Can't read, delete as fallback
+				try { unlinkSync(discoveryFile); } catch {}
 			}
 		}
 	});
