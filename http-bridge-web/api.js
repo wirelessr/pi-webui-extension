@@ -138,6 +138,9 @@ export async function reloadSession(baseUrl, fetchFn = fetch) {
  * @param {typeof fetch} [fetchFn]
  */
 export async function clientLog(level, message, data, fetchFn = fetch) {
+  // Also write to DevTools console for live debugging
+  const consoleFn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  consoleFn(`[client] [${level}] ${message}`, data ?? "");
   try {
     await fetchFn("/api/client-log", {
       method: "POST",
