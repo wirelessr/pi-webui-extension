@@ -536,7 +536,7 @@ export default function (pi: ExtensionAPI) {
 		return null;
 	}
 
-	function cleanupStaleDiscoveryFiles() {
+	function recoverStaleSessions() {
 		try {
 			const files = readdirSync(BRIDGE_DIR);
 			for (const f of files) {
@@ -545,6 +545,18 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const content = JSON.parse(readFileSync(fullPath, "utf-8"));
 					if (content.pid && !isPidAlive(content.pid)) {
+						// Don't recover ourselves (in case our own discovery file is stale)
+						if (content.sessionId === sessionId) {
+							unlinkSync(fullPath);
+							continue;
+						}
+						// Verify session file still exists before recovering
+						if (content.sessionFile && !existsSync(content.sessionFile)) {
+							unlinkSync(fullPath);
+							continue;
+						}
+						serverLog(`recover: re-spawning stale session ${content.sessionId} (name=${content.sessionName ?? "?"}, cwd=${content.cwd ?? "auto"})`);
+						openSession(content.sessionId, content.sessionName, content.cwd);
 						unlinkSync(fullPath);
 					}
 				} catch {
@@ -815,7 +827,7 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// Best effort
 		}
-		cleanupStaleDiscoveryFiles();
+		recoverStaleSessions();
 
 		try {
 			actualPort = await findFreePort(BASE_PORT, HOST);
