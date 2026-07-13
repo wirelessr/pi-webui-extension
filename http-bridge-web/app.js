@@ -14,7 +14,6 @@
 import { abortAgent, clientLog, executeCommand, getHistory, getStatus, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
-import { createContextMenu } from "./context-menu.js";
 import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
@@ -87,7 +86,6 @@ import { formatStats } from "./utils.js";
     onStop: handleStop,
   });
 
-  createContextMenu({ $messages });
 
   // ── Session refresh ───────────────────────────────
 
@@ -244,6 +242,7 @@ import { formatStats } from "./utils.js";
   window.addEventListener("unhandledrejection", (e) => {
     clientLog("error", "unhandledrejection", {
       reason: e.reason?.message || String(e.reason),
+      stack: e.reason?.stack?.split("\n").slice(0, 3).join(" | "),
     });
   });
 })();

@@ -950,35 +950,32 @@ body {
   .send-btn { padding: 10px 16px; }
 }
 
-/* ── Context menu ── */
+/* ── Code block copy button ── */
 
-.context-menu {
-  position: fixed;
-  z-index: 10000;
-  min-width: 160px;
-  background: var(--bg-elevated, #2a2a2a);
-  border: 1px solid var(--border, #444);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-  padding: 4px 0;
-  font-size: 13px;
-}
+pre { position: relative; }
 
-.context-menu-item {
-  display: block;
-  width: 100%;
-  padding: 8px 16px;
-  border: none;
-  background: none;
-  color: var(--text, #e0e0e0);
-  text-align: left;
+.copy-code-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 2px 8px;
   cursor: pointer;
-  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
 }
 
-.context-menu-item:hover {
-  background: var(--accent, #4a9eff);
-  color: #fff;
+pre:hover .copy-code-btn {
+  opacity: 1;
+}
+
+.copy-code-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
 }
 
 .skill-block {
