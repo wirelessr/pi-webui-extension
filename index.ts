@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -116,10 +116,27 @@ export default function (pi: ExtensionAPI) {
 		return join(BRIDGE_DIR, "bridge.log");
 	}
 
+	function serverLog(message: string, data?: any): void {
+		const prefix = `[${actualPort}] [http-bridge]`;
+		const dataStr = data ? ` ${JSON.stringify(data)}` : "";
+		const line = `${prefix} ${message}${dataStr}`;
+		try {
+			appendFileSync(bridgeLogPath(), `${line}\n`);
+		} catch {
+			console.error(line);
+		}
+	}
+
 	function clientLog(level: string, message: string, data?: any): void {
 		const prefix = `[${actualPort}] [client]`;
 		const dataStr = data ? ` ${JSON.stringify(data)}` : "";
-		console.error(`${prefix} [${level}] ${message}${dataStr}`);
+		const line = `${prefix} [${level}] ${message}${dataStr}`;
+		try {
+			appendFileSync(bridgeLogPath(), `${line}\n`);
+		} catch {
+			// Best effort — fall back to stderr if file write fails
+			console.error(line);
+		}
 	}
 
 	function spawnNewSession(cwd?: string): { pid: number } {
@@ -136,17 +153,17 @@ export default function (pi: ExtensionAPI) {
 
 	function killSession(pid: number): boolean {
 		try {
-			console.error(`[http-bridge] killSession: pid=${pid}`);
+			serverLog(`killSession: pid=${pid}`);
 			try {
 				process.kill(-pid, "SIGTERM");
-				console.error(`[http-bridge] killSession: killed process group -${pid}`);
+				serverLog(`killSession: killed process group -${pid}`);
 			} catch (err: any) {
-				console.error(`[http-bridge] killSession: group kill failed (${err.message}), trying direct kill`);
+				serverLog(`killSession: group kill failed (${err.message}), trying direct kill`);
 				process.kill(pid, "SIGTERM");
 			}
 			return true;
 		} catch (err: any) {
-			console.error(`[http-bridge] killSession: failed: ${err.message}`);
+			serverLog(`killSession: failed: ${err.message}`);
 			return false;
 		}
 	}
@@ -164,16 +181,16 @@ export default function (pi: ExtensionAPI) {
 		// If spawn fails, the old process is still alive with its discovery file intact,
 		// preventing orphan sessions with no discovery file.
 		const oldDiscoveryFile = discoveryFile;
-		console.error(`[http-bridge] reload: pi pid=${process.pid} ppid=${process.ppid} pgid=${process.ppid}`);
+		serverLog(`reload: pi pid=${process.pid} ppid=${process.ppid} pgid=${process.ppid}`);
 		const oldShPid = process.ppid;
 		process.on("exit", () => {
 			if (oldDiscoveryFile) {
 				try { unlinkSync(oldDiscoveryFile); } catch {}
 			}
-			console.error(`[http-bridge] reload exit: killing process group -${oldShPid}`);
+			serverLog(`reload exit: killing process group -${oldShPid}`);
 			if (oldShPid) {
 				try { process.kill(-oldShPid, "SIGTERM"); } catch (err: any) {
-					console.error(`[http-bridge] reload exit: kill failed: ${err.message}`);
+					serverLog(`reload exit: kill failed: ${err.message}`);
 				}
 			}
 		});
@@ -190,6 +207,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", (event: any) => {
+		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending}`);
 		isBusy = false;
 
 		if (ourTurnActive) {
@@ -218,7 +236,7 @@ export default function (pi: ExtensionAPI) {
 			}
 		} else {
 			if (sse || pending) {
-				console.error("[http-bridge] agent_end received but ourTurnActive=false", {
+				serverLog("agent_end received but ourTurnActive=false", {
 					hasSse: !!sse,
 					hasPending: !!pending,
 					waitingForExtensionInput,
@@ -250,13 +268,18 @@ export default function (pi: ExtensionAPI) {
 		if (!autoNameAttempted && !sessionName && typeof event.text === "string" && event.text.trim().length > 0) {
 			autoNameAttempted = true;
 			const apiKey = process.env.FIREWORKS_API_KEY;
+			serverLog(`auto-name: attempting (apiKey=${apiKey ? "yes" : "no"}, textLen=${event.text.length})`);
 			generateSessionName(event.text, apiKey).then((name) => {
-				if (name) {
-					sessionName = name;
-					pi.setSessionName(name);
-					console.error(`[http-bridge] auto-named session: ${name}`);
-					try { writeDiscovery(); } catch { /* best effort */ }
+				if (!name) {
+					name = event.text.slice(0, 120).replace(/\n/g, " ").trim();
+					serverLog(`auto-name: skipped, using prompt prefix fallback`);
 				}
+				sessionName = name;
+				pi.setSessionName(name);
+				serverLog(`auto-named session: ${name}`);
+				try { writeDiscovery(); } catch { /* best effort */ }
+			}).catch((err) => {
+				serverLog(`auto-name error: ${err.message}`);
 			});
 		}
 	});
@@ -332,7 +355,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			res.write(`data: ${JSON.stringify(data)}\n\n`);
 		} catch (err) {
-			console.error("[http-bridge] writeSseSafe failed:", err);
+			serverLog("writeSseSafe failed:", err);
 		}
 	}
 
@@ -341,7 +364,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			sse.res.write(`data: ${JSON.stringify(data)}\n\n`);
 		} catch (err) {
-			console.error("[http-bridge] writeSse failed, closing stream:", err);
+			serverLog("writeSse failed, closing stream:", err);
 			closeSse();
 		}
 	}
@@ -352,7 +375,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			sse.res.end();
 		} catch (err) {
-			console.error("[http-bridge] closeSse res.end failed:", err);
+			serverLog("closeSse res.end failed:", err);
 		}
 		sse = null;
 	}
@@ -421,7 +444,7 @@ export default function (pi: ExtensionAPI) {
 	function writeDiscovery() {
 		if (!discoveryFile || !sessionId) return;
 		const lanIp = getLanIp();
-		console.error(`[http-bridge] writeDiscovery: pid=${process.pid} ppid=${process.ppid} → storing pid=${process.ppid || process.pid}`);
+		serverLog(`writeDiscovery: pid=${process.pid} ppid=${process.ppid} → storing pid=${process.ppid || process.pid}`);
 		try {
 			writeFileSync(
 				discoveryFile,
@@ -551,7 +574,7 @@ export default function (pi: ExtensionAPI) {
 			unlinkFn: (name) => { try { unlinkSync(join(BRIDGE_DIR, name)); } catch {} },
 			killGroupFn: (pid) => { try { process.kill(-pid, "SIGTERM"); return true; } catch { return false; } },
 			killFn: (pid) => { try { process.kill(pid, "SIGTERM"); } catch {} },
-			logFn: (msg) => console.error(`[http-bridge] listAllSessions: ${msg}`),
+			logFn: (msg) => serverLog(`listAllSessions: ${msg}`),
 		});
 	}
 
@@ -657,7 +680,7 @@ export default function (pi: ExtensionAPI) {
 						res.write(`data: ${JSON.stringify(doneEvent)}\n\n`);
 						res.end();
 					} catch (err) {
-						console.error("[http-bridge] compactAndStream: write failed:", err);
+						serverLog("compactAndStream: write failed:", err);
 					}
 				},
 				onError: (err: Error) => {
@@ -705,11 +728,16 @@ export default function (pi: ExtensionAPI) {
 				try {
 					sse.res.write(": heartbeat\n\n");
 				} catch (err) {
-					console.error("[http-bridge] heartbeat write failed:", err);
+					serverLog("heartbeat write failed:", err);
 					closeSse();
 				}
 			}
 		}, 15000);
+
+		if (sse) {
+			serverLog("new SSE request while previous still open, closing old");
+			closeSse();
+		}
 
 		sse = { res, heartbeat };
 
@@ -718,7 +746,7 @@ export default function (pi: ExtensionAPI) {
 
 		inputWatchdog = setTimeout(() => {
 			if (waitingForExtensionInput) {
-				console.error("[http-bridge] input watchdog: agent did not start processing message");
+				serverLog("input watchdog: agent did not start processing message");
 				waitingForExtensionInput = false;
 				ourTurnActive = false;
 				sendSseError("Agent did not start processing the message (input event not received)");
@@ -787,10 +815,10 @@ export default function (pi: ExtensionAPI) {
 					res.on("close", () => {
 						if (!res.writableEnded) {
 							clientClosed = true;
-							console.error("[http-bridge] client disconnected during stream");
+							serverLog("client disconnected during stream");
 							reader.cancel().catch(() => {});
 							if (sse) {
-								console.error("[http-bridge] closing SSE state after client disconnect");
+								serverLog("closing SSE state after client disconnect");
 								closeSse();
 							}
 						}
@@ -803,7 +831,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				res.end();
 			} catch (err: any) {
-				console.error("[http-bridge] request handler error:", err);
+				serverLog("request handler error:", err);
 				if (!res.headersSent) {
 					res.writeHead(500, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: err.message }));

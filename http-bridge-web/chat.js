@@ -7,6 +7,7 @@
 
 import { renderMarkdown } from "./markdown.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
+import { doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
 export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {} }) {
@@ -60,6 +61,36 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function renderContent(role, text) {
     if (role === "user") return escapeHtml(text);
     return renderMarkdown(text);
+  }
+
+  function attachCopyButtons(container) {
+    const pres = container.querySelectorAll("pre");
+    for (const pre of pres) {
+      if (pre.querySelector(".copy-code-btn")) continue;
+      const btn = document.createElement("button");
+      btn.className = "copy-code-btn";
+      btn.textContent = "copy";
+      btn.addEventListener("click", async () => {
+        const code = pre.querySelector("code");
+        const text = code ? code.textContent : pre.textContent;
+        await doCopy({
+          text,
+          writeTextFn: navigator.clipboard?.writeText?.bind(navigator.clipboard),
+          execCommandFn: document.execCommand?.bind(document),
+          createTextareaFn: () => {
+            const ta = document.createElement("textarea");
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            return ta;
+          },
+          removeTextareaFn: (ta) => document.body.removeChild(ta),
+        });
+        btn.textContent = "copied";
+        setTimeout(() => { btn.textContent = "copy"; }, 1500);
+      });
+      pre.appendChild(btn);
+    }
   }
 
   function addMessage(role, text) {
@@ -306,6 +337,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
       }
       if (entry.text) {
         textEl.innerHTML = renderMarkdown(entry.text);
+        attachCopyButtons(textEl);
         el.appendChild(textEl);
       }
       if (entry.toolCalls) {
@@ -656,6 +688,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function renderText(state) {
     if (!currentTextEl) return;
     currentTextEl.innerHTML = renderContent("assistant", state.committedText + state.pendingText);
+    attachCopyButtons(currentTextEl);
     addStreamingCursor();
     scrollToBottom();
   }
@@ -672,6 +705,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function renderTextCommitted(state) {
     if (!currentTextEl) return;
     currentTextEl.innerHTML = renderContent("assistant", state.committedText);
+    attachCopyButtons(currentTextEl);
   }
 
   function renderThinking(state) {
@@ -713,6 +747,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
         }
         if (entry.text) {
           textEl.innerHTML = renderMarkdown(entry.text);
+          attachCopyButtons(textEl);
           el.appendChild(textEl);
         }
         if (entry.toolCalls) {
