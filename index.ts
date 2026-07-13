@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./http-bridge-web/helpers.js";
 import { generateSessionName } from "./name-generator.js";
-import { buildReloadCommand, buildSpawnCommand, dedupSessions } from "./session-helpers.js";
+import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions } from "./session-helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +95,7 @@ export default function (pi: ExtensionAPI) {
 		builtinCommands,
 		listAllSessions,
 		spawnNewSession,
+		openSession,
 		killSession,
 		readSessionHistory,
 		expandInput,
@@ -148,6 +149,17 @@ export default function (pi: ExtensionAPI) {
 		});
 		child.unref();
 		if (!child.pid) throw new Error("Failed to spawn new session");
+		return { pid: child.pid };
+	}
+
+	function openSession(sessionId: string, name?: string): { pid: number } {
+		const cmd = buildOpenSessionCommand({ sessionId, name, logFile: bridgeLogPath() });
+		const child = spawn("sh", ["-c", cmd], {
+			detached: true,
+			stdio: "ignore",
+		});
+		child.unref();
+		if (!child.pid) throw new Error("Failed to open session");
 		return { pid: child.pid };
 	}
 

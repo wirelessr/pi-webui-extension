@@ -10,6 +10,7 @@ import {
   getStatus,
   killSession,
   newSession,
+  openSession,
   pollUntil,
   reloadSession,
   renameSession,
@@ -195,6 +196,28 @@ describe("newSession", () => {
   test("throws on non-ok response", async () => {
     const fetchFn = mockFetch({ status: 500, jsonData: { error: "spawn failed" } });
     await assert.rejects(newSession(undefined, fetchFn), /spawn failed/);
+  });
+});
+
+describe("openSession", () => {
+  test("calls POST /api/open-session with sessionId", async () => {
+    const fetchFn = mockFetch({ jsonData: { pid: 99999 } });
+    const result = await openSession("019f5aad", undefined, fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/open-session");
+    assert.equal(fetchFn.calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { sessionId: "019f5aad" });
+    assert.deepEqual(result, { pid: 99999 });
+  });
+
+  test("includes name when provided", async () => {
+    const fetchFn = mockFetch({ jsonData: { pid: 88888 } });
+    await openSession("abc-123", "my session", fetchFn);
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { sessionId: "abc-123", name: "my session" });
+  });
+
+  test("throws on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 500, jsonData: { error: "session not found" } });
+    await assert.rejects(openSession("bad-id", undefined, fetchFn), /session not found/);
   });
 });
 

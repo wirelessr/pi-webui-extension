@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, clientLog, executeCommand, getHistory, getStatus, sendPromptStream } from "./api.js";
+import { abortAgent, clientLog, executeCommand, getHistory, getStatus, newSession, openSession, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
@@ -41,6 +41,10 @@ import { formatStats } from "./utils.js";
   const $sessionsList = document.getElementById("sessions-list");
   const $refreshSessions = document.getElementById("refresh-sessions");
   const $newSession = document.getElementById("new-session");
+  const $sessionModal = document.getElementById("new-session-modal");
+  const $sessionIdInput = document.getElementById("session-id-input");
+  const $sessionModalCancel = document.getElementById("session-modal-cancel");
+  const $sessionModalOk = document.getElementById("session-modal-ok");
   const $reloadAll = document.getElementById("reload-all");
   const $commandsList = document.getElementById("commands-list");
   const $commandsCount = document.getElementById("commands-count");
@@ -90,7 +94,35 @@ import { formatStats } from "./utils.js";
   // ── Session refresh ───────────────────────────────
 
   $refreshSessions?.addEventListener("click", () => sessionsView.load());
-  $newSession?.addEventListener("click", () => sessionsView.handleNew());
+  $newSession?.addEventListener("click", () => {
+    $sessionIdInput.value = "";
+    $sessionModal.classList.remove("hidden");
+    $sessionIdInput.focus();
+  });
+
+  $sessionModalCancel?.addEventListener("click", () => {
+    $sessionModal.classList.add("hidden");
+  });
+
+  $sessionModal?.addEventListener("click", (e) => {
+    if (e.target === $sessionModal) $sessionModal.classList.add("hidden");
+  });
+
+  async function handleSessionModalOk() {
+    const sessionId = $sessionIdInput.value.trim();
+    $sessionModal.classList.add("hidden");
+    if (sessionId) {
+      await sessionsView.handleOpen(sessionId);
+    } else {
+      await sessionsView.handleNew();
+    }
+  }
+
+  $sessionModalOk?.addEventListener("click", handleSessionModalOk);
+  $sessionIdInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); handleSessionModalOk(); }
+    if (e.key === "Escape") $sessionModal.classList.add("hidden");
+  });
   $reloadAll?.addEventListener("click", () => sessionsView.handleReloadAll());
 
   // ── Expand/collapse all tool blocks (persisted in localStorage) ──

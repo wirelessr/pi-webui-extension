@@ -155,6 +155,11 @@ const NewSessionResponse = z.object({
 	pid: z.number(),
 }).openapi("NewSessionResponse");
 
+const OpenSessionBody = z.object({
+	sessionId: z.string(),
+	name: z.string().optional(),
+}).openapi("OpenSessionBody");
+
 const KillSessionBody = z.object({
 	pid: z.number(),
 }).openapi("KillSessionBody");
@@ -275,6 +280,19 @@ const newSessionRoute = createRoute({
 	summary: "Spawn a new pi session in RPC mode",
 	request: {
 		body: { content: { "application/json": { schema: NewSessionBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: NewSessionResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const openSessionRoute = createRoute({
+	method: "post",
+	path: "/api/open-session",
+	summary: "Open an existing session by ID",
+	request: {
+		body: { content: { "application/json": { schema: OpenSessionBody } } },
 	},
 	responses: {
 		200: { description: "OK", content: { "application/json": { schema: NewSessionResponse } } },
@@ -592,6 +610,24 @@ export function createBridgeApp(deps) {
 		}
 		try {
 			const { pid } = deps.spawnNewSession(cwd);
+			return c.json({ ok: true, pid });
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(openSessionRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 500);
+		}
+		if (!body?.sessionId) {
+			return c.json({ error: "sessionId is required" }, 500);
+		}
+		try {
+			const { pid } = deps.openSession(body.sessionId, body.name);
 			return c.json({ ok: true, pid });
 		} catch (err) {
 			return c.json({ error: err.message }, 500);

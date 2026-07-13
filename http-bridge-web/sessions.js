@@ -4,9 +4,11 @@
  */
 
 import {
+  clientLog,
   getSessions,
   killSession,
   newSession,
+  openSession,
   pollUntil,
   reloadSession,
   renameSession,
@@ -112,28 +114,49 @@ export async function doReloadAll(opts) {
  * @returns {Promise<{action: string, reason: string}>}
  */
 export async function doNewSession(opts) {
-  const { prevCount, newSessionFn, refreshSessionsFn, pollUntilFn, renderFn, sessionUrlFn, redirectFn, checkReadyFn } = opts;
+  const { prevCount, newSessionFn, refreshSessionsFn, pollUntilFn, renderFn, sessionUrlFn, redirectFn, checkReadyFn, logFn = () => {} } = opts;
   try {
-    await newSessionFn();
+    await logFn("info", "doNewSession: starting", { prevCount });
+    const spawnResult = await newSessionFn();
+    const spawnPid = spawnResult?.pid;
+    await logFn("info", "doNewSession: spawn fn returned", { spawnPid, prevCount });
     const result = await pollUntilFn(async () => {
       const all = await refreshSessionsFn();
+      await logFn("info", "doNewSession: poll check", { count: all.length, prevCount, spawnPid });
+      // Detect by pid match (robust against dedup changing count)
+      if (spawnPid && all.some((s) => s.pid === spawnPid)) {
+        const found = all.find((s) => s.pid === spawnPid);
+        renderFn();
+        return found;
+      }
+      // Fallback: count increased (original behavior)
       if (all.length > prevCount) {
         renderFn();
         return all[all.length - 1];
       }
       return false;
-    }, 1000, 10);
-    if (!result) return { action: "showError", reason: "New session not detected — try refresh" };
+    }, 1000, 15);
+    if (!result) {
+      await logFn("warn", "doNewSession: session not detected after polling");
+      return { action: "showError", reason: "New session not detected — try refresh" };
+    }
+    await logFn("info", "doNewSession: session detected, checking ready", { port: result.port });
     // Wait for the new session's HTTP server to be ready, then redirect
     if (redirectFn && checkReadyFn) {
       const url = sessionUrlFn(result);
       const ready = await pollUntilFn(async () => {
         try { await checkReadyFn(url); return true; } catch { return false; }
       }, 500, 20);
-      if (ready) redirectFn(url);
+      if (ready) {
+        await logFn("info", "doNewSession: session ready, redirecting", { url });
+        redirectFn(url);
+      } else {
+        await logFn("warn", "doNewSession: session not ready after polling", { url });
+      }
     }
     return { action: "rendered", reason: "new session detected" };
   } catch (err) {
+    await logFn("error", "doNewSession: error", { message: err.message, stack: err.stack?.split("\n")[0] });
     return { action: "showError", reason: `Failed to create: ${err.message}` };
   }
 }
@@ -426,6 +449,28 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         const res = await fetch(`${url}/api/status`);
         if (!res.ok) throw new Error("not ready");
       },
+      logFn: clientLog,
+    });
+    if (result.action === "showError") {
+      $list.innerHTML = `<div class="cmd-empty">${escapeHtml(result.reason)}</div>`;
+    }
+  }
+
+  async function handleOpen(sessionId) {
+    const prevCount = sessions.length;
+    const result = await doNewSession({
+      prevCount,
+      newSessionFn: () => openSession(sessionId),
+      refreshSessionsFn: refreshSessions,
+      pollUntilFn: pollUntil,
+      renderFn: render,
+      sessionUrlFn: sessionUrl,
+      redirectFn: (url) => { window.location.href = url; },
+      checkReadyFn: async (url) => {
+        const res = await fetch(`${url}/api/status`);
+        if (!res.ok) throw new Error("not ready");
+      },
+      logFn: clientLog,
     });
     if (result.action === "showError") {
       $list.innerHTML = `<div class="cmd-empty">${escapeHtml(result.reason)}</div>`;
@@ -472,5 +517,5 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
     }
   }
 
-  return { load, handleNew, handleReloadAll };
+  return { load, handleNew, handleOpen, handleReloadAll };
 }
