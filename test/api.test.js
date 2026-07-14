@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   abortAgent,
+  attachStream,
   clientLog,
   executeCommand,
   getCommands,
@@ -328,6 +329,42 @@ describe("sendPromptStream", () => {
       body: { getReader: () => ({ read: async () => { throw new Error("read failed"); } }) },
     });
     await assert.rejects(sendPromptStream("test", () => {}, fetchFn), /read failed/);
+  });
+});
+
+// ── attachStream ─────────────────────────────────────
+
+describe("attachStream", () => {
+  test("returns true and parses SSE events when stream available", async () => {
+    const sseData = 'data: {"type":"agent_start"}\n\ndata: {"type":"done"}\n\n';
+    const fetchFn = mockFetch({ bodyText: sseData });
+    const events = [];
+    const result = await attachStream((e) => events.push(e), fetchFn);
+    assert.equal(result, true);
+    assert.equal(events.length, 2);
+    assert.equal(events[0].type, "agent_start");
+    assert.equal(events[1].type, "done");
+  });
+
+  test("returns false on 409 (no active stream)", async () => {
+    const fetchFn = mockFetch({ status: 409, jsonData: { error: "No active stream" } });
+    const result = await attachStream(() => {}, fetchFn);
+    assert.equal(result, false);
+  });
+
+  test("returns false on fetch failure", async () => {
+    const fetchFn = async () => { throw new Error("network down"); };
+    const result = await attachStream(() => {}, fetchFn);
+    assert.equal(result, false);
+  });
+
+  test("returns true even on reader error after successful connect", async () => {
+    const fetchFn = async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => { throw new Error("read failed"); } }) },
+    });
+    const result = await attachStream(() => {}, fetchFn);
+    assert.equal(result, true);
   });
 });
 

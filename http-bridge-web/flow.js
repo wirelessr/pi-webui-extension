@@ -247,6 +247,10 @@ export async function doInit(opts) {
     loadHistoryFn,
     autoResizeFn,
     onStatusFn,
+    attachStreamFn,
+    onStreamEventFn,
+    setBusyFn,
+    setStreamingFn,
   } = opts;
 
   const result = { statusLoaded: false, historyLoaded: false, commandsLoaded: false, sessionsLoaded: false };
@@ -283,6 +287,25 @@ export async function doInit(opts) {
     }
   } catch {
     // History might not be available
+  }
+
+  // If agent is busy, attach to the in-progress SSE stream
+  try {
+    const status = await getStatusFn();
+    if (status.busy && attachStreamFn && onStreamEventFn) {
+      setBusyFn?.(true);
+      setStreamingFn?.(true);
+      if (onStatusFn) onStatusFn(status);
+      attachStreamFn(onStreamEventFn).then((attached) => {
+        if (!attached) {
+          setBusyFn?.(false);
+        }
+      }).catch(() => {
+        setBusyFn?.(false);
+      });
+    }
+  } catch {
+    // Best effort
   }
 
   return result;

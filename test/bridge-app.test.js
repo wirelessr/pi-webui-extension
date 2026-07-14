@@ -73,6 +73,7 @@ function createMockDeps(overrides = {}) {
 			res.write('data: {"type":"done","text":"compacted","toolCalls":[],"compact":true,"tokensBefore":50000}\n\n');
 			res.end();
 		},
+		attachStream: () => false,
 		isPendingOrSse: () => false,
 		reload: () => { calls.reload.push(true); },
 		clientLog: (level, message, data) => { calls.clientLog.push({ level, message, data }); },
@@ -356,6 +357,36 @@ test("POST /api/abort without session context returns 500", async () => {
 	const app = createBridgeApp(createMockDeps({ getSessionCtx: () => null }));
 	const res = await app.fetch(req("/api/abort", { method: "POST" }));
 	assert.strictEqual(res.status, 500);
+});
+
+test("GET /api/stream/attach returns 409 when not busy", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/stream/attach"));
+	assert.strictEqual(res.status, 409);
+});
+
+test("GET /api/stream/attach returns 409 when busy but SSE already active", async () => {
+	const deps = createMockDeps({ getIsBusy: () => true, isPendingOrSse: () => true });
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/stream/attach"));
+	assert.strictEqual(res.status, 409);
+});
+
+test("GET /api/stream/attach returns SSE stream when busy and no active SSE", async () => {
+	const deps = createMockDeps({
+		getIsBusy: () => true,
+		isPendingOrSse: () => false,
+		attachStream: (res) => {
+			res.write('data: {"type":"agent_start"}\n\n');
+			res.end();
+			return true;
+		},
+	});
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(req("/api/stream/attach"));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual(res.headers.get("content-type"), "text/event-stream");
 });
 
 test("POST /api/new-session spawns and returns pid", async () => {

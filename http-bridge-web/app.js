@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, clientLog, executeCommand, getHistory, getStatus, newSession, openSession, sendPromptStream } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getHistory, getStatus, newSession, openSession, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
@@ -214,6 +214,29 @@ import { formatStats } from "./utils.js";
         });
       },
       autoResizeFn: () => input.autoResize(),
+      attachStreamFn: attachStream,
+      onStreamEventFn: (event) => {
+        if (event.type === "agent_start") {
+          chat.startAssistantMessage();
+        }
+        if (event.type === "done" || event.type === "error") {
+          chat.handleEvent(event);
+          chat.finishAssistantMessage();
+          input.setStreaming(false);
+          setBusy(false);
+          if (event.type === "done") {
+            getHistory().then((data) => {
+              if (data.history && data.history.length > 0) {
+                chat.loadHistory(data.history);
+              }
+            }).catch(() => {});
+          }
+        } else {
+          chat.handleEvent(event);
+        }
+      },
+      setBusyFn: setBusy,
+      setStreamingFn: (streaming) => input.setStreaming(streaming),
       onStatusFn: (data) => {
         currentPort = data.port;
         $portDisplay.textContent = `:${data.port}`;

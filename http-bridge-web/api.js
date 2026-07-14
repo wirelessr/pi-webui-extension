@@ -219,3 +219,52 @@ export async function sendPromptStream(message, onEvent, fetchFn = fetch) {
     throw err;
   }
 }
+
+/**
+ * Attach to an in-progress SSE stream (reconnect after page reload).
+ * Returns true if a stream was found and reading started, false if 409.
+ * @param {(event: object) => void} onEvent
+ * @param {typeof fetch} [fetchFn]
+ * @returns {Promise<boolean>}
+ */
+export async function attachStream(onEvent, fetchFn = fetch) {
+  let res;
+  try {
+    res = await fetchFn("/api/stream/attach", {
+      headers: { Accept: "text/event-stream" },
+    });
+  } catch (err) {
+    await clientLog("error", "attach: fetch failed", { error: err.message }, fetchFn);
+    return false;
+  }
+  if (!res.ok) {
+    await clientLog("info", "attach: no active stream (409)", undefined, fetchFn);
+    return false;
+  }
+
+  await clientLog("info", "attach: response received, starting reader loop", undefined, fetchFn);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventCount = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        await clientLog("info", "attach: reader done", { eventCount }, fetchFn);
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseSseBuffer(buffer);
+      buffer = rest;
+      for (const event of events) {
+        eventCount++;
+        onEvent(event);
+      }
+    }
+  } catch (err) {
+    await clientLog("error", "attach: reader loop error", { error: err.message, eventCount }, fetchFn);
+  }
+  return true;
+}
