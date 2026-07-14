@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getHistory, getStatus, sendPromptStream } from "/api.js";
+import { abortAgent, attachStream, getCommands, getHistory, getStatus, killSession, newSession, pollUntil, reloadSession, sendPromptStream } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
@@ -47,7 +47,12 @@ import { formatStats } from "/utils.js";
   const mobileNav = createMobileNav({ $app });
   // Kept for the input's "/" command filtering; not populated in v1 (the hub
   // has no aggregated /api/commands endpoint yet).
-  const commandsView = createCommandsView({ $list: $commandsList, $count: $commandsCount, $title: $commandsTitle, onSelect: (cmd) => input.selectCommand(cmd) });
+  const commandsView = createCommandsView({
+    $list: $commandsList, $count: $commandsCount, $title: $commandsTitle,
+    onSelect: (cmd) => input.selectCommand(cmd),
+    // Commands are per-session — load them from the active session's bridge.
+    getCommandsFn: () => (activeSessionId ? getCommands(scopedFetch(activeSessionId)) : Promise.resolve({ commands: [] })),
+  });
   const input = createInput({ $input, $sendBtn, commandsView, mobileNav, onSend: handleSend, onSelectCommand: () => {}, onStop: handleStop });
 
   // ── Session-scoped addressing ──
@@ -162,7 +167,7 @@ import { formatStats } from "/utils.js";
     await doInit({
       getStatusFn: () => getStatus(f),
       getHistoryFn: () => getHistory(f),
-      loadCommandsFn: async () => {},
+      loadCommandsFn: () => commandsView.load(),
       loadSessionsFn: () => {},
       loadHistoryFn: (history) => { if (sessionId === activeSessionId) chat.loadHistory(history); },
       autoResizeFn: () => input.autoResize(),
@@ -214,10 +219,12 @@ import { formatStats } from "/utils.js";
       if (s.sessionId === activeSessionId) el.classList.add("current");
       const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
       el.title = name;
-      el.innerHTML = `<div class="session-item-row"><div class="session-item-info"><div class="item-name"></div></div></div><div class="item-meta"></div>`;
+      el.innerHTML = `<div class="session-item-row"><div class="session-item-info"><div class="item-name"></div></div><button class="qr-btn" title="Reload session">&#10227;</button><button class="close-btn" title="Close session">&times;</button></div><div class="item-meta"></div>`;
       el.querySelector(".item-name").textContent = name;
       el.querySelector(".item-meta").textContent = s.busy ? `:${s.port} · busy` : `:${s.port}`;
       if (s.busy) el.classList.add("session-busy");
+      el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
+      el.querySelector(".close-btn").addEventListener("click", (e) => { e.stopPropagation(); handleClose(s); });
       el.addEventListener("click", () => { if (s.sessionId !== activeSessionId) switchTo(s.sessionId); });
       $sessionsList.appendChild(el);
     }
@@ -230,10 +237,97 @@ import { formatStats } from "/utils.js";
     } catch {
       sessions = [];
     }
+    // Self-heal: if the session we were viewing vanished (killed elsewhere,
+    // or reloaded under a new id), drop the stale active so we re-select.
+    if (activeSessionId && !sessions.some((s) => s.sessionId === activeSessionId)) {
+      activeSessionId = null;
+    }
     renderSessions();
     if (!activeSessionId && sessions.length) switchTo(sessions[0].sessionId);
   }
 
+  // ── Session management (proxied to a session's bridge) ──
+
+  const $newSession = document.getElementById("new-session");
+  const $reloadAll = document.getElementById("reload-all");
+
+  async function handleNew() {
+    // new-session isn't session-specific; proxy through any live bridge.
+    const via = activeSessionId || sessions[0]?.sessionId;
+    if (!via) { alert("No running session to spawn from."); return; }
+    const prevIds = new Set(sessions.map((s) => s.sessionId));
+    try {
+      await newSession(undefined, scopedFetch(via));
+    } catch (err) {
+      alert(`Failed to create session: ${err.message}`);
+      return;
+    }
+    // wait for the new session's discovery to appear, then switch to it
+    const fresh = await pollUntil(async () => {
+      const data = await (await fetch("/api/sessions")).json();
+      sessions = data.sessions || [];
+      return (data.sessions || []).find((s) => !prevIds.has(s.sessionId)) || false;
+    }, 1000, 15);
+    renderSessions();
+    if (fresh) switchTo(fresh.sessionId);
+  }
+
+  async function handleClose(s) {
+    if (!confirm(`Close session "${s.sessionName || s.sessionId.slice(0, 8)}"?`)) return;
+    try {
+      await killSession(s.pid, scopedFetch(s.sessionId));
+    } catch (err) {
+      alert(`Failed to close: ${err.message}`);
+      return;
+    }
+    if (s.sessionId === activeSessionId) {
+      if (activeAttach) { activeAttach.abort(); activeAttach = null; }
+      activeSessionId = null;
+      $messages.innerHTML = "";
+    }
+    await pollUntil(async () => {
+      const data = await (await fetch("/api/sessions")).json();
+      sessions = data.sessions || [];
+      return !sessions.some((x) => x.sessionId === s.sessionId);
+    }, 500, 10);
+    renderSessions();
+    if (!activeSessionId && sessions.length) switchTo(sessions[0].sessionId);
+  }
+
+  async function handleReload(s) {
+    if (!confirm(`Reload session "${s.sessionName || s.sessionId.slice(0, 8)}"?`)) return;
+    const port = s.port;
+    const wasActive = s.sessionId === activeSessionId;
+    if (wasActive && activeAttach) { activeAttach.abort(); activeAttach = null; }
+    try {
+      await reloadSession("", scopedFetch(s.sessionId));
+    } catch (err) {
+      alert(`Failed to reload: ${err.message}`);
+      return;
+    }
+    // Reload respawns on the same port with a new process (and possibly a new
+    // sessionId). Wait for the port to come back, then re-attach to it.
+    const back = await pollUntil(async () => {
+      const data = await (await fetch("/api/sessions")).json();
+      sessions = data.sessions || [];
+      renderSessions();
+      return sessions.find((x) => x.port === port) || false;
+    }, 1000, 12);
+    if (wasActive) {
+      activeSessionId = null;
+      if (back) switchTo(back.sessionId);
+    }
+  }
+
+  async function handleReloadAll() {
+    if (!sessions.length) return;
+    if (!confirm(`Reload all ${sessions.length} session(s)?`)) return;
+    await Promise.allSettled(sessions.map((s) => reloadSession("", scopedFetch(s.sessionId))));
+    setTimeout(loadSessions, 2500);
+  }
+
+  $newSession?.addEventListener("click", handleNew);
+  $reloadAll?.addEventListener("click", handleReloadAll);
   $refreshSessions?.addEventListener("click", loadSessions);
   $commandsTitle.textContent = "commands";
   $commandsCount.textContent = "";

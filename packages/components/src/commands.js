@@ -35,12 +35,12 @@ export function filterCommands(commands, query) {
     .map((m) => m.cmd);
 }
 
-export function createCommandsView({ $list, $count, $title, onSelect }) {
+export function createCommandsView({ $list, $count, $title, onSelect, getCommandsFn = getCommands }) {
   const state = createSelectionState(onSelect);
 
   async function load() {
     try {
-      const data = await getCommands();
+      const data = await getCommandsFn();
       state.setCommands(data.commands || []);
       render();
     } catch {
