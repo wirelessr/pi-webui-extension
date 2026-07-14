@@ -1,0 +1,20 @@
+{
+  "name": "@wirelessr/pi-webui-components",
+  "version": "0.3.0",
+  "type": "module",
+  "description": "Shared browser UI + pure modules for the pi WebUI (used by the per-session extension and the central hub)",
+  "exports": {
+    "./package.json": "./package.json",
+    "./*": "./src/*"
+  },
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "biome check src/ test/"
+  }
+}

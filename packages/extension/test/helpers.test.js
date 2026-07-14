@@ -12,7 +12,7 @@ import {
   parsePromptTemplate,
   parseSkillCommand,
   stripFrontmatter,
-} from "../http-bridge-web/helpers.js";
+} from "../helpers.js";
 
 // ── extractText / extractToolCalls / extractThinking ──
 

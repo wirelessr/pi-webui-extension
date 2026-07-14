@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { renderMarkdown } from "../http-bridge-web/markdown.js";
+import { renderMarkdown } from "../src/markdown.js";
 
 describe("renderMarkdown - tables", () => {
   test("basic table", () => {

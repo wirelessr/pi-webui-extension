@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { parseSseBuffer } from "../http-bridge-web/sse-parser.js";
+import { parseSseBuffer } from "../src/sse-parser.js";
 
 describe("parseSseBuffer - basic parsing", () => {
   test("single complete event", () => {

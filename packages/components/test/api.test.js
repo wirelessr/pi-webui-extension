@@ -19,7 +19,7 @@ import {
   sendPromptStream,
   sessionUrl,
   uploadImage,
-} from "../http-bridge-web/api.js";
+} from "../src/api.js";
 
 // ── Mock helpers ──────────────────────────────────────
 

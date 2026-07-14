@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { filterCommands } from "../http-bridge-web/commands.js";
+import { filterCommands } from "../src/commands.js";
 import {
   createSelectionState,
   decideKeyAction,
@@ -9,7 +9,7 @@ import {
   decideSendClick,
   findCommandToken,
   shouldSend,
-} from "../http-bridge-web/selection-state.js";
+} from "../src/selection-state.js";
 
 const COMMANDS = [
   { name: "skill:gh", description: "GitHub CLI", source: "skill" },

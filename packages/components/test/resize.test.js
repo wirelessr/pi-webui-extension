@@ -7,7 +7,7 @@ import {
   MAX_SIDEBAR_W,
   MIN_SIDEBAR_W,
   saveSidebarWidth,
-} from "../http-bridge-web/resize.js";
+} from "../src/resize.js";
 
 describe("clampSidebarWidth", () => {
   const cases = [

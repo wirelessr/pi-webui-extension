@@ -7,7 +7,7 @@ import {
   parseSkillFrontmatter,
   parseSubagentMessages,
   subagentStatus,
-} from "../http-bridge-web/parsers.js";
+} from "../src/parsers.js";
 
 // ── parseSkillBlock ──────────────────────────────────
 

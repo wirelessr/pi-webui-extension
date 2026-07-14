@@ -1,19 +1,16 @@
 {
-  "name": "pi-webui-extension",
+  "name": "pi-webui-monorepo",
   "version": "0.3.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "lint": "biome check http-bridge-web/ index.ts"
+    "test": "npm run test --workspaces --if-present",
+    "lint": "biome check packages/"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3"
-  },
-  "dependencies": {
-    "@hono/swagger-ui": "0.6.1",
-    "@hono/zod-openapi": "1.4.0",
-    "hono": "4.12.29",
-    "zod": "4.4.3"
   }
 }

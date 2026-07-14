@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { createStreamAccumulator } from "../http-bridge-web/stream-accumulator.js";
+import { createStreamAccumulator } from "../src/stream-accumulator.js";
 
 /**
  * Helper: feed a sequence of events to an accumulator.
