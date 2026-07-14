@@ -365,6 +365,23 @@ const streamAttachRoute = createRoute({
 	},
 });
 
+const UploadResponse = z.object({
+	path: z.string(),
+}).openapi("UploadResponse");
+
+const uploadRoute = createRoute({
+	method: "post",
+	path: "/api/upload",
+	summary: "Upload an image file and get a local file path",
+	request: {
+		body: { content: { "application/octet-stream": { schema: z.any() } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: UploadResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
 // ── Static file serving ───────────────────────────────────────────
 
 async function serveStatic(path, c) {
@@ -390,6 +407,33 @@ async function serveStatic(path, c) {
 	} catch {
 		return c.text("Internal server error", 500);
 	}
+}
+
+// ── SSE response wrapper ──────────────────────────────────────────
+
+/**
+ * Create a Node-res-like wrapper over a TransformStream for SSE routes.
+ *
+ * When the HTTP client disconnects, index.ts cancels the readable side,
+ * which errors the writer — that fires `res.onClose` so the owner can
+ * clean up state tied to THIS stream (and only this one).
+ *
+ * @returns {{readable: ReadableStream, res: object}}
+ */
+function createSseRes() {
+	const { readable, writable } = new TransformStream();
+	const writer = writable.getWriter();
+	const encoder = new TextEncoder();
+	const res = {
+		write: (chunk) => { writer.write(encoder.encode(chunk)).catch(() => {}); },
+		writeHead: () => {},
+		flushHeaders: () => {},
+		end: () => { writer.close().catch(() => {}); },
+		on: () => {},
+		onClose: null,
+	};
+	writer.closed.catch(() => { res.onClose?.(); });
+	return { readable, res };
 }
 
 // ── App factory ───────────────────────────────────────────────────
@@ -530,13 +574,7 @@ export function createBridgeApp(deps) {
 				const useSse = accept.includes("text/event-stream");
 				if (cmdName === "compact") {
 					if (useSse) {
-						const { readable, writable } = new TransformStream();
-						const writer = writable.getWriter();
-						const encoder = new TextEncoder();
-						const res = {
-							write: (chunk) => writer.write(encoder.encode(chunk)),
-							end: () => writer.close(),
-						};
+						const { readable, res } = createSseRes();
 						deps.compactAndStream(res, cmdArgs);
 						return new Response(readable, {
 							headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
@@ -558,18 +596,8 @@ export function createBridgeApp(deps) {
 		const useSse = parsed.stream || accept.includes("text/event-stream");
 
 		if (useSse) {
-			const { readable, writable } = new TransformStream();
-			const writer = writable.getWriter();
-			const encoder = new TextEncoder();
-
+			const { readable, res } = createSseRes();
 			(async () => {
-				const res = {
-					write: (chunk) => writer.write(encoder.encode(chunk)),
-					writeHead: () => {},
-					flushHeaders: () => {},
-					end: () => writer.close(),
-					on: () => {},
-				};
 				await deps.sendAndStream(parsed.message, parsed.timeoutMs, res);
 			})();
 
@@ -698,22 +726,12 @@ export function createBridgeApp(deps) {
 	});
 
 	app.openapi(streamAttachRoute, (c) => {
-		if (!deps.getIsBusy() || deps.isPendingOrSse()) {
-			return c.json({ error: "No active stream to attach" }, 409);
-		}
-		const { readable, writable } = new TransformStream();
-		const writer = writable.getWriter();
-		const encoder = new TextEncoder();
-		const res = {
-			write: (chunk) => writer.write(encoder.encode(chunk)),
-			writeHead: () => {},
-			flushHeaders: () => {},
-			end: () => writer.close(),
-			on: () => {},
-		};
+		// attachStream decides: false when idle with nothing buffered, or when
+		// an active /api/prompt stream owns the SSE slot.
+		const { readable, res } = createSseRes();
 		const attached = deps.attachStream(res);
 		if (!attached) {
-			writer.close();
+			res.end();
 			return c.json({ error: "No active stream to attach" }, 409);
 		}
 		return new Response(readable, {
@@ -724,6 +742,17 @@ export function createBridgeApp(deps) {
 				"X-Accel-Buffering": "no",
 			},
 		});
+	});
+
+	app.openapi(uploadRoute, async (c) => {
+		const contentType = c.req.header("content-type") || "";
+		const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : contentType.includes("webp") ? "webp" : contentType.includes("gif") ? "gif" : "png";
+		const body = await c.req.arrayBuffer();
+		if (!body || body.byteLength === 0) {
+			return c.json({ error: "Empty body" }, 400);
+		}
+		const path = await deps.saveUpload(new Uint8Array(body), ext);
+		return c.json({ path });
 	});
 
 	// ── Static file serving (fallback) ───────────────────────────

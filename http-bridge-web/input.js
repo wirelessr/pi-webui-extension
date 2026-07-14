@@ -2,6 +2,7 @@
  * Input controller — textarea handling, keyboard shortcuts, auto-resize.
  */
 
+import { uploadImage } from "./api.js";
 import { decideKeyAction, decideMobileViewOnFilter, decideMobileViewOnSelect, decideSendClick, findCommandToken, shouldSend } from "./selection-state.js";
 
 /**
@@ -91,6 +92,33 @@ export function createInput({
   let composing = false;
   $input.addEventListener("compositionstart", () => { composing = true; });
   $input.addEventListener("compositionend", () => { composing = false; });
+
+  let pasteCounter = 0;
+  $input.addEventListener("paste", async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        const placeholder = `[uploading image #${++pasteCounter}...]`;
+        const start = $input.selectionStart;
+        const end = $input.selectionEnd;
+        $input.value = $input.value.slice(0, start) + placeholder + $input.value.slice(end);
+        $input.setSelectionRange(start + placeholder.length, start + placeholder.length);
+        autoResize();
+        try {
+          const { path } = await uploadImage(blob);
+          $input.value = $input.value.replace(placeholder, path);
+        } catch (err) {
+          $input.value = $input.value.replace(placeholder, `[image upload failed: ${err.message}]`);
+        }
+        autoResize();
+        return;
+      }
+    }
+  });
 
   $input.addEventListener("keydown", (e) => {
     if (composing || e.isComposing) return;

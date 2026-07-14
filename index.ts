@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
-import { homedir, networkInterfaces } from "node:os";
+import { homedir, networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -39,6 +39,7 @@ interface IdleWaiter {
 interface SseState {
 	res: any;
 	heartbeat: ReturnType<typeof setInterval>;
+	origin: "prompt" | "attach";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -57,6 +58,7 @@ export default function (pi: ExtensionAPI) {
 	let inputWatchdog: ReturnType<typeof setTimeout> | null = null;
 
 	let idleWaiters: IdleWaiter[] = [];
+	let pendingDone: any = null;
 	let sessionFile: string | undefined;
 	let sessionId: string | undefined;
 	let sessionName: string | undefined;
@@ -105,6 +107,7 @@ export default function (pi: ExtensionAPI) {
 		sendAndStream,
 		compactAndStream,
 		attachStream,
+		saveUpload,
 		isPendingOrSse: () => !!(pending || sse),
 		reload: doReload,
 		clientLog,
@@ -278,26 +281,33 @@ export default function (pi: ExtensionAPI) {
 		if (ourTurnActive) {
 			ourTurnActive = false;
 			const messages = event.messages ?? [];
+			const doneEvent = {
+				type: "done",
+				text: helpers.extractText(messages),
+				toolCalls: helpers.extractToolCalls(messages),
+				thinking: helpers.extractThinking(messages),
+				messageCount: messages.length,
+				messages,
+			};
 
+			let delivered = false;
 			if (sse) {
-				writeSse({
-					type: "done",
-					text: helpers.extractText(messages),
-					toolCalls: helpers.extractToolCalls(messages),
-					thinking: helpers.extractThinking(messages),
-					messageCount: messages.length,
-					messages,
-				});
+				writeSse(doneEvent);
 				closeSse();
-				return;
+				delivered = true;
 			}
-
 			if (pending) {
 				const p = pending;
 				pending = null;
 				clearTimeout(p.timeout);
 				p.resolve(messages);
-				return;
+				delivered = true;
+			}
+			if (!delivered) {
+				// SSE disconnected (client navigated away). Buffer the done event
+				// so attachStream can deliver it when the client reconnects.
+				pendingDone = doneEvent;
+				serverLog("agent_end: SSE disconnected, buffered done event");
 			}
 		} else {
 			if (sse || pending) {
@@ -308,8 +318,6 @@ export default function (pi: ExtensionAPI) {
 				});
 			}
 		}
-
-		ourTurnActive = false;
 
 		const waiters = idleWaiters;
 		idleWaiters = [];
@@ -453,7 +461,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function attachStream(res: any): boolean {
-		if (!isBusy || sse) return false;
+		if (sse) {
+			// Never steal an active /api/prompt stream from the sending client.
+			if (sse.origin !== "attach") return false;
+			// A previous attach stream is still registered (e.g. a suspended
+			// mobile tab whose socket never closed). Newest attach wins.
+			serverLog("attachStream: replacing previous attach stream");
+			closeSse();
+		}
+		// Allow attach if agent is busy, or if there's a buffered done event
+		if (!isBusy && !pendingDone) return false;
 		const heartbeat = setInterval(() => {
 			if (sse) {
 				try {
@@ -464,9 +481,32 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 		}, 15000);
-		sse = { res, heartbeat };
-		serverLog("attachStream: re-attached SSE to busy agent");
+		sse = { res, heartbeat, origin: "attach" };
+		res.onClose = () => {
+			if (sse && sse.res === res) {
+				serverLog("attachStream: client disconnected, closing SSE state");
+				closeSse();
+			}
+		};
+		// If agent already ended while SSE was disconnected, send the
+		// buffered done event immediately so the client can finalize.
+		if (pendingDone) {
+			serverLog("attachStream: sending buffered done event");
+			writeSse(pendingDone);
+			closeSse();
+			pendingDone = null;
+		} else {
+			serverLog("attachStream: re-attached SSE to busy agent");
+		}
 		return true;
+	}
+
+	function saveUpload(data: Uint8Array, ext: string): string {
+		const filename = `pi-webui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+		const filePath = join(tmpdir(), filename);
+		writeFileSync(filePath, data);
+		serverLog(`saveUpload: saved ${filePath} (${data.byteLength} bytes)`);
+		return filePath;
 	}
 
 	// ── Skill / template expansion ─────────────────────────────────────
@@ -699,6 +739,7 @@ export default function (pi: ExtensionAPI) {
 		message: string,
 		timeoutMs: number,
 	): Promise<any[]> {
+		pendingDone = null;
 		await waitForIdle(30000);
 
 		let watchdogReject: ((e: Error) => void) | null = null;
@@ -811,6 +852,7 @@ export default function (pi: ExtensionAPI) {
 		_timeoutMs: number,
 		res: any,
 	): Promise<void> {
+		pendingDone = null;
 		try {
 			await waitForIdle(30000);
 		} catch (err: any) {
@@ -835,7 +877,13 @@ export default function (pi: ExtensionAPI) {
 			closeSse();
 		}
 
-		sse = { res, heartbeat };
+		sse = { res, heartbeat, origin: "prompt" };
+		res.onClose = () => {
+			if (sse && sse.res === res) {
+				serverLog("sendAndStream: client disconnected, closing SSE state");
+				closeSse();
+			}
+		};
 
 		const expanded = expandInput(message);
 		waitingForExtensionInput = true;
@@ -898,11 +946,13 @@ export default function (pi: ExtensionAPI) {
 			for (const [key, val] of Object.entries(req.headers)) {
 				if (val) headers.set(key, Array.isArray(val) ? val.join(", ") : val);
 			}
-			let body: string | undefined;
+			// Collect body as raw bytes — string concatenation would corrupt
+			// binary uploads (PNG bytes are not valid UTF-8).
+			let body: Buffer | undefined;
 			if (method !== "GET" && method !== "HEAD") {
-				let chunks = "";
-				for await (const chunk of req) chunks += chunk;
-				body = chunks;
+				const chunks: Buffer[] = [];
+				for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+				if (chunks.length > 0) body = Buffer.concat(chunks);
 			}
 			const request = new Request(url, { method, headers, body });
 
@@ -916,11 +966,11 @@ export default function (pi: ExtensionAPI) {
 						if (!res.writableEnded) {
 							clientClosed = true;
 							serverLog("client disconnected during stream");
+							// Cancelling the reader errors the TransformStream writer,
+							// which fires the SSE wrapper's onClose for THIS stream only.
+							// Do not close the global sse here: this close event may
+							// belong to an older socket than the currently attached SSE.
 							reader.cancel().catch(() => {});
-							if (sse) {
-								serverLog("closing SSE state after client disconnect");
-								closeSse();
-							}
 						}
 					});
 					while (true) {

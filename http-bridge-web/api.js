@@ -12,13 +12,43 @@ import { parseSseBuffer } from "./sse-parser.js";
 
 // ── Helpers ───────────────────────────────────────────
 
+export async function uploadImage(blob, fetchFn = fetch) {
+  const res = await fetchFn("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": blob.type || "image/png" },
+    body: blob,
+  });
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
 /**
  * Get the base URL for a session object.
+ *
+ * This is the LAN-facing URL from the discovery file — use it for QR codes
+ * (scanned from other devices). For navigation and cross-session API calls
+ * from the current page, use navUrl() instead so the hostname the user
+ * opened (e.g. localhost, which keeps the secure context for notifications)
+ * is preserved.
+ *
  * @param {{url?: string, port: number}} s
  * @returns {string} e.g. "http://192.168.1.130:7331"
  */
 export function sessionUrl(s) {
   return s.url || `http://localhost:${s.port}`;
+}
+
+/**
+ * Get the URL for a session using the hostname the current page was opened
+ * with. All sessions run on the same machine and differ only by port, so
+ * navigating between them must not switch origin class (localhost vs LAN IP).
+ *
+ * @param {{port: number}} s
+ * @param {{protocol: string, hostname: string}} [loc] — injectable for tests
+ * @returns {string} e.g. "http://localhost:7331"
+ */
+export function navUrl(s, loc = globalThis.location) {
+  return `${loc.protocol}//${loc.hostname}:${s.port}`;
 }
 
 /**

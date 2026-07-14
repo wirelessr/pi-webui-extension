@@ -865,6 +865,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     loadHistory,
     startAssistantMessage,
     finishAssistantMessage,
+    hasActiveMessage: () => accumulator !== null,
     handleEvent,
     showError,
     scrollToBottom,

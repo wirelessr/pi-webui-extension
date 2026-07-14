@@ -11,10 +11,10 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getHistory, getStatus, newSession, openSession, sendPromptStream } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getHistory, getStatus, navUrl, newSession, openSession, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
-import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
+import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { initResize } from "./resize.js";
@@ -68,8 +68,9 @@ import { formatStats } from "./utils.js";
     $list: $sessionsList,
     getCurrentPort: () => currentPort,
     onOpen: (s) => {
-      const url = s.url || `http://localhost:${s.port}`;
-      window.location.href = url;
+      // Keep the hostname the user opened the page with (localhost stays
+      // localhost — switching sessions must not drop the secure context).
+      window.location.href = navUrl(s);
     },
   });
 
@@ -165,28 +166,113 @@ import { formatStats } from "./utils.js";
 
   // ── Send flow ─────────────────────────────────────
 
+  let sending = false;
+
   async function handleSend(text) {
-    await doSendPrompt({
-      text,
-      chat,
-      input,
-      setBusyFn: setBusy,
-      sendPromptStreamFn: sendPromptStream,
-      getHistoryFn: getHistory,
-      getStatusFn: getStatus,
-      clientLogFn: clientLog,
-      onStatusUpdateFn: (status) => {
-        updateStats(status);
-        if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
-      },
-    });
+    sending = true;
+    let result;
+    try {
+      result = await doSendPrompt({
+        text,
+        chat,
+        input,
+        setBusyFn: setBusy,
+        sendPromptStreamFn: sendPromptStream,
+        getHistoryFn: getHistory,
+        getStatusFn: getStatus,
+        clientLogFn: clientLog,
+        onCompleteFn: notifyAgentDone,
+        onStatusUpdateFn: (status) => {
+          updateStats(status);
+          if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
+        },
+      });
+    } finally {
+      sending = false;
+    }
+    // Stream dropped without a done event (network blip, mobile suspend):
+    // the agent may still be running — reattach to pick up the rest.
+    if (result && !result.completed) tryReattach();
   }
+
+  // ── Stream reattach (dropped stream / tab became visible) ──
+
+  let reattaching = false;
+
+  async function tryReattach() {
+    if (reattaching || sending) return;
+    reattaching = true;
+    try {
+      await doReattach({
+        getStatusFn: getStatus,
+        attachStreamFn: attachStream,
+        onStreamEventFn: onStreamEvent,
+        setBusyFn: setBusy,
+        setStreamingFn: (streaming) => input.setStreaming(streaming),
+        onStatusFn: (status) => updateStats(status),
+        clientLogFn: clientLog,
+      });
+    } catch {
+      // Best effort
+    } finally {
+      reattaching = false;
+    }
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) tryReattach();
+  });
 
   // ── Busy indicator ────────────────────────────────
 
   function setBusy(busy) {
     $busyIndicator.textContent = busy ? "busy" : "idle";
     $busyIndicator.className = `status ${busy ? "busy" : "idle"}`;
+  }
+
+  // ── Browser notification ────────────────────────────────
+
+  const originalTitle = document.title;
+  let titleAlertActive = false;
+
+  function notifyAgentDone() {
+    const permission = "Notification" in window ? Notification.permission : "unsupported";
+    clientLog("info", "notifyAgentDone called", { hidden: document.hidden, permission, secureContext: window.isSecureContext });
+    if (!document.hidden) return;
+    const name = $sessionName?.textContent || "session";
+    if (permission === "granted") {
+      const n = new Notification("Agent done", {
+        body: name,
+        tag: String(currentPort),
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    } else {
+      // Notification API is unavailable on insecure origins (plain http over
+      // LAN IP: permission is forced to "denied"). Fall back to a title
+      // marker, cleared when the tab becomes visible again.
+      titleAlertActive = true;
+      document.title = `[done] ${originalTitle}`;
+    }
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && titleAlertActive) {
+      titleAlertActive = false;
+      document.title = originalTitle;
+    }
+  });
+
+  if ("Notification" in window && Notification.permission === "default") {
+    const requestPerm = () => {
+      Notification.requestPermission();
+      document.removeEventListener("click", requestPerm);
+    };
+    document.addEventListener("click", requestPerm);
+  } else if (!window.isSecureContext) {
+    clientLog("warn", "System notifications unavailable: insecure origin. Open via localhost or HTTPS to enable them; falling back to tab-title alerts.");
   }
 
   // ── Stats formatting ───────────────────────────────
@@ -196,6 +282,32 @@ import { formatStats } from "./utils.js";
   }
 
   // ── Init ──────────────────────────────────────────
+
+  function onStreamEvent(event) {
+    // Attaching mid-turn means agent_start already streamed before we
+    // connected — lazily open an assistant message on the first event,
+    // otherwise chat.handleEvent drops everything (no accumulator).
+    if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error")) {
+      chat.startAssistantMessage();
+    }
+    if (event.type === "done" || event.type === "error") {
+      clientLog("info", "onStreamEvent: done/error received", { type: event.type, hidden: document.hidden });
+      chat.handleEvent(event);
+      chat.finishAssistantMessage();
+      input.setStreaming(false);
+      setBusy(false);
+      if (event.type === "done") {
+        notifyAgentDone();
+        getHistory().then((data) => {
+          if (data.history && data.history.length > 0) {
+            chat.loadHistory(data.history);
+          }
+        }).catch(() => {});
+      }
+    } else {
+      chat.handleEvent(event);
+    }
+  }
 
   async function init() {
     await doInit({
@@ -215,26 +327,7 @@ import { formatStats } from "./utils.js";
       },
       autoResizeFn: () => input.autoResize(),
       attachStreamFn: attachStream,
-      onStreamEventFn: (event) => {
-        if (event.type === "agent_start") {
-          chat.startAssistantMessage();
-        }
-        if (event.type === "done" || event.type === "error") {
-          chat.handleEvent(event);
-          chat.finishAssistantMessage();
-          input.setStreaming(false);
-          setBusy(false);
-          if (event.type === "done") {
-            getHistory().then((data) => {
-              if (data.history && data.history.length > 0) {
-                chat.loadHistory(data.history);
-              }
-            }).catch(() => {});
-          }
-        } else {
-          chat.handleEvent(event);
-        }
-      },
+      onStreamEventFn: onStreamEvent,
       setBusyFn: setBusy,
       setStreamingFn: (streaming) => input.setStreaming(streaming),
       onStatusFn: (data) => {

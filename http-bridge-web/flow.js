@@ -45,6 +45,7 @@ export async function doSendPrompt(opts) {
     getHistoryFn,
     getStatusFn,
     onStatusUpdateFn,
+    onCompleteFn,
     clientLogFn = async () => {},
   } = opts;
 
@@ -111,7 +112,13 @@ export async function doSendPrompt(opts) {
     // Best effort
   }
 
-  await clientLogFn("info", "doSendPrompt: flow done", { eventCount, streamComplete, historyReloaded });
+  await clientLogFn("info", "doSendPrompt: flow done", { eventCount, streamComplete, historyReloaded, hasOnCompleteFn: !!onCompleteFn });
+
+  if (streamComplete && onCompleteFn) {
+    try { onCompleteFn(); } catch (e) { clientLogFn("error", "onCompleteFn threw", { error: e?.message }); }
+  } else {
+    await clientLogFn("info", "onCompleteFn skipped", { streamComplete, hasOnCompleteFn: !!onCompleteFn });
+  }
 
   return { completed: streamComplete, historyReloaded, error: errorMsg };
 }
@@ -251,6 +258,8 @@ export async function doInit(opts) {
     onStreamEventFn,
     setBusyFn,
     setStreamingFn,
+    attachMaxAttempts,
+    attachRetryDelayMs,
   } = opts;
 
   const result = { statusLoaded: false, historyLoaded: false, commandsLoaded: false, sessionsLoaded: false };
@@ -289,24 +298,95 @@ export async function doInit(opts) {
     // History might not be available
   }
 
-  // If agent is busy, attach to the in-progress SSE stream
+  // If agent is busy or has a buffered done event, attach to the SSE stream.
+  // Fire-and-forget: the attach stream can stay open for the whole turn.
   try {
-    const status = await getStatusFn();
-    if (status.busy && attachStreamFn && onStreamEventFn) {
-      setBusyFn?.(true);
-      setStreamingFn?.(true);
-      if (onStatusFn) onStatusFn(status);
-      attachStreamFn(onStreamEventFn).then((attached) => {
-        if (!attached) {
-          setBusyFn?.(false);
-        }
-      }).catch(() => {
-        setBusyFn?.(false);
-      });
+    if (attachStreamFn && onStreamEventFn) {
+      const status = await getStatusFn();
+      doReattach({
+        status,
+        getStatusFn,
+        attachStreamFn,
+        onStreamEventFn,
+        setBusyFn,
+        setStreamingFn,
+        onStatusFn,
+        attachMaxAttempts,
+        attachRetryDelayMs,
+      }).catch(() => {});
     }
   } catch {
     // Best effort
   }
 
   return result;
+}
+
+/**
+ * Attach to the agent's SSE stream if it is busy (or a done event is
+ * buffered server-side). Used on page init, after a dropped prompt stream,
+ * and when the tab becomes visible again.
+ *
+ * When busy, retries a few times: right after switching back to a session,
+ * the server may still hold the previous (dead) SSE registration until its
+ * socket close event is processed, so the first attach can 409 transiently.
+ *
+ * Resolves when the attached stream ends (or attach gave up).
+ *
+ * @param {object} opts
+ * @param {object} [opts.status] — pre-fetched status; fetched via getStatusFn when omitted
+ * @param {function} opts.getStatusFn
+ * @param {function} opts.attachStreamFn — (onEvent) => Promise<boolean>, resolves when stream ends
+ * @param {function} opts.onStreamEventFn
+ * @param {function} [opts.setBusyFn]
+ * @param {function} [opts.setStreamingFn]
+ * @param {function} [opts.onStatusFn]
+ * @param {number} [opts.attachMaxAttempts] — attempts when busy (default 3)
+ * @param {number} [opts.attachRetryDelayMs] — delay between attempts (default 400)
+ * @returns {Promise<{attached: boolean, busy: boolean}>}
+ */
+export async function doReattach(opts) {
+  const {
+    status: preStatus,
+    getStatusFn,
+    attachStreamFn,
+    onStreamEventFn,
+    setBusyFn,
+    setStreamingFn,
+    onStatusFn,
+    attachMaxAttempts,
+    attachRetryDelayMs,
+  } = opts;
+
+  let status = preStatus;
+  if (!status) {
+    try {
+      status = await getStatusFn();
+    } catch {
+      return { attached: false, busy: false };
+    }
+  }
+  if (onStatusFn) onStatusFn(status);
+
+  if (status.busy) {
+    setBusyFn?.(true);
+    setStreamingFn?.(true);
+  }
+
+  const maxAttempts = status.busy ? (attachMaxAttempts ?? 3) : 1;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const attached = await attachStreamFn(onStreamEventFn);
+      if (attached) return { attached: true, busy: !!status.busy };
+    } catch {
+      // Treat like a failed attempt and retry
+    }
+    if (i < maxAttempts - 1) await new Promise((r) => setTimeout(r, attachRetryDelayMs ?? 400));
+  }
+
+  if (status.busy) {
+    setBusyFn?.(false);
+    setStreamingFn?.(false);
+  }
+  return { attached: false, busy: !!status.busy };
 }

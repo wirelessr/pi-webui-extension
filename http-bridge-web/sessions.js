@@ -7,6 +7,7 @@ import {
   clientLog,
   getSessions,
   killSession,
+  navUrl,
   newSession,
   openSession,
   pollUntil,
@@ -297,14 +298,18 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       if (s.port === port) el.classList.add("current");
 
       const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
-      const url = sessionUrl(s);
+      // QR is for other devices (phone) — always the LAN URL.
+      // Display/navigation keep the hostname this page was opened with,
+      // so opening via localhost preserves the secure context.
+      const lanUrl = sessionUrl(s);
+      const url = navUrl(s);
       el.title = name;
       el.innerHTML = `
         <div class="session-item-row">
           <div class="session-item-info">
             <div class="item-name">${escapeHtml(name)}</div>
           </div>
-          <button class="qr-btn" title="Show QR code" data-url="${escapeHtml(url)}">&#9641;</button>
+          <button class="qr-btn" title="Show QR code" data-url="${escapeHtml(lanUrl)}">&#9641;</button>
           <button class="close-btn" title="Close session" data-pid="${s.pid}">&times;</button>
         </div>
         <div class="item-meta">${escapeHtml(url)}</div>
@@ -314,7 +319,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         const action = decideSessionClick({ targetClass: e.target.className });
         if (action === "qr") {
           e.stopPropagation();
-          qr.show(url);
+          qr.show(lanUrl);
           return;
         }
         if (action === "close") {
@@ -406,7 +411,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
         newName,
         currentName,
         renameSessionFn: renameSession,
-        sessionUrlFn: sessionUrl,
+        sessionUrlFn: navUrl,
         refreshSessionsFn: refreshSessions,
         pollUntilFn: pollUntil,
         renderFn: render,
@@ -443,7 +448,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       refreshSessionsFn: refreshSessions,
       pollUntilFn: pollUntil,
       renderFn: render,
-      sessionUrlFn: sessionUrl,
+      sessionUrlFn: navUrl,
       redirectFn: (url) => { window.location.href = url; },
       checkReadyFn: async (url) => {
         const res = await fetch(`${url}/api/status`);
@@ -464,7 +469,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       refreshSessionsFn: refreshSessions,
       pollUntilFn: pollUntil,
       renderFn: render,
-      sessionUrlFn: sessionUrl,
+      sessionUrlFn: navUrl,
       redirectFn: (url) => { window.location.href = url; },
       checkReadyFn: async (url) => {
         const res = await fetch(`${url}/api/status`);
@@ -484,7 +489,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       sessions,
       confirmFn: (msg) => confirm(msg),
       reloadSessionFn: reloadSession,
-      sessionUrlFn: sessionUrl,
+      sessionUrlFn: navUrl,
       refreshSessionsFn: refreshSessions,
       pollUntilFn: pollUntil,
       renderFn: render,
@@ -501,7 +506,7 @@ export function createSessionsView({ $list, getCurrentPort, onOpen }) {
       session: s,
       confirmFn: (msg) => confirm(msg),
       killSessionFn: killSession,
-      sessionUrlFn: sessionUrl,
+      sessionUrlFn: navUrl,
       getCurrentPortFn: getCurrentPort,
       refreshSessionsFn: refreshSessions,
       pollUntilFn: pollUntil,

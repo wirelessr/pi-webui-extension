@@ -16,6 +16,7 @@ import {
   reloadSession,
   renameSession,
   sendPromptStream,
+  navUrl,
   sessionUrl,
 } from "../http-bridge-web/api.js";
 
@@ -70,6 +71,32 @@ describe("sessionUrl", () => {
   ];
   for (const c of cases) {
     test(c.name, () => assert.equal(sessionUrl(c.session), c.expected));
+  }
+});
+
+describe("navUrl", () => {
+  const cases = [
+    {
+      name: "keeps localhost hostname when page opened via localhost",
+      session: { url: "http://192.168.1.130:7331", port: 7331 },
+      loc: { protocol: "http:", hostname: "localhost" },
+      expected: "http://localhost:7331",
+    },
+    {
+      name: "keeps LAN hostname when page opened via LAN IP",
+      session: { url: "http://192.168.1.130:7332", port: 7332 },
+      loc: { protocol: "http:", hostname: "192.168.1.130" },
+      expected: "http://192.168.1.130:7332",
+    },
+    {
+      name: "ignores discovery url entirely (only port is used)",
+      session: { port: 7333 },
+      loc: { protocol: "https:", hostname: "example.test" },
+      expected: "https://example.test:7333",
+    },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.equal(navUrl(c.session, c.loc), c.expected));
   }
 });
 
