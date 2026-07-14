@@ -395,6 +395,16 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     $messages.innerHTML = savedMessagesHTML;
     savedMessagesHTML = "";
     $chat.scrollTop = parentScrollTop;
+    // innerHTML restore drops event listeners on subagent open buttons.
+    // Re-bind them so subagent views can be re-opened.
+    $messages.querySelectorAll(".subagent-open-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const block = btn.closest(".subagent-block");
+        const id = block?.dataset?.subagentId;
+        if (id) openSubagentView(id);
+      });
+    });
   }
 
   function updateSubagentViews(toolCallId, details) {

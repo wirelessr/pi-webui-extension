@@ -355,6 +355,16 @@ const clientLogRoute = createRoute({
 	},
 });
 
+const streamAttachRoute = createRoute({
+	method: "get",
+	path: "/api/stream/attach",
+	summary: "Attach to an in-progress SSE stream (reconnect after page reload)",
+	responses: {
+		200: { description: "SSE stream", content: { "text/event-stream": { schema: z.string() } } },
+		409: { description: "No active stream to attach", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
 // ── Static file serving ───────────────────────────────────────────
 
 async function serveStatic(path, c) {
@@ -685,6 +695,35 @@ export function createBridgeApp(deps) {
 		}
 		deps.clientLog(body.level || "info", body.message, body.data);
 		return c.json({ ok: true });
+	});
+
+	app.openapi(streamAttachRoute, (c) => {
+		if (!deps.getIsBusy() || deps.isPendingOrSse()) {
+			return c.json({ error: "No active stream to attach" }, 409);
+		}
+		const { readable, writable } = new TransformStream();
+		const writer = writable.getWriter();
+		const encoder = new TextEncoder();
+		const res = {
+			write: (chunk) => writer.write(encoder.encode(chunk)),
+			writeHead: () => {},
+			flushHeaders: () => {},
+			end: () => writer.close(),
+			on: () => {},
+		};
+		const attached = deps.attachStream(res);
+		if (!attached) {
+			writer.close();
+			return c.json({ error: "No active stream to attach" }, 409);
+		}
+		return new Response(readable, {
+			headers: {
+				"Content-Type": "text/event-stream",
+				"Cache-Control": "no-cache",
+				"Connection": "keep-alive",
+				"X-Accel-Buffering": "no",
+			},
+		});
 	});
 
 	// ── Static file serving (fallback) ───────────────────────────

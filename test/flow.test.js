@@ -460,6 +460,86 @@ describe("doInit — initialization sequence", () => {
     assert.equal(result.sessionsLoaded, false);
     assert.ok(result.historyLoaded);
   });
+
+  test("busy session triggers attachStream", async () => {
+    let busyCalled = false;
+    let streamingCalled = false;
+    let attachCalled = false;
+    await doInit({
+      getStatusFn: async () => { return { port: 7331, busy: true }; },
+      getHistoryFn: async () => ({ history: [] }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => {},
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+      attachStreamFn: (onEvent) => { attachCalled = true; return Promise.resolve(true); },
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => { busyCalled = v; },
+      setStreamingFn: (v) => { streamingCalled = v; },
+    });
+    assert.ok(attachCalled, "attachStreamFn should be called when busy");
+    assert.ok(busyCalled, "setBusyFn should be called with true");
+    assert.ok(streamingCalled, "setStreamingFn should be called with true");
+  });
+
+  test("not busy session does not trigger attachStream", async () => {
+    let attachCalled = false;
+    await doInit({
+      getStatusFn: async () => { return { port: 7331, busy: false }; },
+      getHistoryFn: async () => ({ history: [] }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => {},
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+      attachStreamFn: () => { attachCalled = true; return Promise.resolve(false); },
+      onStreamEventFn: () => {},
+      setBusyFn: () => {},
+      setStreamingFn: () => {},
+    });
+    assert.equal(attachCalled, false);
+  });
+
+  test("attach failure resets busy state", async () => {
+    let busyValues = [];
+    await doInit({
+      getStatusFn: async () => { return { port: 7331, busy: true }; },
+      getHistoryFn: async () => ({ history: [] }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => {},
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+      attachStreamFn: () => { return Promise.resolve(false); },
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => { busyValues.push(v); },
+      setStreamingFn: () => {},
+    });
+    // setBusyFn(true) called first, then setBusyFn(false) when attach returns false
+    assert.deepEqual(busyValues, [true, false]);
+  });
+
+  test("attach rejection resets busy state", async () => {
+    let busyValues = [];
+    await doInit({
+      getStatusFn: async () => { return { port: 7331, busy: true }; },
+      getHistoryFn: async () => ({ history: [] }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => {},
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+      attachStreamFn: () => { return Promise.reject(new Error("attach failed")); },
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => { busyValues.push(v); },
+      setStreamingFn: () => {},
+    });
+    // Wait for the rejected promise's catch handler to run
+    await new Promise((r) => setTimeout(r, 10));
+    // setBusyFn(true) called first, then setBusyFn(false) when attach rejects
+    assert.deepEqual(busyValues, [true, false]);
+  });
 });
 
 // ── syncExpandButtonState ─────────────────────────────

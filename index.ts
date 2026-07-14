@@ -104,6 +104,7 @@ export default function (pi: ExtensionAPI) {
 		sendAndWait,
 		sendAndStream,
 		compactAndStream,
+		attachStream,
 		isPendingOrSse: () => !!(pending || sse),
 		reload: doReload,
 		clientLog,
@@ -449,6 +450,23 @@ export default function (pi: ExtensionAPI) {
 			writeSse({ type: "error", message });
 			closeSse();
 		}
+	}
+
+	function attachStream(res: any): boolean {
+		if (!isBusy || sse) return false;
+		const heartbeat = setInterval(() => {
+			if (sse) {
+				try {
+					sse.res.write(": heartbeat\n\n");
+				} catch (err) {
+					serverLog("heartbeat write failed:", err);
+					closeSse();
+				}
+			}
+		}, 15000);
+		sse = { res, heartbeat };
+		serverLog("attachStream: re-attached SSE to busy agent");
+		return true;
 	}
 
 	// ── Skill / template expansion ─────────────────────────────────────
@@ -843,6 +861,10 @@ export default function (pi: ExtensionAPI) {
 	// ── HTTP server ───────────────────────────────────────────────────
 
 	pi.on("session_start", async (event: any, ctx: any) => {
+		// Subagent sessions (--no-session) are ephemeral in-memory sessions.
+		// Don't start an HTTP bridge or write discovery files for them.
+		if (!ctx.sessionManager?.isPersisted()) return;
+
 		sessionCtx = ctx;
 		sessionFile = ctx.sessionManager?.getSessionFile() ?? undefined;
 		sessionId = event.sessionId ?? ctx.sessionManager?.getSessionId();
