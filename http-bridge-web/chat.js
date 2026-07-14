@@ -240,18 +240,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
       const textEl = document.createElement("div");
       textEl.className = "text";
       if (entry.thinking) {
-        const thinkBlock = document.createElement("div");
-        thinkBlock.className = "thinking-block";
-        const thinkHeader = document.createElement("div");
-        thinkHeader.className = "thinking-header";
-        thinkHeader.textContent = "thinking";
-        thinkHeader.addEventListener("click", () => thinkBlock.classList.toggle("expanded"));
-        const thinkContent = document.createElement("div");
-        thinkContent.className = "thinking-content";
-        thinkContent.textContent = entry.thinking;
-        thinkBlock.appendChild(thinkHeader);
-        thinkBlock.appendChild(thinkContent);
-        el.appendChild(thinkBlock);
+        el.appendChild(buildThinkingBlock(entry.thinking));
       }
       if (entry.text) {
         textEl.innerHTML = renderMarkdown(entry.text);
@@ -260,28 +249,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
       }
       if (entry.toolCalls) {
         for (const tc of entry.toolCalls) {
-          const block = document.createElement("div");
-          block.className = "tool-block";
-          const header = document.createElement("div");
-          header.className = "tool-header";
-          const nameSpan = document.createElement("span");
-          nameSpan.className = "tool-name";
-          nameSpan.textContent = tc.name;
-          const statusSpan = document.createElement("span");
-          statusSpan.className = "tool-status done";
-          statusSpan.textContent = "done";
-          header.appendChild(nameSpan);
-          header.appendChild(statusSpan);
-          const argsEl = document.createElement("div");
-          argsEl.className = "tool-args";
-          argsEl.textContent = formatArgs(tc.arguments);
-          const resultEl = document.createElement("div");
-          resultEl.className = "tool-result";
-          resultEl.dataset.toolCallId = tc.id || "";
-          header.addEventListener("click", () => block.classList.toggle("expanded"));
-          block.appendChild(header);
-          block.appendChild(argsEl);
-          block.appendChild(resultEl);
+          const { block, resultEl } = buildStaticToolBlock(tc);
           el.appendChild(block);
           if (tc.id) subagentToolResultMap.set(tc.id, resultEl);
         }
@@ -375,6 +343,52 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     block.appendChild(header);
     block.appendChild(contentEl);
     return block;
+  }
+
+  // ── Static block builders (history + subagent rendering) ──
+  // Completed, non-streaming blocks. The streaming path (ensureThinkingBlock,
+  // addToolBlock) builds live blocks separately.
+
+  function buildThinkingBlock(text) {
+    const block = document.createElement("div");
+    block.className = "thinking-block";
+    const header = document.createElement("div");
+    header.className = "thinking-header";
+    header.textContent = "thinking";
+    header.addEventListener("click", () => block.classList.toggle("expanded"));
+    const content = document.createElement("div");
+    content.className = "thinking-content";
+    content.textContent = text;
+    block.appendChild(header);
+    block.appendChild(content);
+    return block;
+  }
+
+  function buildStaticToolBlock(tc) {
+    const block = document.createElement("div");
+    block.className = "tool-block";
+    const header = document.createElement("div");
+    header.className = "tool-header";
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "tool-name";
+    nameSpan.textContent = tc.name;
+    const statusSpan = document.createElement("span");
+    statusSpan.className = "tool-status done";
+    statusSpan.textContent = "done";
+    header.appendChild(nameSpan);
+    header.appendChild(statusSpan);
+    const argsEl = document.createElement("div");
+    argsEl.className = "tool-args";
+    argsEl.textContent = formatArgs(tc.arguments);
+    const resultEl = document.createElement("div");
+    resultEl.className = "tool-result";
+    resultEl.dataset.toolCallId = tc.id || "";
+    header.addEventListener("click", () => block.classList.toggle("expanded"));
+    block.appendChild(header);
+    block.appendChild(argsEl);
+    block.appendChild(resultEl);
+    if (isSkillRead(tc.name, tc.arguments)) block.dataset.skillRead = "true";
+    return { block, resultEl };
   }
 
   function startAssistantMessage() {
@@ -660,18 +674,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
         const textEl = document.createElement("div");
         textEl.className = "text";
         if (entry.thinking) {
-          const thinkBlock = document.createElement("div");
-          thinkBlock.className = "thinking-block";
-          const thinkHeader = document.createElement("div");
-          thinkHeader.className = "thinking-header";
-          thinkHeader.textContent = "thinking";
-          thinkHeader.addEventListener("click", () => thinkBlock.classList.toggle("expanded"));
-          const thinkContent = document.createElement("div");
-          thinkContent.className = "thinking-content";
-          thinkContent.textContent = entry.thinking;
-          thinkBlock.appendChild(thinkHeader);
-          thinkBlock.appendChild(thinkContent);
-          el.appendChild(thinkBlock);
+          el.appendChild(buildThinkingBlock(entry.thinking));
         }
         if (entry.text) {
           textEl.innerHTML = renderMarkdown(entry.text);
@@ -680,29 +683,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
         }
         if (entry.toolCalls) {
           for (const tc of entry.toolCalls) {
-            const block = document.createElement("div");
-            block.className = "tool-block";
-            const header = document.createElement("div");
-            header.className = "tool-header";
-            const nameSpan = document.createElement("span");
-            nameSpan.className = "tool-name";
-            nameSpan.textContent = tc.name;
-            const statusSpan = document.createElement("span");
-            statusSpan.className = "tool-status done";
-            statusSpan.textContent = "done";
-            header.appendChild(nameSpan);
-            header.appendChild(statusSpan);
-            const argsEl = document.createElement("div");
-            argsEl.className = "tool-args";
-            argsEl.textContent = formatArgs(tc.arguments);
-            const resultEl = document.createElement("div");
-            resultEl.className = "tool-result";
-            resultEl.dataset.toolCallId = tc.id || "";
-            header.addEventListener("click", () => block.classList.toggle("expanded"));
-            block.appendChild(header);
-            block.appendChild(argsEl);
-            block.appendChild(resultEl);
-            if (isSkillRead(tc.name, tc.arguments)) block.dataset.skillRead = "true";
+            const { block } = buildStaticToolBlock(tc);
             el.appendChild(block);
           }
         }

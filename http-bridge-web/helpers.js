@@ -257,7 +257,9 @@ export function parsePromptTemplate(text) {
 }
 
 /**
- * Compute cumulative usage stats from session entries.
+ * Compute usage stats from session entries. Token counts and cost are
+ * cumulative across the session; cacheHitRate is the LATEST assistant
+ * message's rate (not cumulative) — it reflects current cache warmth.
  * @param {Array} entries — session entries from sessionManager.getEntries()
  * @returns {{inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number, cacheHitRate: number|null, totalCost: number}}
  */
