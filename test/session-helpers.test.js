@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions } from "../session-helpers.js";
+import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions, recoverStaleSessions } from "../session-helpers.js";
 
 // ── buildReloadCommand ─────────────────────────────────
 
@@ -226,5 +226,101 @@ describe("dedupSessions", () => {
     assert.strictEqual(deps.calls.log.length, 2);
     assert.ok(deps.calls.log[0].includes("pid=101"));
     assert.ok(deps.calls.log[1].includes("pid=102"));
+  });
+});
+
+// ── recoverStaleSessions ──────────────────────────────
+
+describe("recoverStaleSessions", () => {
+  // Build injected deps over an in-memory discovery-file store.
+  function mockDeps(store, { alivePids = [], ownSessionId, existingSessionFiles, claimWinner = () => true } = {}) {
+    const calls = { opened: [], deleted: [], released: [], claimed: [], log: [] };
+    const claimed = new Set();
+    return {
+      calls,
+      listDiscoveryFiles: () => Object.keys(store),
+      readDiscovery: (file) => store[file] ?? null,
+      isPidAlive: (pid) => alivePids.includes(pid),
+      ownSessionId,
+      // Default: every referenced session file exists unless a set is given.
+      sessionFileExists: (p) => (existingSessionFiles ? existingSessionFiles.includes(p) : true),
+      claimFn: (file) => {
+        calls.claimed.push(file);
+        if (claimed.has(file) || !claimWinner(file)) return false;
+        claimed.add(file);
+        return true;
+      },
+      releaseClaimFn: (file) => calls.released.push(file),
+      deleteDiscoveryFn: (file) => calls.deleted.push(file),
+      openSessionFn: (sid, name, cwd) => calls.opened.push({ sid, name, cwd }),
+      logFn: (msg) => calls.log.push(msg),
+    };
+  }
+
+  test("recovers a stale session whose process is dead", () => {
+    const store = {
+      "s1.json": { pid: 100, sessionId: "s1", sessionName: "one", cwd: "/a", sessionFile: "/f1" },
+    };
+    const deps = mockDeps(store, { alivePids: [] });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered, ["s1"]);
+    assert.deepEqual(deps.calls.opened, [{ sid: "s1", name: "one", cwd: "/a" }]);
+    assert.deepEqual(deps.calls.released, ["s1.json"]);
+    assert.equal(deps.calls.deleted.length, 0);
+  });
+
+  test("skips sessions whose process is still alive", () => {
+    const store = { "s1.json": { pid: 100, sessionId: "s1", sessionFile: "/f1" } };
+    const deps = mockDeps(store, { alivePids: [100] });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered, []);
+    assert.equal(deps.calls.opened.length, 0);
+    assert.equal(deps.calls.claimed.length, 0);
+  });
+
+  test("deletes own stale discovery file without recovering", () => {
+    const store = { "self.json": { pid: 100, sessionId: "me", sessionFile: "/f1" } };
+    const deps = mockDeps(store, { alivePids: [], ownSessionId: "me" });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered, []);
+    assert.deepEqual(deps.calls.deleted, ["self.json"]);
+    assert.equal(deps.calls.opened.length, 0);
+  });
+
+  test("deletes stale file when its session file no longer exists", () => {
+    const store = { "s1.json": { pid: 100, sessionId: "s1", sessionFile: "/gone" } };
+    const deps = mockDeps(store, { alivePids: [], existingSessionFiles: [] });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered, []);
+    assert.deepEqual(deps.calls.deleted, ["s1.json"]);
+    assert.equal(deps.calls.opened.length, 0);
+  });
+
+  test("does not recover when the claim is lost (race)", () => {
+    const store = { "s1.json": { pid: 100, sessionId: "s1", sessionFile: "/f1" } };
+    const deps = mockDeps(store, { alivePids: [], claimWinner: () => false });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered, []);
+    assert.deepEqual(deps.calls.claimed, ["s1.json"]);
+    assert.equal(deps.calls.opened.length, 0);
+    assert.equal(deps.calls.released.length, 0);
+  });
+
+  test("ignores unreadable/corrupt discovery files", () => {
+    const store = { "bad.json": null, "s2.json": { pid: 100, sessionId: "s2", sessionFile: "/f2" } };
+    const deps = mockDeps(store, { alivePids: [] });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered, ["s2"]);
+  });
+
+  test("processes multiple stale sessions", () => {
+    const store = {
+      "s1.json": { pid: 100, sessionId: "s1", sessionFile: "/f1" },
+      "s2.json": { pid: 101, sessionId: "s2", sessionFile: "/f2" },
+    };
+    const deps = mockDeps(store, { alivePids: [] });
+    const recovered = recoverStaleSessions(deps);
+    assert.deepEqual(recovered.sort(), ["s1", "s2"]);
+    assert.equal(deps.calls.opened.length, 2);
   });
 });

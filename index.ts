@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./http-bridge-web/helpers.js";
 import { generateSessionName } from "./name-generator.js";
-import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions } from "./session-helpers.js";
+import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -621,35 +621,43 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function recoverStaleSessions() {
-		try {
-			const files = readdirSync(BRIDGE_DIR);
-			for (const f of files) {
-				if (!f.endsWith(".json")) continue;
-				const fullPath = join(BRIDGE_DIR, f);
+		planRecoverStaleSessions({
+			listDiscoveryFiles: () => {
 				try {
-					const content = JSON.parse(readFileSync(fullPath, "utf-8"));
-					if (content.pid && !isPidAlive(content.pid)) {
-						// Don't recover ourselves (in case our own discovery file is stale)
-						if (content.sessionId === sessionId) {
-							unlinkSync(fullPath);
-							continue;
-						}
-						// Verify session file still exists before recovering
-						if (content.sessionFile && !existsSync(content.sessionFile)) {
-							unlinkSync(fullPath);
-							continue;
-						}
-						serverLog(`recover: re-spawning stale session ${content.sessionId} (name=${content.sessionName ?? "?"}, cwd=${content.cwd ?? "auto"})`);
-						openSession(content.sessionId, content.sessionName, content.cwd);
-						unlinkSync(fullPath);
-					}
+					return readdirSync(BRIDGE_DIR).filter((f) => f.endsWith(".json"));
 				} catch {
-					// Skip
+					return [];
 				}
-			}
-		} catch {
-			// Dir doesn't exist
-		}
+			},
+			readDiscovery: (file) => {
+				try {
+					return JSON.parse(readFileSync(join(BRIDGE_DIR, file), "utf-8"));
+				} catch {
+					return null;
+				}
+			},
+			isPidAlive,
+			ownSessionId: sessionId,
+			sessionFileExists: (p) => existsSync(p),
+			// Atomic claim: rename throws if another starting bridge already
+			// renamed it, so only one process wins.
+			claimFn: (file) => {
+				try {
+					renameSync(join(BRIDGE_DIR, file), join(BRIDGE_DIR, `${file}.recovering`));
+					return true;
+				} catch {
+					return false;
+				}
+			},
+			releaseClaimFn: (file) => {
+				try { unlinkSync(join(BRIDGE_DIR, `${file}.recovering`)); } catch {}
+			},
+			deleteDiscoveryFn: (file) => {
+				try { unlinkSync(join(BRIDGE_DIR, file)); } catch {}
+			},
+			openSessionFn: (sid, name, cwd) => openSession(sid, name, cwd),
+			logFn: serverLog,
+		});
 	}
 
 	function findFreePort(start: number, host: string): Promise<number> {

@@ -89,6 +89,67 @@ export function buildReloadCommand({ port, sessionPath, name, logFile }) {
  * @param {function} opts.logFn — (msg) => void, diagnostic logging
  * @returns {Array} winning sessions sorted by port
  */
+/**
+ * Recover stale (dead-process) sessions from discovery files, respawning
+ * each one exactly once even when several bridges start concurrently.
+ *
+ * The concurrency fix is `claimFn`: it must atomically claim a discovery
+ * file (e.g. rename it) and return false if another process already claimed
+ * it. Only the winner respawns, so a reload-all that restarts N bridges at
+ * once no longer respawns the same stale session N times.
+ *
+ * All side effects are injected. Returns the list of recovered sessionIds.
+ *
+ * @param {object} opts
+ * @param {function} opts.listDiscoveryFiles — () => string[] (basenames ending .json)
+ * @param {function} opts.readDiscovery — (file) => object|null (parsed, null on error)
+ * @param {function} opts.isPidAlive — (pid) => boolean
+ * @param {string|undefined} opts.ownSessionId — our own session id (never recover ourselves)
+ * @param {function} opts.sessionFileExists — (path) => boolean
+ * @param {function} opts.claimFn — (file) => boolean, atomic claim; false if lost the race
+ * @param {function} opts.releaseClaimFn — (file) => void, remove the claimed file after respawn
+ * @param {function} opts.deleteDiscoveryFn — (file) => void, delete a non-recoverable discovery file
+ * @param {function} opts.openSessionFn — (sessionId, name, cwd) => void
+ * @param {function} opts.logFn — (msg) => void
+ * @returns {string[]} recovered sessionIds
+ */
+export function recoverStaleSessions({
+  listDiscoveryFiles,
+  readDiscovery,
+  isPidAlive,
+  ownSessionId,
+  sessionFileExists,
+  claimFn,
+  releaseClaimFn,
+  deleteDiscoveryFn,
+  openSessionFn,
+  logFn,
+}) {
+  const recovered = [];
+  for (const file of listDiscoveryFiles()) {
+    const content = readDiscovery(file);
+    if (!content || !content.pid || isPidAlive(content.pid)) continue;
+
+    // Dead session. Drop (don't recover) if it's our own stale file, or its
+    // underlying session file is gone.
+    if (content.sessionId === ownSessionId || (content.sessionFile && !sessionFileExists(content.sessionFile))) {
+      deleteDiscoveryFn(file);
+      continue;
+    }
+
+    // Atomically claim before respawning — losers of the race skip.
+    if (!claimFn(file)) continue;
+    logFn(`recover: re-spawning stale session ${content.sessionId} (name=${content.sessionName ?? "?"}, cwd=${content.cwd ?? "auto"})`);
+    try {
+      openSessionFn(content.sessionId, content.sessionName, content.cwd);
+      recovered.push(content.sessionId);
+    } finally {
+      releaseClaimFn(file);
+    }
+  }
+  return recovered;
+}
+
 export function dedupSessions({ sessions, unlinkFn, killGroupFn, killFn, logFn }) {
   const bySessionFile = new Map();
   for (const s of sessions) {
