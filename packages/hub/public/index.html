@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>pi hub</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>hub</text></svg>">
+</head>
+<body>
+  <div id="app" data-active-view="chat">
+    <header id="topbar">
+      <div class="brand">
+        <span class="logo">pi hub</span>
+        <span id="session-name" class="session-name"></span>
+      </div>
+      <div class="status-area">
+        <span id="stats-display" class="stats"></span>
+        <span id="busy-indicator" class="status idle">idle</span>
+        <button id="expand-tools-btn" class="expand-btn" title="Expand all tool/thinking blocks">▼</button>
+        <span id="port-display" class="port"></span>
+        <span id="pid-display" class="pid"></span>
+        <span id="cwd-display" class="cwd" title=""></span>
+      </div>
+    </header>
+
+    <div id="main-layout">
+      <aside id="sidebar-left" class="sidebar" data-view="sessions">
+        <div class="sidebar-header">
+          <span>sessions</span>
+          <div class="header-actions">
+            <button id="refresh-sessions" class="icon-btn" title="Refresh">&#8635;</button>
+          </div>
+        </div>
+        <div id="sessions-list" class="sidebar-list"></div>
+      </aside>
+      <div id="sidebar-resize" class="resize-handle"></div>
+
+      <main id="chat" class="chat" data-view="chat">
+        <div id="messages"></div>
+        <div id="scroll-bottom" class="hidden">
+          <button class="ghost-btn">scroll to bottom</button>
+        </div>
+      </main>
+
+      <aside id="sidebar-right" class="sidebar" data-view="commands">
+        <div class="sidebar-header">
+          <span id="commands-title">commands</span>
+          <span id="commands-count" class="count-badge"></span>
+        </div>
+        <div id="commands-list" class="sidebar-list"></div>
+      </aside>
+    </div>
+
+    <nav id="mobile-nav">
+      <button class="nav-btn active" data-target="sessions"><span class="nav-icon">&#9776;</span><span class="nav-label">sessions</span></button>
+      <button class="nav-btn active" data-target="chat"><span class="nav-icon">&#9993;</span><span class="nav-label">chat</span></button>
+      <button class="nav-btn active" data-target="commands"><span class="nav-icon">/</span><span class="nav-label">commands</span></button>
+    </nav>
+
+    <footer id="input-area">
+      <div class="input-row">
+        <textarea id="message-input" placeholder="Send a message...  Type / to filter commands" rows="1" autofocus></textarea>
+        <button id="send-btn" class="send-btn">Send</button>
+      </div>
+      <div class="input-hint"><span>Enter to send, Shift+Enter for newline</span></div>
+    </footer>
+  </div>
+
+  <script src="/qrcode-lib.js"></script>
+  <script type="module" src="/hub-app.js"></script>
+</body>
+</html>
