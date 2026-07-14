@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "../src/hub-helpers.js";
+import { buildSessionList, buildSpawnCommand, diffBusyTransitions, parseProxyPath, pickSession } from "../src/hub-helpers.js";
 
 describe("parseProxyPath", () => {
   const cases = [
@@ -114,5 +114,18 @@ describe("diffBusyTransitions", () => {
       { sessionId: "b", sessionName: "B", busy: true },
     ]);
     assert.deepEqual(done, [{ sessionId: "a", sessionName: "A" }]);
+  });
+});
+
+describe("buildSpawnCommand", () => {
+  test("includes pi --mode rpc and the log redirect", () => {
+    const cmd = buildSpawnCommand({ logFile: "/tmp/hub.log" });
+    assert.match(cmd, /pi --mode rpc/);
+    assert.match(cmd, /tail -f \/dev\/null/);
+    assert.match(cmd, /sed -u "s\/\^\/\[hub-new\] \/" >> "\/tmp\/hub.log"/);
+  });
+  test("escapes double quotes in the log path", () => {
+    const cmd = buildSpawnCommand({ logFile: '/tmp/"x".log' });
+    assert.match(cmd, />> "\/tmp\/\\"x\\".log"/);
   });
 });

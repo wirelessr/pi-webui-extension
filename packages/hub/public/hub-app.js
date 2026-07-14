@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getCommands, getHistory, getStatus, killSession, newSession, pollUntil, reloadSession, sendPromptStream } from "/api.js";
+import { abortAgent, attachStream, getCommands, getHistory, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
@@ -220,7 +220,10 @@ import { formatStats } from "/utils.js";
       const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
       el.title = name;
       el.innerHTML = `<div class="session-item-row"><div class="session-item-info"><div class="item-name"></div></div><button class="qr-btn" title="Reload session">&#10227;</button><button class="close-btn" title="Close session">&times;</button></div><div class="item-meta"></div>`;
-      el.querySelector(".item-name").textContent = name;
+      const nameEl = el.querySelector(".item-name");
+      nameEl.textContent = name;
+      nameEl.title = "Double-click to rename";
+      nameEl.addEventListener("dblclick", (e) => { e.stopPropagation(); handleRename(s); });
       el.querySelector(".item-meta").textContent = s.busy ? `:${s.port} · busy` : `:${s.port}`;
       if (s.busy) el.classList.add("session-busy");
       el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
@@ -252,12 +255,11 @@ import { formatStats } from "/utils.js";
   const $reloadAll = document.getElementById("reload-all");
 
   async function handleNew() {
-    // new-session isn't session-specific; proxy through any live bridge.
-    const via = activeSessionId || sessions[0]?.sessionId;
-    if (!via) { alert("No running session to spawn from."); return; }
     const prevIds = new Set(sessions.map((s) => s.sessionId));
     try {
-      await newSession(undefined, scopedFetch(via));
+      // The hub spawns directly (works even with zero existing sessions).
+      const res = await fetch("/api/new-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
     } catch (err) {
       alert(`Failed to create session: ${err.message}`);
       return;
@@ -317,6 +319,31 @@ import { formatStats } from "/utils.js";
       activeSessionId = null;
       if (back) switchTo(back.sessionId);
     }
+  }
+
+  async function handleRename(s) {
+    const current = s.sessionName || s.sessionId.slice(0, 8);
+    const name = prompt("Rename session:", current);
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === current) return;
+    try {
+      await renameSession(trimmed, "", scopedFetch(s.sessionId));
+    } catch (err) {
+      alert(`Rename failed: ${err.message}`);
+      return;
+    }
+    await pollUntil(async () => {
+      const data = await (await fetch("/api/sessions")).json();
+      sessions = data.sessions || [];
+      const u = sessions.find((x) => x.sessionId === s.sessionId);
+      if (u && u.sessionName === trimmed) {
+        renderSessions();
+        if (s.sessionId === activeSessionId) $sessionName.textContent = trimmed;
+        return true;
+      }
+      return false;
+    }, 300, 8);
   }
 
   async function handleReloadAll() {
