@@ -16,7 +16,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSessionList, parseProxyPath, pickSession } from "./hub-helpers.js";
+import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "./hub-helpers.js";
 
 const require = createRequire(import.meta.url);
 const HUB_DIR = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +65,57 @@ function listSessions() {
   return buildSessionList(discoveries, isPidAlive);
 }
 
+// ── Cross-session busy watcher + aggregate event stream ──
+// Poll each session's status; when one transitions busy→idle, push a
+// `session_done` event to every /api/events subscriber. This is what lets
+// the single SPA notify for a session the user isn't currently viewing.
+
+let busyState = new Map();
+const eventClients = new Set();
+
+function broadcast(obj) {
+  const line = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const res of eventClients) {
+    try {
+      res.write(line);
+    } catch {
+      // client wrote-after-close; the close handler will prune it
+    }
+  }
+}
+
+async function fetchBusy(session) {
+  try {
+    const res = await fetch(`http://localhost:${session.port}/api/status`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { sessionId: session.sessionId, sessionName: session.sessionName, busy: !!data.busy };
+  } catch {
+    return null; // unreachable / slow — treat as unknown, skip this round
+  }
+}
+
+let polling = false;
+async function pollBusy() {
+  if (polling) return;
+  polling = true;
+  try {
+    const sessions = listSessions();
+    const results = (await Promise.all(sessions.map(fetchBusy))).filter(Boolean);
+    const { done, nextBusy } = diffBusyTransitions(busyState, results);
+    busyState = nextBusy;
+    for (const d of done) {
+      broadcast({ type: "session_done", sessionId: d.sessionId, sessionName: d.sessionName });
+    }
+  } finally {
+    polling = false;
+  }
+}
+
+function currentBusy(sessionId) {
+  return busyState.get(sessionId) ?? null;
+}
+
 // ── Static serving (hub shell first, then shared components) ──
 
 async function serveStatic(reqPath, res) {
@@ -110,8 +161,27 @@ const server = createServer(async (req, res) => {
   const url = req.url || "/";
 
   if (url === "/api/sessions") {
+    const sessions = listSessions().map((s) => ({ ...s, busy: currentBusy(s.sessionId) }));
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ sessions: listSessions() }));
+    res.end(JSON.stringify({ sessions }));
+    return;
+  }
+
+  if (url === "/api/events") {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.write(": connected\n\n");
+    eventClients.add(res);
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": heartbeat\n\n");
+      } catch {
+        // pruned on close
+      }
+    }, 15000);
+    res.on("close", () => {
+      clearInterval(heartbeat);
+      eventClients.delete(res);
+    });
     return;
   }
 
@@ -137,4 +207,5 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[hub] listening on http://${HOST}:${PORT} (discovery: ${BRIDGE_DIR})`);
+  setInterval(pollBusy, 2000);
 });

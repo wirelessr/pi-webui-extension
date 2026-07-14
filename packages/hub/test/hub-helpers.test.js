@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildSessionList, parseProxyPath, pickSession } from "../src/hub-helpers.js";
+import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "../src/hub-helpers.js";
 
 describe("parseProxyPath", () => {
   const cases = [
@@ -70,5 +70,49 @@ describe("buildSessionList", () => {
   test("projects only the browser-facing fields", () => {
     const list = buildSessionList([{ sessionId: "a", pid: 100, port: 7331, sessionName: "x", cwd: "/c", secret: "nope" }], alive);
     assert.deepEqual(list[0], { sessionId: "a", sessionName: "x", port: 7331, pid: 100, cwd: "/c" });
+  });
+});
+
+describe("diffBusyTransitions", () => {
+  test("fires done on busy -> idle", () => {
+    const prev = new Map([["a", true]]);
+    const { done, nextBusy } = diffBusyTransitions(prev, [{ sessionId: "a", sessionName: "A", busy: false }]);
+    assert.deepEqual(done, [{ sessionId: "a", sessionName: "A" }]);
+    assert.equal(nextBusy.get("a"), false);
+  });
+
+  test("does not fire on first sight (idle)", () => {
+    const { done } = diffBusyTransitions(new Map(), [{ sessionId: "a", busy: false }]);
+    assert.deepEqual(done, []);
+  });
+
+  test("does not fire on first sight (busy)", () => {
+    const { done, nextBusy } = diffBusyTransitions(new Map(), [{ sessionId: "a", busy: true }]);
+    assert.deepEqual(done, []);
+    assert.equal(nextBusy.get("a"), true);
+  });
+
+  test("does not fire while still busy", () => {
+    const { done } = diffBusyTransitions(new Map([["a", true]]), [{ sessionId: "a", busy: true }]);
+    assert.deepEqual(done, []);
+  });
+
+  test("does not fire on idle -> busy", () => {
+    const { done } = diffBusyTransitions(new Map([["a", false]]), [{ sessionId: "a", busy: true }]);
+    assert.deepEqual(done, []);
+  });
+
+  test("null sessionName defaults to null", () => {
+    const { done } = diffBusyTransitions(new Map([["a", true]]), [{ sessionId: "a", busy: false }]);
+    assert.equal(done[0].sessionName, null);
+  });
+
+  test("handles multiple sessions independently", () => {
+    const prev = new Map([["a", true], ["b", true]]);
+    const { done } = diffBusyTransitions(prev, [
+      { sessionId: "a", sessionName: "A", busy: false },
+      { sessionId: "b", sessionName: "B", busy: true },
+    ]);
+    assert.deepEqual(done, [{ sessionId: "a", sessionName: "A" }]);
   });
 });

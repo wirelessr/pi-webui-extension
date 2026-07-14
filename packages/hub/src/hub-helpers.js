@@ -55,3 +55,24 @@ export function buildSessionList(discoveries, isPidAlive) {
     }))
     .sort((a, b) => a.port - b.port);
 }
+
+/**
+ * Detect busy→idle transitions between polls (a session "finishing").
+ *
+ * @param {Map<string, boolean>} prevBusy — sessionId → busy at the last poll
+ * @param {Array<{sessionId: string, sessionName?: string|null, busy: boolean}>} current
+ * @returns {{done: Array<{sessionId: string, sessionName: string|null}>, nextBusy: Map<string, boolean>}}
+ */
+export function diffBusyTransitions(prevBusy, current) {
+  const done = [];
+  const nextBusy = new Map();
+  for (const s of current) {
+    nextBusy.set(s.sessionId, s.busy);
+    // Only fire when we have a prior "busy" observation flipping to idle —
+    // never on first sight (avoids a spurious notification on hub startup).
+    if (prevBusy.get(s.sessionId) === true && s.busy === false) {
+      done.push({ sessionId: s.sessionId, sessionName: s.sessionName ?? null });
+    }
+  }
+  return { done, nextBusy };
+}
