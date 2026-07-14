@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { doInit, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "../http-bridge-web/flow.js";
+import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "../http-bridge-web/flow.js";
 
 // ── Mock helpers ──────────────────────────────────────
 
@@ -51,6 +51,36 @@ describe("doSendPrompt — core send flow", () => {
     getStatusFn: async () => ({ port: 7331, pid: 12345 }),
     onStatusUpdateFn: () => {},
     ...overrides,
+  });
+
+  test("calls onCompleteFn when the stream completes", async () => {
+    let called = 0;
+    const opts = makeOpts({
+      sendPromptStreamFn: async (_msg, onEvent) => { onEvent({ type: "done" }); },
+      onCompleteFn: () => { called++; },
+    });
+    const result = await doSendPrompt(opts);
+    assert.equal(result.completed, true);
+    assert.equal(called, 1);
+  });
+
+  test("swallows errors thrown by onCompleteFn", async () => {
+    const opts = makeOpts({
+      sendPromptStreamFn: async (_msg, onEvent) => { onEvent({ type: "done" }); },
+      onCompleteFn: () => { throw new Error("boom"); },
+    });
+    const result = await doSendPrompt(opts);
+    assert.equal(result.completed, true);
+  });
+
+  test("does not call onCompleteFn when the stream is incomplete", async () => {
+    let called = 0;
+    const opts = makeOpts({
+      sendPromptStreamFn: async () => {},
+      onCompleteFn: () => { called++; },
+    });
+    await doSendPrompt(opts);
+    assert.equal(called, 0);
   });
 
   test("shows user message before SSE starts", async () => {
@@ -599,4 +629,85 @@ describe("syncExpandButtonState", () => {
       assert.strictEqual(result.expanded, expectButton);
     });
   }
+});
+
+// ── doInit attach error handling ──────────────────────
+
+describe("doInit — attach block error handling", () => {
+  test("swallows errors when status fetch throws with attach configured", async () => {
+    const result = await doInit({
+      getStatusFn: async () => { throw new Error("server down"); },
+      getHistoryFn: async () => ({ history: [] }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => {},
+      loadHistoryFn: () => {},
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+      attachStreamFn: () => Promise.resolve(true),
+      onStreamEventFn: () => {},
+      setBusyFn: () => {},
+      setStreamingFn: () => {},
+    });
+    // getStatus threw, so status never loaded — but doInit must not reject.
+    assert.equal(result.statusLoaded, false);
+  });
+});
+
+// ── doReattach ────────────────────────────────────────
+
+describe("doReattach", () => {
+  test("fetches status when not provided and attaches when busy", async () => {
+    let attached = false;
+    const busyValues = [];
+    const result = await doReattach({
+      getStatusFn: async () => ({ port: 7331, busy: true }),
+      attachStreamFn: () => { attached = true; return Promise.resolve(true); },
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => busyValues.push(v),
+      setStreamingFn: () => {},
+      onStatusFn: () => {},
+      attachRetryDelayMs: 0,
+    });
+    assert.ok(attached);
+    assert.deepEqual(result, { attached: true, busy: true });
+    assert.deepEqual(busyValues, [true]);
+  });
+
+  test("returns early when status fetch throws", async () => {
+    let attachCalled = false;
+    const result = await doReattach({
+      getStatusFn: async () => { throw new Error("down"); },
+      attachStreamFn: () => { attachCalled = true; return Promise.resolve(true); },
+      onStreamEventFn: () => {},
+    });
+    assert.equal(attachCalled, false);
+    assert.deepEqual(result, { attached: false, busy: false });
+  });
+
+  test("idle with nothing buffered makes a single attempt", async () => {
+    let attempts = 0;
+    const result = await doReattach({
+      getStatusFn: async () => ({ port: 7331, busy: false }),
+      attachStreamFn: () => { attempts++; return Promise.resolve(false); },
+      onStreamEventFn: () => {},
+      attachRetryDelayMs: 0,
+    });
+    assert.equal(attempts, 1);
+    assert.deepEqual(result, { attached: false, busy: false });
+  });
+
+  test("uses a pre-fetched status without calling getStatusFn", async () => {
+    let statusFetched = false;
+    const result = await doReattach({
+      status: { port: 7331, busy: true },
+      getStatusFn: async () => { statusFetched = true; return { busy: false }; },
+      attachStreamFn: () => Promise.resolve(true),
+      onStreamEventFn: () => {},
+      setBusyFn: () => {},
+      setStreamingFn: () => {},
+      attachRetryDelayMs: 0,
+    });
+    assert.equal(statusFetched, false);
+    assert.equal(result.attached, true);
+  });
 });

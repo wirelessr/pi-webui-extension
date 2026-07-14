@@ -10,14 +10,15 @@ import {
   getSessions,
   getStatus,
   killSession,
+  navUrl,
   newSession,
   openSession,
   pollUntil,
   reloadSession,
   renameSession,
   sendPromptStream,
-  navUrl,
   sessionUrl,
+  uploadImage,
 } from "../http-bridge-web/api.js";
 
 // ── Mock helpers ──────────────────────────────────────
@@ -98,6 +99,30 @@ describe("navUrl", () => {
   for (const c of cases) {
     test(c.name, () => assert.equal(navUrl(c.session, c.loc), c.expected));
   }
+});
+
+describe("uploadImage", () => {
+  test("POSTs the blob and returns parsed path", async () => {
+    const fetchFn = mockFetch({ status: 200, jsonData: { path: "/tmp/x.png" } });
+    const blob = { type: "image/png" };
+    const result = await uploadImage(blob, fetchFn);
+    assert.deepEqual(result, { path: "/tmp/x.png" });
+    assert.equal(fetchFn.calls[0].url, "/api/upload");
+    assert.equal(fetchFn.calls[0].init.method, "POST");
+    assert.equal(fetchFn.calls[0].init.headers["Content-Type"], "image/png");
+    assert.equal(fetchFn.calls[0].init.body, blob);
+  });
+
+  test("defaults Content-Type to image/png when blob has no type", async () => {
+    const fetchFn = mockFetch({ status: 200, jsonData: { path: "/tmp/y.png" } });
+    await uploadImage({}, fetchFn);
+    assert.equal(fetchFn.calls[0].init.headers["Content-Type"], "image/png");
+  });
+
+  test("throws on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 400, jsonData: { error: "Empty body" } });
+    await assert.rejects(() => uploadImage({ type: "image/png" }, fetchFn), /Empty body/);
+  });
 });
 
 describe("pollUntil", () => {
