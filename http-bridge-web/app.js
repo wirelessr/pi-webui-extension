@@ -237,8 +237,13 @@ import { formatStats } from "./utils.js";
 
   function notifyAgentDone() {
     const permission = "Notification" in window ? Notification.permission : "unsupported";
-    clientLog("info", "notifyAgentDone called", { hidden: document.hidden, permission, secureContext: window.isSecureContext });
-    if (!document.hidden) return;
+    // document.hidden only catches tab-level hiding (backgrounded/minimized tab).
+    // It stays false when you switch to another app while the tab remains the
+    // active tab in its window, which is the common "working elsewhere" case.
+    // hasFocus() is false whenever the window isn't focused, covering that gap.
+    const looking = !document.hidden && document.hasFocus();
+    clientLog("info", "notifyAgentDone called", { hidden: document.hidden, hasFocus: document.hasFocus(), looking, permission, secureContext: window.isSecureContext });
+    if (looking) return;
     const name = $sessionName?.textContent || "session";
     if (permission === "granted") {
       const n = new Notification("Agent done", {
@@ -258,12 +263,16 @@ import { formatStats } from "./utils.js";
     }
   }
 
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && titleAlertActive) {
+  function clearTitleAlert() {
+    if (titleAlertActive) {
       titleAlertActive = false;
       document.title = originalTitle;
     }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) clearTitleAlert();
   });
+  window.addEventListener("focus", clearTitleAlert);
 
   if ("Notification" in window && Notification.permission === "default") {
     const requestPerm = () => {
