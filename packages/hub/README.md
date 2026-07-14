@@ -27,16 +27,31 @@ Open `http://<host>:8730/`.
 
 ## Routes
 
-- `GET /api/sessions` — live session list (deduped, port-sorted).
+- `GET /api/sessions` — live session list (deduped, port-sorted, with busy).
+- `GET /api/events` — aggregate SSE: `session_done` when any session finishes.
 - `ANY /s/<sessionId>/...` — reverse proxy to that session's bridge (SSE-safe).
 - everything else — hub shell + shared `@wirelessr/pi-webui-components` assets.
 
-## Scope (v1)
+## Cross-session notifications
 
-Working: single entry, session sidebar, in-page switching (no navigation),
-per-session history + streaming + stop through the proxy, notifications for
-the session you're viewing (fires when the window isn't focused).
+The hub polls each session's busy state and emits `session_done` on the
+aggregate `/api/events` stream when one transitions busy→idle. The single SPA
+subscribes and notifies for any session that isn't the one you're viewing —
+so you get told when a background session finishes, which the per-session
+pages (one page per port, torn down on navigation) could never do.
 
-Not yet: notifications for background sessions you're not currently viewing,
-an aggregated commands endpoint, and session management (new/kill/rename) via
-the hub. These are follow-ups; the per-session UI still covers them.
+The session you *are* viewing is notified by its own stream, gated on window
+focus (no notification while you're looking right at it).
+
+## Scope
+
+Working: single entry, session sidebar with busy badges, in-page switching
+(no navigation), per-session history + streaming + stop through the proxy,
+and cross-session + active-session notifications.
+
+Not yet: an aggregated commands endpoint and session management
+(new/kill/rename) via the hub. The per-session UI still covers those.
+
+Note: busy→idle detection is poll-based (~2s), so a prompt that starts and
+finishes entirely between two polls won't raise a notification — only matters
+for sub-2s replies, which you'd see anyway.

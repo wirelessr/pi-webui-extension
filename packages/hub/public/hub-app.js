@@ -90,9 +90,10 @@ import { formatStats } from "/utils.js";
   const originalTitle = document.title;
   let titleAlertActive = false;
 
-  function notifyDone(name) {
+  // Raw notification — no focus gate. Used for background sessions: if a
+  // session you're NOT viewing finishes, notify regardless of window focus.
+  function fireNotification(name) {
     const permission = "Notification" in window ? Notification.permission : "unsupported";
-    if (!document.hidden && document.hasFocus()) return;
     if (permission === "granted") {
       const n = new Notification("Agent done", { body: name, tag: name });
       n.onclick = () => { window.focus(); n.close(); };
@@ -100,6 +101,13 @@ import { formatStats } from "/utils.js";
       titleAlertActive = true;
       document.title = `[done] ${originalTitle}`;
     }
+  }
+
+  // Active session: only notify when you're not actually looking at it
+  // (window hidden or unfocused). If you're staring at it, no need.
+  function notifyActiveDone(name) {
+    if (!document.hidden && document.hasFocus()) return;
+    fireNotification(name);
   }
   function clearTitleAlert() {
     if (titleAlertActive) { titleAlertActive = false; document.title = originalTitle; }
@@ -125,7 +133,7 @@ import { formatStats } from "/utils.js";
         input.setStreaming(false);
         setBusy(false);
         if (event.type === "done") {
-          notifyDone(activeName());
+          notifyActiveDone(activeName());
           getHistory(scopedFetch(sessionId)).then((data) => {
             if (sessionId === activeSessionId && data.history?.length) chat.loadHistory(data.history);
           }).catch(() => {});
@@ -178,7 +186,7 @@ import { formatStats } from "/utils.js";
       sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, onEvent, f),
       getHistoryFn: () => getHistory(f),
       getStatusFn: () => getStatus(f),
-      onCompleteFn: () => notifyDone(activeName()),
+      onCompleteFn: () => notifyActiveDone(activeName()),
       onStatusUpdateFn: (status) => { if (id === activeSessionId) updateHeader(status); },
     });
     if (result && !result.completed && id === activeSessionId) {
@@ -208,7 +216,8 @@ import { formatStats } from "/utils.js";
       el.title = name;
       el.innerHTML = `<div class="session-item-row"><div class="session-item-info"><div class="item-name"></div></div></div><div class="item-meta"></div>`;
       el.querySelector(".item-name").textContent = name;
-      el.querySelector(".item-meta").textContent = `:${s.port}`;
+      el.querySelector(".item-meta").textContent = s.busy ? `:${s.port} · busy` : `:${s.port}`;
+      if (s.busy) el.classList.add("session-busy");
       el.addEventListener("click", () => { if (s.sessionId !== activeSessionId) switchTo(s.sessionId); });
       $sessionsList.appendChild(el);
     }
@@ -229,6 +238,28 @@ import { formatStats } from "/utils.js";
   $commandsTitle.textContent = "commands";
   $commandsCount.textContent = "";
 
+  // ── Aggregate event stream: notify for background sessions ──
+  // The active session is notified by its own stream handler (focus-gated).
+  // Here we handle every OTHER session finishing — that's the cross-session
+  // notification: "the session you're not looking at is done".
+  function subscribeEvents() {
+    const es = new EventSource("/api/events");
+    es.onmessage = (e) => {
+      let msg;
+      try {
+        msg = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      if (msg.type === "session_done" && msg.sessionId !== activeSessionId) {
+        fireNotification(msg.sessionName || msg.sessionId.slice(0, 8));
+        loadSessions(); // refresh busy badges
+      }
+    };
+    es.onerror = () => {}; // EventSource auto-reconnects
+  }
+
   loadSessions();
+  subscribeEvents();
   setInterval(loadSessions, 3000);
 })();
