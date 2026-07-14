@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "../http-bridge-web/flow.js";
+import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "../src/flow.js";
 
 // ── Mock helpers ──────────────────────────────────────
 

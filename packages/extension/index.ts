@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridgeApp } from "./bridge-app.js";
-import * as helpers from "./http-bridge-web/helpers.js";
+import * as helpers from "./helpers.js";
 import { generateSessionName } from "./name-generator.js";
 import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 

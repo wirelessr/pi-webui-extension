@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { filterCommands } from "../http-bridge-web/commands.js";
+import { filterCommands } from "../src/commands.js";
 
 const COMMANDS = [
   { name: "skill:gh", description: "GitHub CLI operations", source: "skill" },

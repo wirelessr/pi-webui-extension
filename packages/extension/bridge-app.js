@@ -10,16 +10,17 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
-import * as helpers from "./http-bridge-web/helpers.js";
+import * as helpers from "./helpers.js";
 
 // Resolve hono from the extension's own node_modules
 const extRequire = createRequire(import.meta.url);
 const { OpenAPIHono, createRoute, z } = extRequire("@hono/zod-openapi");
 const { swaggerUI } = extRequire("@hono/swagger-ui");
 
-const EXT_DIR = dirname(fileURLToPath(import.meta.url));
-const WEB_DIR = join(EXT_DIR, "http-bridge-web");
+// The browser assets live in the shared components package. Resolve its
+// location so standalone (per-session) mode can serve the WebUI from there.
+const COMPONENTS_PKG = extRequire.resolve("@wirelessr/pi-webui-components/package.json");
+const WEB_DIR = join(dirname(COMPONENTS_PKG), "src");
 
 const MIME_TYPES = {
 	".html": "text/html; charset=utf-8",

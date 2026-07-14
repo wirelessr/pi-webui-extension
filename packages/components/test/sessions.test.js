@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { allPidsReplaced, doCloseSession, doNewSession, doReloadAll, doRenameSession, pickRedirectTarget, reloadAllOutcome } from "../http-bridge-web/sessions.js";
+import { allPidsReplaced, doCloseSession, doNewSession, doReloadAll, doRenameSession, pickRedirectTarget, reloadAllOutcome } from "../src/sessions.js";
 
 const SESSIONS = [
   { pid: 100, port: 7331, url: "http://192.168.1.130:7331" },

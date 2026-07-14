@@ -17,25 +17,30 @@ jobs:
 
       - run: npm ci
 
-      - run: npx biome check http-bridge-web/ index.ts bridge-app.js test/
+      - run: npx biome check packages/
 
-      - run: node --test test/*.test.js
-
-      - name: Coverage threshold check
+      - name: components — tests + 100% line coverage
+        working-directory: packages/components
         run: |
-          node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/coverage.txt
-          # Verify all behavior modules have 100% line coverage
-          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser session-helpers name-generator; do
-            line=$(grep " $mod.js " /tmp/coverage.txt || true)
-            if [ -z "$line" ]; then
-              echo "ERROR: Module $mod.js not found in coverage report"
-              exit 1
-            fi
+          node --test test/*.test.js
+          node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/cov-components.txt
+          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser; do
+            line=$(grep " $mod.js " /tmp/cov-components.txt || true)
+            if [ -z "$line" ]; then echo "ERROR: $mod.js not found in coverage"; exit 1; fi
             pct=$(echo "$line" | awk -F'|' '{print $2}' | awk '{print $1}' | tr -d '.')
-            if [ "$pct" != "10000" ]; then
-              echo "ERROR: $mod.js line coverage is ${pct:0:-2}.${pct: -2}%, expected 100%"
-              echo "$line"
-              exit 1
-            fi
-            echo "OK: $mod.js — 100% line coverage"
+            if [ "$pct" != "10000" ]; then echo "ERROR: $mod.js coverage $line"; exit 1; fi
+            echo "OK: $mod.js — 100%"
+          done
+
+      - name: extension — tests + 100% line coverage
+        working-directory: packages/extension
+        run: |
+          node --test test/*.test.js
+          node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/cov-extension.txt
+          for mod in session-helpers name-generator; do
+            line=$(grep " $mod.js " /tmp/cov-extension.txt || true)
+            if [ -z "$line" ]; then echo "ERROR: $mod.js not found in coverage"; exit 1; fi
+            pct=$(echo "$line" | awk -F'|' '{print $2}' | awk '{print $1}' | tr -d '.')
+            if [ "$pct" != "10000" ]; then echo "ERROR: $mod.js coverage $line"; exit 1; fi
+            echo "OK: $mod.js — 100%"
           done

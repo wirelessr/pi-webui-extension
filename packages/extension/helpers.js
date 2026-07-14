@@ -303,4 +303,4 @@ export {
   parseSkillFrontmatter,
   parseSubagentMessages,
   subagentStatus,
-} from "./parsers.js";
+} from "@wirelessr/pi-webui-components/parsers.js";

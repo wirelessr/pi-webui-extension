@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { clampMenuPosition, decideSessionClick, doCopy } from "../http-bridge-web/ui-behaviors.js";
+import { clampMenuPosition, decideSessionClick, doCopy } from "../src/ui-behaviors.js";
 
 // ── doCopy ────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { applyCommand } from "../http-bridge-web/input.js";
+import { applyCommand } from "../src/input.js";
 
 const CMD = { name: "skill:gh" };
 

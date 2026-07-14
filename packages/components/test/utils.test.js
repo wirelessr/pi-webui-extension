@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { escapeHtml } from "../http-bridge-web/utils.js";
+import { escapeHtml } from "../src/utils.js";
 
 describe("escapeHtml", () => {
   const singleCharCases = [
