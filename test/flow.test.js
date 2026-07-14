@@ -532,74 +532,9 @@ describe("doInit — initialization sequence", () => {
     assert.equal(attachCalled, true);
   });
 
-  test("attach failure resets busy state after retries exhausted", async () => {
-    let busyValues = [];
-    let attempts = 0;
-    await doInit({
-      getStatusFn: async () => { return { port: 7331, busy: true }; },
-      getHistoryFn: async () => ({ history: [] }),
-      loadCommandsFn: async () => {},
-      loadSessionsFn: () => {},
-      loadHistoryFn: () => {},
-      autoResizeFn: () => {},
-      onStatusFn: () => {},
-      attachStreamFn: () => { attempts++; return Promise.resolve(false); },
-      onStreamEventFn: () => {},
-      setBusyFn: (v) => { busyValues.push(v); },
-      setStreamingFn: () => {},
-      attachRetryDelayMs: 0,
-    });
-    // Attach loop is fire-and-forget — wait for it to finish
-    await new Promise((r) => setTimeout(r, 20));
-    assert.equal(attempts, 3, "busy attach should retry up to 3 times");
-    // setBusyFn(true) called first, then setBusyFn(false) when all attempts fail
-    assert.deepEqual(busyValues, [true, false]);
-  });
-
-  test("attach transient 409 then success keeps busy state", async () => {
-    let busyValues = [];
-    let attempts = 0;
-    await doInit({
-      getStatusFn: async () => { return { port: 7331, busy: true }; },
-      getHistoryFn: async () => ({ history: [] }),
-      loadCommandsFn: async () => {},
-      loadSessionsFn: () => {},
-      loadHistoryFn: () => {},
-      autoResizeFn: () => {},
-      onStatusFn: () => {},
-      attachStreamFn: () => { attempts++; return Promise.resolve(attempts >= 2); },
-      onStreamEventFn: () => {},
-      setBusyFn: (v) => { busyValues.push(v); },
-      setStreamingFn: () => {},
-      attachRetryDelayMs: 0,
-    });
-    await new Promise((r) => setTimeout(r, 20));
-    assert.equal(attempts, 2, "attach should stop retrying once it succeeds");
-    // Busy stays true — the done event from the stream clears it later
-    assert.deepEqual(busyValues, [true]);
-  });
-
-  test("attach rejection resets busy state", async () => {
-    let busyValues = [];
-    await doInit({
-      getStatusFn: async () => { return { port: 7331, busy: true }; },
-      getHistoryFn: async () => ({ history: [] }),
-      loadCommandsFn: async () => {},
-      loadSessionsFn: () => {},
-      loadHistoryFn: () => {},
-      autoResizeFn: () => {},
-      onStatusFn: () => {},
-      attachStreamFn: () => { return Promise.reject(new Error("attach failed")); },
-      onStreamEventFn: () => {},
-      setBusyFn: (v) => { busyValues.push(v); },
-      setStreamingFn: () => {},
-      attachRetryDelayMs: 0,
-    });
-    // Wait for the fire-and-forget attach loop to run through its attempts
-    await new Promise((r) => setTimeout(r, 20));
-    // setBusyFn(true) called first, then setBusyFn(false) when attach rejects
-    assert.deepEqual(busyValues, [true, false]);
-  });
+  // Retry/rejection behavior is exercised directly against doReattach (below),
+  // which is awaitable — doInit fires it fire-and-forget, so asserting on it
+  // through doInit would be timing-dependent and flaky.
 });
 
 // ── syncExpandButtonState ─────────────────────────────
@@ -694,6 +629,53 @@ describe("doReattach", () => {
     });
     assert.equal(attempts, 1);
     assert.deepEqual(result, { attached: false, busy: false });
+  });
+
+  test("busy attach retries up to 3 times then resets busy state", async () => {
+    const busyValues = [];
+    let attempts = 0;
+    const result = await doReattach({
+      status: { port: 7331, busy: true },
+      attachStreamFn: () => { attempts++; return Promise.resolve(false); },
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => busyValues.push(v),
+      setStreamingFn: () => {},
+      attachRetryDelayMs: 0,
+    });
+    assert.equal(attempts, 3, "busy attach should retry up to 3 times");
+    assert.deepEqual(busyValues, [true, false]);
+    assert.deepEqual(result, { attached: false, busy: true });
+  });
+
+  test("busy attach stops retrying once it succeeds (transient 409)", async () => {
+    const busyValues = [];
+    let attempts = 0;
+    const result = await doReattach({
+      status: { port: 7331, busy: true },
+      attachStreamFn: () => { attempts++; return Promise.resolve(attempts >= 2); },
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => busyValues.push(v),
+      setStreamingFn: () => {},
+      attachRetryDelayMs: 0,
+    });
+    assert.equal(attempts, 2, "attach should stop retrying once it succeeds");
+    // Busy stays true — the done event from the stream clears it later.
+    assert.deepEqual(busyValues, [true]);
+    assert.equal(result.attached, true);
+  });
+
+  test("busy attach rejection resets busy state after retries", async () => {
+    const busyValues = [];
+    const result = await doReattach({
+      status: { port: 7331, busy: true },
+      attachStreamFn: () => Promise.reject(new Error("attach failed")),
+      onStreamEventFn: () => {},
+      setBusyFn: (v) => busyValues.push(v),
+      setStreamingFn: () => {},
+      attachRetryDelayMs: 0,
+    });
+    assert.deepEqual(busyValues, [true, false]);
+    assert.equal(result.attached, false);
   });
 
   test("uses a pre-fetched status without calling getStatusFn", async () => {
