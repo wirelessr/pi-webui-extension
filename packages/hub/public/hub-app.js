@@ -15,6 +15,7 @@ import { abortAgent, attachStream, getCommands, getHistory, getStatus, killSessi
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
+import { addGroup, displayLayout, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { formatStats } from "/utils.js";
@@ -41,12 +42,15 @@ import { formatStats } from "/utils.js";
   let sessions = [];
   let activeSessionId = null;
   let activeAttach = null; // AbortController for the active session's attach SSE
+  let hubState = { items: [] }; // interleaved sidebar layout (sessions + groups)
+  let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
+  let draggingGroupId = null; // group being dragged (reorders groups)
 
   let toolsExpanded = localStorage.getItem("pi-hub-tools-expanded") === "true";
   const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded });
   const mobileNav = createMobileNav({ $app });
-  // Kept for the input's "/" command filtering; not populated in v1 (the hub
-  // has no aggregated /api/commands endpoint yet).
+  // Kept for the input's "/" command filtering; commands load per active
+  // session (the hub has no aggregated /api/commands endpoint).
   const commandsView = createCommandsView({
     $list: $commandsList, $count: $commandsCount, $title: $commandsTitle,
     onSelect: (cmd) => input.selectCommand(cmd),
@@ -210,27 +214,174 @@ import { formatStats } from "/utils.js";
 
   // ── Session sidebar ──
 
+  // First live session in display order (for auto-selecting on load).
+  function firstLiveSessionId() {
+    for (const it of displayLayout(hubState, sessions.map((s) => s.sessionId))) {
+      if (it.type === "session") return it.id;
+      if (it.type === "group" && it.members.length) return it.members[0];
+    }
+    return sessions[0]?.sessionId;
+  }
+
+  function makeSessionEl(s) {
+    const el = document.createElement("div");
+    el.className = "session-item";
+    el.draggable = true;
+    el.dataset.sid = s.sessionId;
+    if (s.sessionId === activeSessionId) el.classList.add("current");
+    const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
+    el.title = name;
+    el.innerHTML = `<div class="session-item-row"><div class="session-item-info"><div class="item-name"></div></div><button class="qr-btn" title="Reload session">&#10227;</button><button class="close-btn" title="Close session">&times;</button></div><div class="item-meta"></div>`;
+    const nameEl = el.querySelector(".item-name");
+    nameEl.textContent = name;
+    nameEl.title = "Double-click to rename";
+    nameEl.addEventListener("dblclick", (e) => { e.stopPropagation(); handleRename(s); });
+    el.querySelector(".item-meta").textContent = s.busy ? `:${s.port} · busy` : `:${s.port}`;
+    if (s.busy) el.classList.add("session-busy");
+    el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
+    el.querySelector(".close-btn").addEventListener("click", (e) => { e.stopPropagation(); handleClose(s); });
+    el.addEventListener("click", () => { if (s.sessionId !== activeSessionId) switchTo(s.sessionId); });
+    el.addEventListener("dragstart", (e) => { e.stopPropagation(); draggingSid = s.sessionId; el.classList.add("dragging"); });
+    el.addEventListener("dragend", () => {
+      el.classList.remove("dragging");
+      draggingSid = null;
+      commitLayout();
+    });
+    return el;
+  }
+
+  // After any drag, the DOM is the source of truth: walk the top-level items
+  // (sessions and groups, interleaved), read each group's members, and persist.
+  function commitLayout() {
+    const layout = [];
+    for (const child of $sessionsList.children) {
+      if (child.classList.contains("session-item")) {
+        layout.push({ type: "session", id: child.dataset.sid });
+      } else if (child.classList.contains("group")) {
+        const members = [...child.querySelectorAll(".group-body > .session-item")].map((x) => x.dataset.sid);
+        layout.push({ type: "group", id: child.dataset.gid, members });
+      }
+    }
+    hubState = rebuildItems(hubState, layout);
+    persistHubState();
+  }
+
+  function makeGroupEl(g) {
+    const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+    const wrap = document.createElement("div");
+    wrap.className = `group${g.collapsed ? " collapsed" : ""}`;
+    wrap.dataset.gid = g.id;
+
+    const header = document.createElement("div");
+    header.className = "group-header";
+    header.draggable = true; // drag the header to move the whole group in the list
+    header.addEventListener("dragstart", (e) => {
+      e.stopPropagation(); // a group drag, not a session drag
+      draggingGroupId = g.id;
+      wrap.classList.add("group-dragging");
+    });
+    header.addEventListener("dragend", () => {
+      draggingGroupId = null;
+      wrap.classList.remove("group-dragging");
+      commitLayout();
+    });
+    header.innerHTML = `<span class="group-toggle">${g.collapsed ? "▸" : "▾"}</span><span class="group-name"></span><span class="group-count"></span><button class="group-del" title="Delete group">&times;</button>`;
+    header.querySelector(".group-name").textContent = g.name;
+    header.querySelector(".group-count").textContent = g.members.length;
+    header.addEventListener("click", (e) => {
+      if (e.target.closest(".group-del") || e.target.closest(".group-name")) return;
+      hubState = setGroupCollapsed(hubState, g.id, !g.collapsed);
+      persistHubState();
+      renderSessions();
+    });
+    header.querySelector(".group-name").addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      const name = prompt("Rename group:", g.name);
+      if (name?.trim()) { hubState = renameGroup(hubState, g.id, name.trim()); persistHubState(); renderSessions(); }
+    });
+    header.querySelector(".group-del").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete group "${g.name}"? Sessions stay, just ungrouped.`)) return;
+      hubState = removeGroup(hubState, g.id);
+      persistHubState();
+      renderSessions();
+    });
+    wrap.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "group-body";
+    for (const sid of g.members) { const s = byId.get(sid); if (s) body.appendChild(makeSessionEl(s)); }
+    wrap.appendChild(body);
+    return wrap;
+  }
+
   function renderSessions() {
+    if (draggingSid || draggingGroupId) return; // don't yank the DOM out from under an active drag
     $sessionsList.innerHTML = "";
     if (!sessions.length) { $sessionsList.innerHTML = '<div class="cmd-empty">No active sessions</div>'; return; }
-    for (const s of sessions) {
-      const el = document.createElement("div");
-      el.className = "session-item";
-      if (s.sessionId === activeSessionId) el.classList.add("current");
-      const name = s.sessionName || s.sessionId?.slice(0, 8) || "unknown";
-      el.title = name;
-      el.innerHTML = `<div class="session-item-row"><div class="session-item-info"><div class="item-name"></div></div><button class="qr-btn" title="Reload session">&#10227;</button><button class="close-btn" title="Close session">&times;</button></div><div class="item-meta"></div>`;
-      const nameEl = el.querySelector(".item-name");
-      nameEl.textContent = name;
-      nameEl.title = "Double-click to rename";
-      nameEl.addEventListener("dblclick", (e) => { e.stopPropagation(); handleRename(s); });
-      el.querySelector(".item-meta").textContent = s.busy ? `:${s.port} · busy` : `:${s.port}`;
-      if (s.busy) el.classList.add("session-busy");
-      el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
-      el.querySelector(".close-btn").addEventListener("click", (e) => { e.stopPropagation(); handleClose(s); });
-      el.addEventListener("click", () => { if (s.sessionId !== activeSessionId) switchTo(s.sessionId); });
-      $sessionsList.appendChild(el);
+    const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+    // Sessions and groups are peers in one ordered list, rendered as direct
+    // children of the sidebar so they reorder together.
+    for (const it of displayLayout(hubState, sessions.map((s) => s.sessionId))) {
+      if (it.type === "group") {
+        $sessionsList.appendChild(makeGroupEl(it));
+      } else {
+        const s = byId.get(it.id);
+        if (s) $sessionsList.appendChild(makeSessionEl(s));
+      }
     }
+  }
+
+  // Position the dragged element by cursor midpoint among a set of candidates.
+  function placeByCursor(dragged, container, candidates, y) {
+    const after = candidates.find((el) => y < el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
+    if (after) container.insertBefore(dragged, after);
+    else container.appendChild(dragged);
+  }
+  // Top-level items = direct children that are a session or a group.
+  const topLevelItems = (exclude) =>
+    [...$sessionsList.children].filter((c) => c !== exclude && (c.classList.contains("session-item") || c.classList.contains("group")));
+
+  // Live DOM move while dragging (container outlives re-renders → attached once).
+  $sessionsList.addEventListener("dragover", (e) => {
+    if (draggingGroupId) {
+      // A group moves among the top-level items (it can't nest in another group).
+      e.preventDefault();
+      const dragging = $sessionsList.querySelector(".group.group-dragging");
+      if (dragging) placeByCursor(dragging, $sessionsList, topLevelItems(dragging), e.clientY);
+      return;
+    }
+    if (!draggingSid) return;
+    e.preventDefault();
+    const dragging = $sessionsList.querySelector(".session-item.dragging");
+    if (!dragging) return;
+    // Into a group? (hovering its body, or its header — which expands it)
+    let body = e.target.closest(".group-body");
+    if (!body) {
+      const header = e.target.closest(".group-header");
+      if (header) {
+        const group = header.closest(".group");
+        group.classList.remove("collapsed");
+        body = group.querySelector(".group-body");
+      }
+    }
+    if (body) {
+      placeByCursor(dragging, body, [...body.querySelectorAll(".session-item:not(.dragging)")], e.clientY);
+    } else {
+      // Top level — reorders alongside groups.
+      placeByCursor(dragging, $sessionsList, topLevelItems(dragging), e.clientY);
+    }
+  });
+
+  async function persistHubState() {
+    try {
+      const res = await fetch("/api/hub-state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(hubState),
+      });
+      if (res.ok) hubState = await res.json(); // server returns normalized + pruned
+    } catch {}
   }
 
   async function loadSessions() {
@@ -240,19 +391,37 @@ import { formatStats } from "/utils.js";
     } catch {
       sessions = [];
     }
+    // Refresh persisted order/groups too (best-effort; keeps cross-device in sync).
+    try {
+      hubState = await (await fetch("/api/hub-state")).json();
+    } catch {}
     // Self-heal: if the session we were viewing vanished (killed elsewhere,
     // or reloaded under a new id), drop the stale active so we re-select.
     if (activeSessionId && !sessions.some((s) => s.sessionId === activeSessionId)) {
       activeSessionId = null;
     }
     renderSessions();
-    if (!activeSessionId && sessions.length) switchTo(sessions[0].sessionId);
+    if (!activeSessionId && sessions.length) switchTo(firstLiveSessionId());
   }
 
   // ── Session management (proxied to a session's bridge) ──
 
   const $newSession = document.getElementById("new-session");
   const $reloadAll = document.getElementById("reload-all");
+  const $newGroup = document.getElementById("new-group");
+
+  function makeGroupId() {
+    // Not crypto.randomUUID(): that needs a secure context, unavailable over
+    // http:// on the LAN IP (phone). This is unique enough for local prefs.
+    return `g_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+  }
+  function handleNewGroup() {
+    const name = prompt("New group name:", "group");
+    if (name == null) return;
+    hubState = addGroup(hubState, { id: makeGroupId(), name: name.trim() || "group" });
+    persistHubState();
+    renderSessions();
+  }
   const $sessionModal = document.getElementById("new-session-modal");
   const $sessionIdInput = document.getElementById("session-id-input");
   const $sessionCwdInput = document.getElementById("session-cwd-input");
@@ -416,6 +585,7 @@ import { formatStats } from "/utils.js";
   }
 
   $newSession?.addEventListener("click", openSessionModal);
+  $newGroup?.addEventListener("click", handleNewGroup);
   $reloadAll?.addEventListener("click", handleReloadAll);
   $refreshSessions?.addEventListener("click", loadSessions);
   $commandsTitle.textContent = "commands";
