@@ -652,6 +652,12 @@ import { formatStats } from "/utils.js";
       sessions = data.sessions || [];
       return (data.sessions || []).find((x) => !prevIds.has(x.sessionId)) || false;
     }, 1000, 15);
+    if (fresh) {
+      // If the source is in a group, the clone lands in the same group;
+      // otherwise it stays a top-level session (displayLayout appends it).
+      const srcGroup = hubState.items.find((it) => it.type === "group" && it.members.includes(s.sessionId));
+      if (srcGroup) { hubState = moveToGroup(hubState, fresh.sessionId, srcGroup.id); persistHubState(); }
+    }
     renderSessions();
     if (fresh) switchTo(fresh.sessionId);
     else alert(`Clone of "${srcName}" did not appear.\nCheck the source session has saved history.`);
