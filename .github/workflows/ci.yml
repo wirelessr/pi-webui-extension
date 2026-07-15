@@ -50,7 +50,7 @@ jobs:
         run: |
           node --test test/*.test.js
           node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/cov-hub.txt
-          for mod in hub-helpers hub-state-logic; do
+          for mod in hub-helpers hub-state-logic store; do
             line=$(grep " $mod.js " /tmp/cov-hub.txt || true)
             if [ -z "$line" ]; then echo "ERROR: $mod.js not found in coverage"; exit 1; fi
             pct=$(echo "$line" | awk -F'|' '{print $2}' | awk '{print $1}' | tr -d '.')
