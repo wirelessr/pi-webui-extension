@@ -538,7 +538,8 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-#messages {
+#messages,
+.subagent-view {
   display: flex;
   flex-direction: column;
   gap: 16px;
