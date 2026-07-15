@@ -2,49 +2,11 @@
  * Pure functions for session spawn/kill logic — extracted from index.ts
  * for testability. No side effects; filesystem and process operations
  * are injected.
+ *
+ * buildSpawnCommand / buildOpenSessionCommand / findSessionCwd live in the
+ * shared @wirelessr/pi-webui-components/session-spawn.js (single source of
+ * truth with the hub). index.ts imports those from there directly.
  */
-
-/**
- * Build the sh command string for spawning a new session.
- *
- * Behavioral spec:
- * 1. Includes `pi --mode rpc` (no --session, fresh session)
- * 2. Stderr redirected to logFile with `[port] ` prefix per line via a wrapper function
- * 3. Uses `tail -f /dev/null |` as stdin keepalive
- *
- * @param {object} opts
- * @param {string} opts.logFile — shared stderr log file path
- * @param {number} [opts.port] — port for log prefix (optional, new sessions get assigned later)
- * @returns {string} sh command string
- */
-export function buildSpawnCommand({ logFile, port }) {
-  const escapedLog = logFile.replace(/"/g, '\\"');
-  const prefix = port != null ? `[${port}]` : "[new]";
-  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> "${escapedLog}"`;
-}
-
-/**
- * Build the sh command string for opening an existing session by ID.
- *
- * Behavioral spec:
- * 1. Includes `pi --mode rpc --session "<sessionId>"`
- * 2. Includes `--name "<name>"` only when name is provided
- * 3. Stderr redirected to logFile with `[new] ` prefix
- * 4. Uses `tail -f /dev/null |` as stdin keepalive
- * 5. Escapes double quotes in sessionId and name
- *
- * @param {object} opts
- * @param {string} opts.sessionId — session UUID or path
- * @param {string|undefined} opts.name — session display name
- * @param {string} opts.logFile — stderr log file path
- * @returns {string} sh command string
- */
-export function buildOpenSessionCommand({ sessionId, name, logFile }) {
-  const escapedId = sessionId.replace(/"/g, '\\"');
-  const escapedLog = logFile.replace(/"/g, '\\"');
-  const nameArg = name ? ` --name "${name.replace(/"/g, '\\"')}"` : "";
-  return `tail -f /dev/null | pi --mode rpc${nameArg} --session "${escapedId}" 2>&1 1>/dev/null | sed -u "s/^/[new] /" >> "${escapedLog}"`;
-}
 
 /**
  *

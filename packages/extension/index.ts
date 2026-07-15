@@ -14,14 +14,15 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
-import { homedir, networkInterfaces, tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./helpers.js";
 import { generateSessionName } from "./name-generator.js";
-import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
+import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -154,31 +155,6 @@ export default function (pi: ExtensionAPI) {
 		child.unref();
 		if (!child.pid) throw new Error("Failed to spawn new session");
 		return { pid: child.pid };
-	}
-
-	function findSessionCwd(sessionId: string): string | undefined {
-		const sessionsRoot = join(homedir(), ".pi", "agent", "sessions");
-		if (!existsSync(sessionsRoot)) return undefined;
-		try {
-			const dirs = readdirSync(sessionsRoot, { withFileTypes: true });
-			for (const dir of dirs) {
-				if (!dir.isDirectory()) continue;
-				const dirPath = join(sessionsRoot, dir.name);
-				try {
-					const files = readdirSync(dirPath);
-					for (const f of files) {
-						if (!f.endsWith(".jsonl")) continue;
-						// Filenames: <timestamp>_<uuid>.jsonl
-						if (f.includes(sessionId)) {
-							const firstLine = readFileSync(join(dirPath, f), "utf-8").split("\n", 1)[0];
-							const meta = JSON.parse(firstLine);
-							if (meta.cwd) return meta.cwd;
-						}
-					}
-				} catch {}
-			}
-		} catch {}
-		return undefined;
 	}
 
 	function openSession(sessionId: string, name?: string, cwd?: string): { pid: number } {
