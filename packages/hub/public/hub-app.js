@@ -45,6 +45,7 @@ import { formatStats } from "/utils.js";
   let hubState = { items: [] }; // interleaved sidebar layout (sessions + groups)
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
   let draggingGroupId = null; // group being dragged (reorders groups)
+  let activeStreaming = false; // a live stream is feeding the active header (so the poll must not override it)
 
   let toolsExpanded = localStorage.getItem("pi-hub-tools-expanded") === "true";
   const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded });
@@ -141,6 +142,7 @@ import { formatStats } from "/utils.js";
         chat.finishAssistantMessage();
         input.setStreaming(false);
         setBusy(false);
+        activeStreaming = false;
         if (event.type === "done") {
           notifyActiveDone(activeName());
           getHistory(scopedFetch(sessionId)).then((data) => {
@@ -148,6 +150,7 @@ import { formatStats } from "/utils.js";
           }).catch(() => {});
         }
       } else {
+        activeStreaming = true;
         chat.handleEvent(event);
       }
     };
@@ -158,6 +161,7 @@ import { formatStats } from "/utils.js";
   async function switchTo(sessionId) {
     if (activeAttach) { activeAttach.abort(); activeAttach = null; }
     activeSessionId = sessionId;
+    activeStreaming = false;
     renderSessions();
     $messages.innerHTML = "";
     setBusy(false);
@@ -178,9 +182,18 @@ import { formatStats } from "/utils.js";
       onStatusFn: (status) => { if (sessionId === activeSessionId) updateHeader(status); },
       attachStreamFn: (onEvent) => attachStream(onEvent, attachF),
       onStreamEventFn: makeStreamHandler(sessionId),
-      setBusyFn: (b) => { if (sessionId === activeSessionId) setBusy(b); },
+      setBusyFn: (b) => { if (sessionId === activeSessionId) { setBusy(b); activeStreaming = b; } },
       setStreamingFn: (s) => { if (sessionId === activeSessionId) input.setStreaming(s); },
     });
+
+    // If we couldn't attach (e.g. the turn is owned by another client's prompt
+    // stream on this session), the header would otherwise show a false idle.
+    // Fall back to the polled busy state so it matches the sidebar; the poll in
+    // loadSessions keeps it in sync and clears it when the turn ends.
+    if (!activeStreaming && sessionId === activeSessionId) {
+      const s = sessions.find((x) => x.sessionId === sessionId);
+      if (s) setBusy(!!s.busy);
+    }
   }
 
   // ── Send / stop (active session) ──
@@ -191,7 +204,7 @@ import { formatStats } from "/utils.js";
     const f = scopedFetch(id);
     const result = await doSendPrompt({
       text, chat, input,
-      setBusyFn: (b) => { if (id === activeSessionId) setBusy(b); },
+      setBusyFn: (b) => { if (id === activeSessionId) { setBusy(b); activeStreaming = b; } },
       sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, onEvent, f),
       getHistoryFn: () => getHistory(f),
       getStatusFn: () => getStatus(f),
@@ -401,6 +414,13 @@ import { formatStats } from "/utils.js";
       activeSessionId = null;
     }
     renderSessions();
+    // Keep the active session's header busy in sync with the poll (same source
+    // as the sidebar), unless a live stream is currently driving it. This
+    // clears a stuck "busy" when a turn we couldn't attach to ends.
+    if (!activeStreaming) {
+      const active = sessions.find((s) => s.sessionId === activeSessionId);
+      if (active) setBusy(!!active.busy);
+    }
     if (!activeSessionId && sessions.length) switchTo(firstLiveSessionId());
   }
 
