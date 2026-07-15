@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Central hub: single web entry that reverse-proxies and aggregates all pi WebUI sessions",
   "dependencies": {
-    "@wirelessr/pi-webui-components": "^0.3.0"
+    "@wirelessr/pi-webui-components": "^0.4.0"
   },
   "scripts": {
     "start": "node src/server.js",
