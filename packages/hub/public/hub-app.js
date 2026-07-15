@@ -18,6 +18,7 @@ import { doInit, doSendPrompt, doStop } from "/flow.js";
 import { addGroup, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
+import { createStore } from "/store.js";
 import { formatStats } from "/utils.js";
 
 (function () {
@@ -39,10 +40,23 @@ import { formatStats } from "/utils.js";
   const $commandsCount = document.getElementById("commands-count");
   const $commandsTitle = document.getElementById("commands-title");
 
-  let sessions = [];
-  let activeSessionId = null;
-  let activeAttach = null; // AbortController for the active session's attach SSE
-  let hubState = { items: [] }; // interleaved sidebar layout (sessions + groups)
+  // View state lives in a tiny reactive store. Mutate via setState(); one
+  // subscriber syncs the aliases below and re-renders the sidebar + queue.
+  // Reads still use the aliases. EVERY write to sessions/activeSessionId/hubState
+  // MUST go through setState — a direct assignment would desync the store.
+  const view = createStore({ sessions: [], activeSessionId: null, hubState: { items: [] } });
+  let sessions = view.get().sessions;
+  let activeSessionId = view.get().activeSessionId;
+  let hubState = view.get().hubState; // interleaved sidebar layout (sessions + groups)
+  function setState(patch) { view.set(patch); }
+  view.subscribe((s) => {
+    sessions = s.sessions;
+    activeSessionId = s.activeSessionId;
+    hubState = s.hubState;
+    renderSessions();
+    renderQueue();
+  });
+  let activeAttach = null; // AbortController for the active session's attach SSE (control handle, not view state)
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
   let draggingGroupId = null; // group being dragged (reorders groups)
   let openMenu = null; // open session context menu element (right-click)
@@ -168,10 +182,8 @@ import { formatStats } from "/utils.js";
     // re-attach (the bridge won't let attach steal an active prompt stream →
     // 409). The turn keeps running on the bridge; re-attach resumes it live.
     if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
-    activeSessionId = sessionId;
     activeStreaming = false;
-    renderSessions();
-    renderQueue();
+    setState({ activeSessionId: sessionId }); // → renders sidebar + queue
     $messages.innerHTML = "";
     setBusy(false);
     input.setStreaming(false);
@@ -242,9 +254,7 @@ import { formatStats } from "/utils.js";
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
         const data = await res.json();
-        if (active) active.queue = { items: data.items, paused: data.paused };
-        renderQueue();
-        renderSessions();
+        setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === id ? { ...x, queue: { items: data.items, paused: data.paused } } : x)) }));
       } catch (err) {
         alert(`Queue failed: ${err.message}`);
       }
@@ -335,7 +345,7 @@ import { formatStats } from "/utils.js";
         layout.push({ type: "group", id: child.dataset.gid, members });
       }
     }
-    hubState = rebuildItems(hubState, layout);
+    setState({ hubState: rebuildItems(hubState, layout) });
     persistHubState();
   }
 
@@ -363,21 +373,19 @@ import { formatStats } from "/utils.js";
     header.querySelector(".group-count").textContent = g.members.length;
     header.addEventListener("click", (e) => {
       if (e.target.closest(".group-del") || e.target.closest(".group-name")) return;
-      hubState = setGroupCollapsed(hubState, g.id, !g.collapsed);
+      setState({ hubState: setGroupCollapsed(hubState, g.id, !g.collapsed) });
       persistHubState();
-      renderSessions();
     });
     header.querySelector(".group-name").addEventListener("dblclick", (e) => {
       e.stopPropagation();
       const name = prompt("Rename group:", g.name);
-      if (name?.trim()) { hubState = renameGroup(hubState, g.id, name.trim()); persistHubState(); renderSessions(); }
+      if (name?.trim()) { setState({ hubState: renameGroup(hubState, g.id, name.trim()) }); persistHubState(); }
     });
     header.querySelector(".group-del").addEventListener("click", (e) => {
       e.stopPropagation();
       if (!confirm(`Delete group "${g.name}"? Sessions stay, just ungrouped.`)) return;
-      hubState = removeGroup(hubState, g.id);
+      setState({ hubState: removeGroup(hubState, g.id) });
       persistHubState();
-      renderSessions();
     });
     wrap.appendChild(header);
 
@@ -453,35 +461,34 @@ import { formatStats } from "/utils.js";
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(hubState),
       });
-      if (res.ok) hubState = await res.json(); // server returns normalized + pruned
+      if (res.ok) setState({ hubState: await res.json() }); // server returns normalized + pruned
     } catch {}
   }
 
   async function loadSessions() {
+    let next;
     try {
-      const data = await (await fetch("/api/sessions")).json();
-      sessions = data.sessions || [];
+      next = (await (await fetch("/api/sessions")).json()).sessions || [];
     } catch {
-      sessions = [];
+      next = [];
     }
     // Refresh persisted order/groups too (best-effort; keeps cross-device in sync).
+    let hs = hubState;
     try {
-      hubState = await (await fetch("/api/hub-state")).json();
+      hs = await (await fetch("/api/hub-state")).json();
     } catch {}
-    // Self-heal: if the session we were viewing vanished (killed elsewhere,
-    // or reloaded under a new id), drop the stale active so we re-select.
-    if (activeSessionId && !sessions.some((s) => s.sessionId === activeSessionId)) {
-      activeSessionId = null;
-    }
-    renderSessions();
+    // Self-heal: if the session we were viewing vanished (killed elsewhere, or
+    // reloaded under a new id), drop the stale active so we re-select.
+    let active = activeSessionId;
+    if (active && !next.some((s) => s.sessionId === active)) active = null;
+    setState({ sessions: next, hubState: hs, activeSessionId: active }); // → renders sidebar + queue
     // Keep the active session's header busy in sync with the poll (same source
     // as the sidebar), unless a live stream is currently driving it. This
     // clears a stuck "busy" when a turn we couldn't attach to ends.
     if (!activeStreaming) {
-      const active = sessions.find((s) => s.sessionId === activeSessionId);
-      if (active) setBusy(!!active.busy);
+      const a = sessions.find((s) => s.sessionId === activeSessionId);
+      if (a) setBusy(!!a.busy);
     }
-    renderQueue();
     ensureActiveAttached();
     if (!activeSessionId && sessions.length) switchTo(firstLiveSessionId());
   }
@@ -500,9 +507,8 @@ import { formatStats } from "/utils.js";
   function handleNewGroup() {
     const name = prompt("New group name:", "group");
     if (name == null) return;
-    hubState = addGroup(hubState, { id: makeGroupId(), name: name.trim() || "group" });
+    setState({ hubState: addGroup(hubState, { id: makeGroupId(), name: name.trim() || "group" }) });
     persistHubState();
-    renderSessions();
   }
   const $sessionModal = document.getElementById("new-session-modal");
   const $sessionIdInput = document.getElementById("session-id-input");
@@ -545,10 +551,9 @@ import { formatStats } from "/utils.js";
     // wait for the new session's discovery to appear, then switch to it
     const fresh = await pollUntil(async () => {
       const data = await (await fetch("/api/sessions")).json();
-      sessions = data.sessions || [];
+      setState({ sessions: data.sessions || [] });
       return (data.sessions || []).find((s) => !prevIds.has(s.sessionId)) || false;
     }, 1000, 15);
-    renderSessions();
     if (fresh) {
       switchTo(fresh.sessionId);
     } else if (sessionId) {
@@ -597,15 +602,14 @@ import { formatStats } from "/utils.js";
     }
     if (s.sessionId === activeSessionId) {
       if (activeAttach) { activeAttach.abort(); activeAttach = null; }
-      activeSessionId = null;
+      setState({ activeSessionId: null });
       $messages.innerHTML = "";
     }
     await pollUntil(async () => {
       const data = await (await fetch("/api/sessions")).json();
-      sessions = data.sessions || [];
+      setState({ sessions: data.sessions || [] });
       return !sessions.some((x) => x.sessionId === s.sessionId);
     }, 500, 10);
-    renderSessions();
     if (!activeSessionId && sessions.length) switchTo(sessions[0].sessionId);
   }
 
@@ -624,12 +628,11 @@ import { formatStats } from "/utils.js";
     // sessionId). Wait for the port to come back, then re-attach to it.
     const back = await pollUntil(async () => {
       const data = await (await fetch("/api/sessions")).json();
-      sessions = data.sessions || [];
-      renderSessions();
+      setState({ sessions: data.sessions || [] });
       return sessions.find((x) => x.port === port) || false;
     }, 1000, 12);
     if (wasActive) {
-      activeSessionId = null;
+      setState({ activeSessionId: null });
       if (back) switchTo(back.sessionId);
     }
   }
@@ -648,10 +651,9 @@ import { formatStats } from "/utils.js";
     }
     await pollUntil(async () => {
       const data = await (await fetch("/api/sessions")).json();
-      sessions = data.sessions || [];
+      setState({ sessions: data.sessions || [] });
       const u = sessions.find((x) => x.sessionId === s.sessionId);
       if (u && u.sessionName === trimmed) {
-        renderSessions();
         if (s.sessionId === activeSessionId) $sessionName.textContent = trimmed;
         return true;
       }
@@ -677,16 +679,15 @@ import { formatStats } from "/utils.js";
     }
     const fresh = await pollUntil(async () => {
       const data = await (await fetch("/api/sessions")).json();
-      sessions = data.sessions || [];
+      setState({ sessions: data.sessions || [] });
       return (data.sessions || []).find((x) => !prevIds.has(x.sessionId)) || false;
     }, 1000, 15);
     if (fresh) {
       // If the source is in a group, the clone lands in the same group;
       // otherwise it stays a top-level session (displayLayout appends it).
       const srcGroup = hubState.items.find((it) => it.type === "group" && it.members.includes(s.sessionId));
-      if (srcGroup) { hubState = moveToGroup(hubState, fresh.sessionId, srcGroup.id); persistHubState(); }
+      if (srcGroup) { setState({ hubState: moveToGroup(hubState, fresh.sessionId, srcGroup.id) }); persistHubState(); }
     }
-    renderSessions();
     if (fresh) switchTo(fresh.sessionId);
     else alert(`Clone of "${srcName}" did not appear.\nCheck the source session has saved history.`);
   }
@@ -732,10 +733,7 @@ import { formatStats } from "/utils.js";
       const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const s = sessions.find((x) => x.sessionId === body.sessionId);
-      if (s) s.queue = { items: data.items, paused: data.paused };
-      renderQueue();
-      renderSessions();
+      setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === body.sessionId ? { ...x, queue: { items: data.items, paused: data.paused } } : x)) }));
     } catch (err) {
       alert(`Queue action failed: ${err.message}`);
     }
@@ -793,18 +791,16 @@ import { formatStats } from "/utils.js";
       add("Move to group…", () => {}, { disabled: true });
     }
     for (const g of targets) {
-      add(`Move to "${g.name}"`, () => { hubState = moveToGroup(hubState, s.sessionId, g.id); persistHubState(); renderSessions(); });
+      add(`Move to "${g.name}"`, () => { setState({ hubState: moveToGroup(hubState, s.sessionId, g.id) }); persistHubState(); });
     }
     add("New group…", () => {
       const name = prompt("New group name:", "group");
       if (name == null) return;
       const id = makeGroupId();
-      hubState = addGroup(hubState, { id, name: name.trim() || "group" });
-      hubState = moveToGroup(hubState, s.sessionId, id);
+      setState({ hubState: moveToGroup(addGroup(hubState, { id, name: name.trim() || "group" }), s.sessionId, id) });
       persistHubState();
-      renderSessions();
     });
-    if (curGroup) add("Remove from group", () => { hubState = moveToGroup(hubState, s.sessionId, null); persistHubState(); renderSessions(); });
+    if (curGroup) add("Remove from group", () => { setState({ hubState: moveToGroup(hubState, s.sessionId, null) }); persistHubState(); });
 
     sep();
     add("Clone", () => handleClone(s));
@@ -854,16 +850,11 @@ import { formatStats } from "/utils.js";
         fireNotification(msg.sessionName || msg.sessionId.slice(0, 8));
         loadSessions(); // refresh busy badges
       } else if (msg.type === "queue") {
-        const s = sessions.find((x) => x.sessionId === msg.sessionId);
-        if (s) s.queue = { items: msg.items, paused: msg.paused };
-        if (msg.sessionId === activeSessionId) renderQueue();
-        renderSessions();
+        setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === msg.sessionId ? { ...x, queue: { items: msg.items, paused: msg.paused } } : x)) }));
       } else if (msg.type === "session_busy") {
         // A queued turn started dispatching. Reflect busy + attach if it's ours.
-        const s = sessions.find((x) => x.sessionId === msg.sessionId);
-        if (s) s.busy = true;
+        setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === msg.sessionId ? { ...x, busy: true } : x)) }));
         if (msg.sessionId === activeSessionId) { setBusy(true); ensureActiveAttached(); }
-        renderSessions();
       } else if (msg.type === "queue_error" && msg.sessionId !== activeSessionId) {
         fireNotification(`${msg.sessionName || msg.sessionId.slice(0, 8)}: queue paused`);
       }
