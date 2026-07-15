@@ -128,10 +128,14 @@ export function decideSendClick(isStreaming) {
  * Check whether a message should be sent.
  * @param {string} text
  * @param {boolean} isStreaming
+ * @param {boolean} [allowWhileStreaming] — when true, a non-empty message is
+ *   allowed to submit even while a turn streams (the hub queues it); the send
+ *   button still acts as Stop on click (see decideSendClick).
  * @returns {boolean}
  */
-export function shouldSend(text, isStreaming) {
-  if (!text?.trim() || isStreaming) return false;
+export function shouldSend(text, isStreaming, allowWhileStreaming = false) {
+  if (!text?.trim()) return false;
+  if (isStreaming && !allowWhileStreaming) return false;
   return true;
 }
 

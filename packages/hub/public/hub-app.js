@@ -46,6 +46,7 @@ import { formatStats } from "/utils.js";
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
   let draggingGroupId = null; // group being dragged (reorders groups)
   let openMenu = null; // open session context menu element (right-click)
+  let attachingActive = false; // guard: an auto-attach to the active session is in flight
   let activeStreaming = false; // a live stream is feeding the active header (so the poll must not override it)
   let activePromptAbort = null; // AbortController for the active session's outgoing /api/prompt stream
 
@@ -60,7 +61,7 @@ import { formatStats } from "/utils.js";
     // Commands are per-session — load them from the active session's bridge.
     getCommandsFn: () => (activeSessionId ? getCommands(scopedFetch(activeSessionId)) : Promise.resolve({ commands: [] })),
   });
-  const input = createInput({ $input, $sendBtn, commandsView, mobileNav, onSend: handleSend, onSelectCommand: () => {}, onStop: handleStop });
+  const input = createInput({ $input, $sendBtn, commandsView, mobileNav, onSend: handleSend, onSelectCommand: () => {}, onStop: handleStop, allowQueueWhileStreaming: true });
 
   // ── Session-scoped addressing ──
 
@@ -170,6 +171,7 @@ import { formatStats } from "/utils.js";
     activeSessionId = sessionId;
     activeStreaming = false;
     renderSessions();
+    renderQueue();
     $messages.innerHTML = "";
     setBusy(false);
     input.setStreaming(false);
@@ -228,6 +230,26 @@ import { formatStats } from "/utils.js";
   async function handleSend(text) {
     if (!activeSessionId) return;
     const id = activeSessionId;
+    // Busy (or something already queued) → queue on the hub so it dispatches in
+    // order and keeps going after we switch away. Idle → send live as usual.
+    const active = sessions.find((s) => s.sessionId === id);
+    const pending = active?.queue?.items?.length > 0;
+    if (activeStreaming || active?.busy || pending) {
+      try {
+        const res = await fetch("/api/queue", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: id, message: text }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        const data = await res.json();
+        if (active) active.queue = { items: data.items, paused: data.paused };
+        renderQueue();
+        renderSessions();
+      } catch (err) {
+        alert(`Queue failed: ${err.message}`);
+      }
+      return;
+    }
     const f = scopedFetch(id);
     const promptAbort = new AbortController();
     if (activePromptAbort) activePromptAbort.abort();
@@ -282,7 +304,11 @@ import { formatStats } from "/utils.js";
     nameEl.textContent = name;
     nameEl.title = "Double-click to rename";
     nameEl.addEventListener("dblclick", (e) => { e.stopPropagation(); handleRename(s); });
-    el.querySelector(".item-meta").textContent = s.busy ? `:${s.port} · busy` : `:${s.port}`;
+    const qn = s.queue?.items?.length || 0;
+    let meta = `:${s.port}`;
+    if (s.busy) meta += " · busy";
+    if (qn) meta += ` · ${qn} queued${s.queue?.paused ? " ⚠" : ""}`;
+    el.querySelector(".item-meta").textContent = meta;
     if (s.busy) el.classList.add("session-busy");
     el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
     el.querySelector(".close-btn").addEventListener("click", (e) => { e.stopPropagation(); handleClose(s); });
@@ -455,6 +481,8 @@ import { formatStats } from "/utils.js";
       const active = sessions.find((s) => s.sessionId === activeSessionId);
       if (active) setBusy(!!active.busy);
     }
+    renderQueue();
+    ensureActiveAttached();
     if (!activeSessionId && sessions.length) switchTo(firstLiveSessionId());
   }
 
@@ -663,6 +691,73 @@ import { formatStats } from "/utils.js";
     else alert(`Clone of "${srcName}" did not appear.\nCheck the source session has saved history.`);
   }
 
+  // ── Queued messages (pending chips for the active session) ──
+
+  const $queueChips = document.getElementById("queue-chips");
+
+  function renderQueue() {
+    if (!$queueChips) return;
+    const active = sessions.find((s) => s.sessionId === activeSessionId);
+    const q = active?.queue;
+    $queueChips.innerHTML = "";
+    if (!q || (q.items.length === 0 && !q.paused)) { $queueChips.classList.add("hidden"); return; }
+    $queueChips.classList.remove("hidden");
+    if (q.paused) {
+      const banner = document.createElement("div");
+      banner.className = "queue-paused";
+      banner.innerHTML = `<span>Queue paused after an error.</span>`;
+      const resume = document.createElement("button");
+      resume.className = "queue-resume"; resume.textContent = "Resume";
+      resume.addEventListener("click", () => queueAction("/api/queue/resume", { sessionId: activeSessionId }));
+      banner.appendChild(resume);
+      $queueChips.appendChild(banner);
+    }
+    for (const it of q.items) {
+      const chip = document.createElement("div");
+      chip.className = "queue-chip";
+      const label = document.createElement("span");
+      label.className = "queue-chip-text";
+      label.textContent = it.message;
+      label.title = it.message;
+      const rm = document.createElement("button");
+      rm.className = "queue-chip-del"; rm.innerHTML = "&times;"; rm.title = "Remove from queue";
+      rm.addEventListener("click", () => queueAction("/api/queue/remove", { sessionId: activeSessionId, id: it.id }));
+      chip.appendChild(label); chip.appendChild(rm);
+      $queueChips.appendChild(chip);
+    }
+  }
+
+  async function queueAction(url, body) {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const s = sessions.find((x) => x.sessionId === body.sessionId);
+      if (s) s.queue = { items: data.items, paused: data.paused };
+      renderQueue();
+      renderSessions();
+    } catch (err) {
+      alert(`Queue action failed: ${err.message}`);
+    }
+  }
+
+  // When the active session goes busy from a hub-dispatched queued turn, attach
+  // so we watch it live (the bridge buffers + replays; see reattach). Guarded so
+  // the 3s poll and the session_busy event don't fire overlapping attaches.
+  function ensureActiveAttached() {
+    if (!activeSessionId || activeStreaming || attachingActive) return;
+    const active = sessions.find((s) => s.sessionId === activeSessionId);
+    if (!active || !active.busy) return;
+    attachingActive = true;
+    const id = activeSessionId;
+    const attach = new AbortController();
+    if (activeAttach) activeAttach.abort();
+    activeAttach = attach;
+    Promise.resolve(attachStream(makeStreamHandler(id), scopedFetch(id, attach.signal)))
+      .catch(() => {})
+      .finally(() => { attachingActive = false; });
+  }
+
   // ── Session context menu (right-click) ──
 
   function closeSessionMenu() {
@@ -758,6 +853,19 @@ import { formatStats } from "/utils.js";
       if (msg.type === "session_done" && msg.sessionId !== activeSessionId) {
         fireNotification(msg.sessionName || msg.sessionId.slice(0, 8));
         loadSessions(); // refresh busy badges
+      } else if (msg.type === "queue") {
+        const s = sessions.find((x) => x.sessionId === msg.sessionId);
+        if (s) s.queue = { items: msg.items, paused: msg.paused };
+        if (msg.sessionId === activeSessionId) renderQueue();
+        renderSessions();
+      } else if (msg.type === "session_busy") {
+        // A queued turn started dispatching. Reflect busy + attach if it's ours.
+        const s = sessions.find((x) => x.sessionId === msg.sessionId);
+        if (s) s.busy = true;
+        if (msg.sessionId === activeSessionId) { setBusy(true); ensureActiveAttached(); }
+        renderSessions();
+      } else if (msg.type === "queue_error" && msg.sessionId !== activeSessionId) {
+        fireNotification(`${msg.sessionName || msg.sessionId.slice(0, 8)}: queue paused`);
       }
     };
     es.onerror = () => {}; // EventSource auto-reconnects

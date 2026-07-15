@@ -198,10 +198,12 @@ describe("shouldSend", () => {
     { name: "whitespace text → false", text: "   ", isStreaming: false, expected: false },
     { name: "streaming → false", text: "hello", isStreaming: true, expected: false },
     { name: "empty + streaming → false", text: "", isStreaming: true, expected: false },
+    { name: "streaming + allowWhileStreaming → true", text: "hello", isStreaming: true, allow: true, expected: true },
+    { name: "empty + streaming + allowWhileStreaming → false", text: "  ", isStreaming: true, allow: true, expected: false },
   ];
   for (const c of cases) {
     test(c.name, () => {
-      assert.equal(shouldSend(c.text, c.isStreaming), c.expected);
+      assert.equal(shouldSend(c.text, c.isStreaming, c.allow), c.expected);
     });
   }
 });
