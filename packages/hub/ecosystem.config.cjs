@@ -11,6 +11,12 @@ module.exports = {
       name: "pi-webui-hub",
       script: "src/server.js",
       cwd: __dirname,
+      // The hub spawns pi sessions as detached children (the "+" / open-by-ID
+      // buttons). PM2's default treekill would SIGKILL that whole subtree on
+      // every restart — killing the user's live sessions whenever the hub is
+      // restarted for a code change. Kill only the hub; detached sessions
+      // (setsid via spawn's detached:true) reparent to init and survive.
+      treekill: false,
       env: {
         PI_HUB_PORT: "8730",
       },
