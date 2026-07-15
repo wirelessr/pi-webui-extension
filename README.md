@@ -1,274 +1,170 @@
-# HTTP Bridge Extension
+# pi WebUI
 
-HTTP server extension for pi that enables external scripts and mobile devices to interact with an active pi session. Supports both a curl-friendly JSON API and a WebUI with SSE streaming.
+A WebUI + HTTP bridge for [pi](https://pi.dev) coding-agent sessions. Two ways
+to use it:
 
-## Quick Start
+- **Per-session** — an in-process extension gives each pi session its own
+  HTTP bridge + WebUI (curl-friendly JSON API and an SSE-streaming browser UI).
+- **Central hub** (optional) — a single browser entry point that reverse-
+  proxies and aggregates every session, switches between them in-page (no
+  navigation), and notifies you when a session you're *not* looking at finishes.
 
-The extension auto-loads when pi starts. Open the WebUI in your browser:
+The hub is additive: install just the extension for per-session mode, or run
+the hub in front of it for a single-pane, cross-session experience.
+
+## Monorepo layout
+
+npm workspaces, three packages:
 
 ```
-http://<your-lan-ip>:7331
+packages/
+  components/   @wirelessr/pi-webui-components  — shared browser UI + pure modules
+  extension/    pi-webui-extension              — in-process pi bridge (Node/Hono)
+  hub/          pi-webui-hub                     — central aggregator service
 ```
 
-The TUI displays the actual URL on session start, e.g.:
+- **components** is consumed by both the extension (standalone WebUI) and the
+  hub (its SPA). It has a node-safe `parsers` export the extension imports.
+- **extension** and **hub** share nothing at runtime except components + the
+  discovery-file format.
+
+## Why the hub can't replace the per-session bridges
+
+`pi.sendUserMessage` and the `agent_*` events are only reachable **inside** a
+pi session process. A separate hub process cannot drive another session's
+agent directly, so every session keeps its own in-process bridge. The hub is
+a reverse proxy + aggregator in front of them, not a replacement.
+
+## Quick start
+
+### Per-session (the extension)
+
+Deployed into `~/.pi/agent/extensions/pi-webui-extension/` (see Deployment).
+pi auto-loads it; each session prints its URL on startup:
 
 ```
 HTTP bridge: http://192.168.1.42:7331 (session: abc123)
 ```
 
-For curl:
+Open that URL, or curl it:
 
 ```bash
 curl -X POST http://localhost:7331/api/prompt -d 'Run the tests'
 ```
 
-## Architecture
+### Hub
 
-Each pi session is a separate process with its own extension instance. There is no singleton or cross-session broker. The extension auto-allocates a port (starting from `PI_HTTP_PORT`) and writes a per-session discovery file to a shared directory.
-
-The HTTP layer uses [Hono](https://hono.dev) with [`@hono/zod-openapi`](https://github.com/honojs/middleware/tree/main/packages/zod-openapi) — routes are defined with zod schemas, and an OpenAPI spec is auto-generated as a byproduct. Swagger UI is served at `/api/docs`.
-
-The WebUI is vanilla JS ES modules with no build step. Browser-native module loading with `Cache-Control: no-cache` for hot reload on refresh.
-
-## API
-
-Interactive API docs (Swagger UI) available at `http://<your-lan-ip>:7331/api/docs`.
-
-OpenAPI spec at `http://<your-lan-ip>:7331/api/openapi.json`.
-
-Key endpoints:
-
-- `POST /api/prompt` — Send message (JSON or plain text, supports SSE streaming)
-- `GET /api/sessions` — List all active sessions
-- `POST /api/new-session` / `POST /api/kill-session` — Session lifecycle
-- `POST /api/rename-session` / `POST /api/reload` — Session management
-- `GET /api/history` — Conversation history (paginated)
-- `GET /api/commands` — Available skills and templates
-- `POST /api/abort` — Abort current operation
-
-## API Usage
-
-### POST /api/prompt
-
-Accepts plain text or JSON body.
-
-**Plain text:**
 ```bash
-curl -X POST http://localhost:7331/api/prompt -d 'What is 2+2?'
+npm install                                       # from the repo root (links workspaces)
+pm2 start packages/hub/ecosystem.config.cjs       # or: node packages/hub/src/server.js
 ```
 
-**JSON with options:**
-```bash
-curl -X POST http://localhost:7331/api/prompt \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize /tmp/report.csv","full":true,"timeout":600000}'
-```
+Open `http://<host>:8730/`. See [packages/hub/README.md](packages/hub/README.md)
+for routes, config, and the cross-session notification design.
 
-**SSE streaming:**
-```bash
-curl -N -H 'Accept: text/event-stream' \
-  -X POST http://localhost:7331/api/prompt -d 'What is 2+2?'
-```
+## API (per-session bridge)
 
-### GET /api/history
+The hub exposes the same API per session under `/s/<sessionId>/...`.
 
-Returns conversation history from the session JSONL file. Paginated from the tail.
+Interactive docs (Swagger UI) at `/api/docs`; OpenAPI at `/api/openapi.json`.
 
-```
-GET /api/history?limit=50&offset=0
-```
+- `POST /api/prompt` — send a message (JSON or plain text; SSE with `Accept: text/event-stream`)
+- `GET /api/history?limit=&offset=` — conversation history (paginated from the tail)
+- `GET /api/sessions` — all active sessions on this machine
+- `GET /api/commands` — skills + prompt templates + executable builtins
+- `POST /api/new-session` / `kill-session` / `rename-session` / `reload` — lifecycle
+- `POST /api/abort` — abort the current turn
+- `POST /api/upload` — upload a pasted image, returns a saved file path
+- `GET /api/stream/attach` — re-attach to an in-progress (or just-finished) stream
 
-- `limit`: Max entries to return (0 = all)
-- `offset`: Number of entries to skip from the end (0 = most recent)
-- Response: `{ history: [...], total: 123 }`
-
-### SSE Event Format
+### SSE event format
 
 ```
 data: {"type":"agent_start"}
 data: {"type":"text_delta","delta":"Hello"}
 data: {"type":"tool_execution_start","toolName":"bash","args":{...}}
-data: {"type":"tool_execution_end","toolName":"bash","isError":false}
 data: {"type":"done","text":"...","toolCalls":[...],"messages":[...]}
 ```
 
-Event types: `agent_start`, `turn_start`, `turn_end`, `text_start`, `text_delta`, `text_end`, `thinking_start`, `thinking_delta`, `thinking_end`, `toolcall_start`, `toolcall_end`, `tool_execution_start`, `tool_execution_end`, `done`, `error`.
-
-### JSON Response (non-streaming)
-
-```json
-{
-  "text": "Here's the summary...",
-  "toolCalls": ["bash({\"command\":\"ls\"})"],
-  "thinking": "Let me analyze this...",
-  "messageCount": 5
-}
-```
+Types: `agent_start`, `turn_start`, `turn_end`, `text_*`, `thinking_*`,
+`toolcall_*`, `tool_execution_start`, `tool_execution_end`, `done`, `error`.
 
 ## WebUI
 
-### Session Management
+Both UIs share the components package, so rendering (markdown, streaming,
+tool/thinking/subagent blocks) is identical.
 
-The sessions sidebar is a global management panel for all pi sessions on this machine:
+- **Per-session** (`app.js`): one session per page; the session sidebar
+  navigates between per-port pages.
+- **Hub** (`hub-app.js`): all sessions in one page; the sidebar switches the
+  active session **in-page** so the page and its SSE survive — which is what
+  lets the hub notify for background sessions. Session management (new / close /
+  reload / rename) is proxied to the bridges; "new" is spawned by the hub
+  itself so it works even with zero existing sessions.
 
-- **New session**: `+` button spawns a new pi session in RPC mode (detached)
-- **Close session**: `×` button terminates a session by PID (cannot close the last session)
-- **Rename session**: Double-click a session name, or right-click → Rename. Persists to session JSONL.
-- **Reload all**: `⟳` button respawns all sessions with fresh extension code. Each session resumes its own session file.
-- **Right-click context menu**: Rename and Close on each session item
-- **QR code button**: Scan to connect a mobile device to that session's URL
-- **Click a session**: Navigate to that session's WebUI in-place
+## Deployment
 
-Cross-session API calls use CORS headers (`Access-Control-Allow-Origin: *`).
+### Extension (per-session)
 
-### Chat
-
-- Conversation history persists across refresh (loaded from session JSONL via `/api/history`)
-- Markdown rendering with streaming, tool/thinking blocks
-- Right-click any message to copy text
-
-### Desktop (>= 700px)
-
-Three-column layout:
-
-```
-┌──────────┬─────────────────────────┬────────────────┐
-│ sessions │  chat messages          │ commands  (42) │
-│          │                         │ /skill:gh      │
-│ session1 │                         │ /skill:jira    │
-│ session2 │  [textarea]      [Send] │ /fix-tests     │
-└──────────┴─────────────────────────┴────────────────┘
-```
-
-- **Left sidebar**: All active sessions. Current session highlighted. Click to switch in-place.
-- **Center**: Chat area with markdown rendering, streaming, tool/thinking blocks. History persists across refresh (loaded from session JSONL).
-- **Right sidebar**: All skills and prompt templates. Filters in real-time as you type `/` in the input box. Free-text matching (substring, word boundary, description). Arrow keys to navigate, Enter/Tab to insert.
-
-### Mobile (< 700px)
-
-Bottom tab bar with three views: sessions, chat, commands.
-
-```
-┌─────────────────────┐
-│  pi bridge  :7331   │
-├─────────────────────┤
-│   active view       │
-├─────────────────────┤
-│ [textarea]  [Send]  │
-├─────────────────────┤
-│ sessions chat cmds  │
-└─────────────────────┘
-```
-
-- Typing `/` auto-switches to commands view
-- Selecting a command auto-switches back to chat
-- Safe-area insets for iPhone notch / home indicator
-- 16px input font to prevent iOS zoom-on-focus
-- 44px minimum touch targets
-
-## Skill / Template Expansion
-
-`pi.sendUserMessage()` bypasses pi's internal skill/template expansion (`expandPromptTemplates: false`). This extension manually expands `/skill:name` and `/template` commands before sending, replicating pi's `_expandSkillCommand` logic:
-
-1. Read the skill/template file from disk
-2. Strip YAML frontmatter
-3. Wrap in `<skill name="..." location="...">` block (same format as TUI)
-4. Append user args after the block
-
-Built-in commands are loaded dynamically from pi's `BUILTIN_SLASH_COMMANDS` export. Only executable builtins (currently `/compact`) are shown in the WebUI command list. TUI-only commands are not exposed. `/compact` is executable via `POST /api/command`, which calls `ctx.compact()`.
-
-Extension commands (`/cmd`) are not supported via HTTP because they require pi's internal command handler, not text expansion. Use the TUI for those.
-
-## Discovery Files
-
-Each session writes a JSON file to `<extension-dir>/data/<session-id>.json`:
-
-```json
-{
-  "port": 7331,
-  "host": "0.0.0.0",
-  "lanIp": "192.168.1.42",
-  "url": "http://192.168.1.42:7331",
-  "sessionFile": "/Users/ctw/.pi/agent/sessions/.../abc123.jsonl",
-  "sessionId": "abc123",
-  "sessionName": "data-analysis",
-  "pid": 12345,
-  "startedAt": 1720000000000
-}
-```
-
-Stale files from crashed sessions are cleaned on startup (PID liveness check).
-
-Batch scripts can discover sessions:
+The deployed extension dir is self-contained (components are vendored, no
+registry needed). From the repo:
 
 ```bash
-# Find session by name
-PORT=$(jq -r '.port' <extension-dir>/data/*.json | jq -s 'map(select(.sessionName=="data-analysis")) | .[0].port')
-curl -X POST http://localhost:$PORT -d 'Analysis done'
+# copy packages/extension/* into ~/.pi/agent/extensions/pi-webui-extension/
+# vendor components into vendor/pi-webui-components/
+# set the components dep to file:./vendor/pi-webui-components, then:
+npm install
 ```
+
+Existing sessions keep their in-memory code until reloaded (`⟳` in the UI or
+`/reload` in the TUI); a reload resumes the same session file.
+
+### Hub
+
+PM2 (`packages/hub/ecosystem.config.cjs`). `pm2 save` to persist across the
+daemon restarting; `pm2 startup` (needs sudo) for boot. The hub reads the
+extension's discovery dir (`PI_BRIDGE_DIR`, default
+`~/.pi/agent/extensions/pi-webui-extension/data`).
 
 ## Configuration
 
-Environment variables (set before starting pi):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PI_HTTP_PORT` | `7331` | Starting port for auto-allocation |
-| `PI_HTTP_HOST` | `0.0.0.0` | Bind address |
-| `PI_BRIDGE_DIR` | `<extension-dir>/data` | Discovery file directory |
-
-For local-only access: `PI_HTTP_HOST=127.0.0.1`
+| Variable | Default | Where | Description |
+|----------|---------|-------|-------------|
+| `PI_HTTP_PORT` | `7331` | extension | starting port for auto-allocation |
+| `PI_HTTP_HOST` | `0.0.0.0` | extension | bind address |
+| `PI_BRIDGE_DIR` | `<ext-dir>/data` | extension + hub | discovery-file directory |
+| `PI_HUB_PORT` | `8730` | hub | hub listen port |
+| `PI_HUB_HOST` | `0.0.0.0` | hub | hub bind address |
 
 ## Security
 
-Binding to `0.0.0.0` exposes the bridge to anyone on your network. There is **no authentication**. Anyone who can reach the port can send messages to your agent and read responses.
-
-- Only use on trusted networks (home WiFi, not public WiFi)
-- For local-only use, set `PI_HTTP_HOST=127.0.0.1`
-- Future: token-based auth could be added
-
-## Hot Reload
-
-| What changed | How to apply | Session preserved? |
-|--------------|-------------|-------------------|
-| Web UI files (HTML/CSS/JS) | Browser refresh | Yes |
-| Extension TypeScript | `/reload` in TUI or `⟳` in WebUI | Yes (session file resumed) |
-
-## Installation
-
-Clone into pi's extensions directory:
-
-```bash
-cd ~/.pi/agent/extensions/
-git clone <repo-url> pi-webui-extension
-```
-
-pi auto-discovers `extensions/*/index.ts` on startup. No additional configuration needed.
+Binding to `0.0.0.0` exposes the bridge/hub to your network with **no
+authentication** — anyone who can reach the port can drive your agent. Use
+only on trusted networks, or set the host to `127.0.0.1` for local-only.
 
 ## Development
 
-Tests for extracted pure-logic modules (SSE parsing, stream accumulation, command filtering, session management, flow control, UI behaviors, HTTP integration) plus markdown rendering and HTML escaping:
+npm workspaces; Node's built-in test runner; no external test framework.
 
 ```bash
-node --test test/*.test.js
+npm install                 # link workspaces
+npm test                    # run every package's tests
+npx biome check packages/   # lint
 ```
 
-Uses Node.js built-in test runner. No external test framework or dependencies required. Behavior modules are maintained at 100% line coverage (CI-enforced).
+Behavior/pure modules are kept at **100% line coverage** (CI-enforced per
+package). CI (`.github/workflows/ci.yml`) lints `packages/` and runs each
+package's tests + coverage gate on every push/PR.
 
-Lint:
-
-```bash
-npx biome check http-bridge-web/ index.ts bridge-app.js test/
-```
-
-CI runs on every push and PR via GitHub Actions.
+Pure logic is extracted from IO so it's unit-testable: SSE parsing, stream
+accumulation, command filtering, session/spawn helpers, flow control, UI
+behaviors, markdown, and the hub's proxy-path / session-list / busy-transition
+helpers. Treat the tests as the behavioral spec.
 
 ## Limitations
 
-- One request at a time per session; concurrent requests get HTTP 409
-- Don't type in the TUI while a request is in flight (agent processes one turn at a time)
-- Extension commands (`/cmd`) not supported via HTTP
-- Most built-in commands are TUI-only; only `/compact` is executable from WebUI
-- Session reload uses self-respawn (process exit + new process), not `ctx.reload()` (which is only available on `ExtensionCommandContext`)
-- Default response timeout is 5 minutes
-- No authentication
+- One request at a time per session (concurrent → HTTP 409).
+- Extension `/cmd` commands aren't available over HTTP; only `/compact` is.
+- Hub busy→idle detection is poll-based (~2s): a sub-2s reply won't raise a
+  cross-session notification (you'd see it anyway).
+- No authentication.
