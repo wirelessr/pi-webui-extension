@@ -45,6 +45,25 @@ export function buildOpenSessionCommand({ sessionId, name, logFile, prefix = "[n
 }
 
 /**
+ * Build the sh command string for cloning a session — pi's `--fork` copies the
+ * session's history into a brand-new session with its own id. Like resume, the
+ * caller must spawn it from the source session's original cwd (fork reads the
+ * project-bound session file; pi rejects the wrong project directory).
+ * @param {object} opts
+ * @param {string} opts.sessionId — source session UUID or path to fork
+ * @param {string} [opts.name] — optional display name for the clone
+ * @param {string} opts.logFile — stderr log file path
+ * @param {string} [opts.prefix] — log-line prefix (default `[new]`)
+ * @returns {string} sh command string
+ */
+export function buildForkSessionCommand({ sessionId, name, logFile, prefix = "[new]" }) {
+  const escapedId = sessionId.replace(/"/g, '\\"');
+  const escapedLog = logFile.replace(/"/g, '\\"');
+  const nameArg = name ? ` --name "${name.replace(/"/g, '\\"')}"` : "";
+  return `tail -f /dev/null | pi --mode rpc${nameArg} --fork "${escapedId}" 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> "${escapedLog}"`;
+}
+
+/**
  * Resolve an existing session's original working directory from its pi session
  * log. Essential for resume: pi refuses to resume a session launched from the
  * wrong directory ("Session found in different project"), so a bad cwd makes

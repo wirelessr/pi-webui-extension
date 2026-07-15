@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
+import { buildForkSessionCommand, buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { normalizeState, pruneState } from "../public/hub-state-logic.js";
 import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "./hub-helpers.js";
 
@@ -174,6 +174,22 @@ function openSession(sessionId, name) {
   return child.pid;
 }
 
+// Clone (fork) an existing session into a new one. Like resume, cwd must be the
+// source session's original directory (fork reads its project-bound file), so
+// it's auto-resolved with the shared findSessionCwd.
+function cloneSession(sessionId, name) {
+  const cmd = buildForkSessionCommand({ sessionId, name, logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-clone]" });
+  const child = spawn("sh", ["-c", cmd], {
+    cwd: findSessionCwd(sessionId) || homedir(),
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
+  });
+  child.unref();
+  if (!child.pid) throw new Error("spawn failed");
+  return child.pid;
+}
+
 function readJsonBody(req) {
   return new Promise((resolve) => {
     let body = "";
@@ -304,6 +320,24 @@ const server = createServer(async (req, res) => {
     }
     try {
       const pid = openSession(body.sessionId, body.name);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, pid }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (url === "/api/clone-session" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    if (!body.sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sessionId is required" }));
+      return;
+    }
+    try {
+      const pid = cloneSession(body.sessionId, body.name);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, pid }));
     } catch (err) {

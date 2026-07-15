@@ -25,7 +25,21 @@
     .group-body { padding-left: 10px; border-left: 2px solid rgba(128,128,128,0.25); margin-left: 6px; min-height: 6px; }
     .group.collapsed .group-body { display: none; }
     .group.group-dragging { opacity: 0.45; }
-  </style>
+    .ctx-menu {
+      position: fixed; z-index: 1000; min-width: 172px; max-width: 260px;
+      background: var(--bg-surface, #23232a); color: var(--text, #e0e0e0);
+      border: 1px solid var(--border, rgba(128,128,128,0.35));
+      border-radius: var(--radius-sm, 6px); padding: 4px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.4); font-size: 13px;
+    }
+    .ctx-item {
+      padding: 6px 10px; border-radius: 4px; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ctx-item:hover { background: var(--bg-surface-hover, rgba(128,128,128,0.2)); }
+    .ctx-item.disabled { opacity: 0.5; cursor: default; }
+    .ctx-sep { height: 1px; background: var(--border, rgba(128,128,128,0.25)); margin: 4px 2px; }
+</style>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>hub</text></svg>">
 </head>
 <body>

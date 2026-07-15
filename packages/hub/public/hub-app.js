@@ -15,7 +15,7 @@ import { abortAgent, attachStream, getCommands, getHistory, getStatus, killSessi
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
-import { addGroup, displayLayout, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
+import { addGroup, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { formatStats } from "/utils.js";
@@ -45,6 +45,7 @@ import { formatStats } from "/utils.js";
   let hubState = { items: [] }; // interleaved sidebar layout (sessions + groups)
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
   let draggingGroupId = null; // group being dragged (reorders groups)
+  let openMenu = null; // open session context menu element (right-click)
   let activeStreaming = false; // a live stream is feeding the active header (so the poll must not override it)
   let activePromptAbort = null; // AbortController for the active session's outgoing /api/prompt stream
 
@@ -286,6 +287,7 @@ import { formatStats } from "/utils.js";
     el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
     el.querySelector(".close-btn").addEventListener("click", (e) => { e.stopPropagation(); handleClose(s); });
     el.addEventListener("click", () => { if (s.sessionId !== activeSessionId) switchTo(s.sessionId); });
+    el.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); showSessionMenu(s, e.clientX, e.clientY); });
     el.addEventListener("dragstart", (e) => { e.stopPropagation(); draggingSid = s.sessionId; el.classList.add("dragging"); });
     el.addEventListener("dragend", () => {
       el.classList.remove("dragging");
@@ -627,6 +629,97 @@ import { formatStats } from "/utils.js";
       }
       return false;
     }, 300, 8);
+  }
+
+  // Clone (fork) a session into a new one that carries its history, then switch
+  // to it. Mirrors handleNew's spawn → poll-for-discovery → switch flow.
+  async function handleClone(s) {
+    const prevIds = new Set(sessions.map((x) => x.sessionId));
+    const srcName = s.sessionName || s.sessionId.slice(0, 8);
+    try {
+      const res = await fetch("/api/clone-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: s.sessionId, name: `${srcName} (copy)` }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    } catch (err) {
+      alert(`Clone failed: ${err.message}`);
+      return;
+    }
+    const fresh = await pollUntil(async () => {
+      const data = await (await fetch("/api/sessions")).json();
+      sessions = data.sessions || [];
+      return (data.sessions || []).find((x) => !prevIds.has(x.sessionId)) || false;
+    }, 1000, 15);
+    renderSessions();
+    if (fresh) switchTo(fresh.sessionId);
+    else alert(`Clone of "${srcName}" did not appear.\nCheck the source session has saved history.`);
+  }
+
+  // ── Session context menu (right-click) ──
+
+  function closeSessionMenu() {
+    if (!openMenu) return;
+    openMenu.remove();
+    openMenu = null;
+    document.removeEventListener("click", closeSessionMenu);
+    document.removeEventListener("keydown", onMenuKey);
+    window.removeEventListener("blur", closeSessionMenu);
+  }
+  function onMenuKey(e) { if (e.key === "Escape") closeSessionMenu(); }
+
+  function showSessionMenu(s, x, y) {
+    closeSessionMenu();
+    const menu = document.createElement("div");
+    menu.className = "ctx-menu";
+    const add = (label, fn, { disabled = false } = {}) => {
+      const item = document.createElement("div");
+      item.className = `ctx-item${disabled ? " disabled" : ""}`;
+      item.textContent = label;
+      if (!disabled) item.addEventListener("click", (e) => { e.stopPropagation(); closeSessionMenu(); fn(); });
+      menu.appendChild(item);
+    };
+    const sep = () => { const d = document.createElement("div"); d.className = "ctx-sep"; menu.appendChild(d); };
+
+    add("Rename", () => handleRename(s));
+
+    sep();
+    const groups = hubState.items.filter((it) => it.type === "group");
+    const curGroup = groups.find((g) => g.members.includes(s.sessionId));
+    const targets = groups.filter((g) => g.id !== curGroup?.id);
+    if (targets.length === 0 && !curGroup) {
+      add("Move to group…", () => {}, { disabled: true });
+    }
+    for (const g of targets) {
+      add(`Move to "${g.name}"`, () => { hubState = moveToGroup(hubState, s.sessionId, g.id); persistHubState(); renderSessions(); });
+    }
+    add("New group…", () => {
+      const name = prompt("New group name:", "group");
+      if (name == null) return;
+      const id = makeGroupId();
+      hubState = addGroup(hubState, { id, name: name.trim() || "group" });
+      hubState = moveToGroup(hubState, s.sessionId, id);
+      persistHubState();
+      renderSessions();
+    });
+    if (curGroup) add("Remove from group", () => { hubState = moveToGroup(hubState, s.sessionId, null); persistHubState(); renderSessions(); });
+
+    sep();
+    add("Clone", () => handleClone(s));
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 4))}px`;
+    openMenu = menu;
+    // Defer listener attach so the opening right-click/click doesn't instantly close it.
+    setTimeout(() => {
+      if (!openMenu) return;
+      document.addEventListener("click", closeSessionMenu);
+      document.addEventListener("keydown", onMenuKey);
+      window.addEventListener("blur", closeSessionMenu);
+    }, 0);
   }
 
   async function handleReloadAll() {

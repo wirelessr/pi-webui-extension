@@ -107,6 +107,30 @@ export function removeGroup(state, id) {
 }
 
 /**
+ * Move a session into a group (gid) or back to the top level (gid null).
+ * The session is first removed from wherever it currently sits (top-level or
+ * any group's members), preserving the single-appearance invariant. When gid
+ * names an existing group the session is appended to that group's members;
+ * otherwise it becomes a top-level session at the end of the list.
+ */
+export function moveToGroup(state, sid, gid) {
+  let target = null;
+  const items = [];
+  for (const it of state.items) {
+    if (it.type === "group") {
+      const g = { ...it, members: it.members.filter((id) => id !== sid) };
+      if (g.id === gid) target = g;
+      items.push(g);
+    } else if (it.id !== sid) {
+      items.push(it);
+    }
+  }
+  if (target) target.members.push(sid);
+  else items.push({ type: "session", id: sid });
+  return { items };
+}
+
+/**
  * Rebuild items from a DOM-derived layout (after a drag). `layout` is the new
  * top-level sequence: [{type:"session",id} | {type:"group",id,members:[...]}].
  * Group name/collapsed are preserved from the current state by id.
