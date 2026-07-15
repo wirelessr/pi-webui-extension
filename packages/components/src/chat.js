@@ -24,7 +24,13 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   const subagentViews = new Map();
   let activeSubagentId = null;
   let parentScrollTop = 0;
-  let savedMessagesHTML = "";
+  // The subagent view is a sibling that overlays the chat: opening it hides
+  // $messages (never destroys/re-serializes it), so the main chat's DOM and the
+  // live incremental-render pointers into it survive open/close intact.
+  const $subagentView = document.createElement("div");
+  $subagentView.className = "subagent-view";
+  $subagentView.style.display = "none";
+  $chat.appendChild($subagentView);
 
   // ── Scroll ──
 
@@ -189,9 +195,16 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     if (!view) return;
     activeSubagentId = id;
     parentScrollTop = $chat.scrollTop;
-    savedMessagesHTML = $messages.innerHTML;
-    $messages.innerHTML = "";
+    $messages.style.display = "none";
+    $subagentView.style.display = "";
+    renderSubagentView(view);
+    forceScrollToBottom();
+  }
 
+  // Render (or re-render) the active subagent's transcript into $subagentView.
+  // Only $subagentView is cleared — $messages is left untouched.
+  function renderSubagentView(view) {
+    $subagentView.innerHTML = "";
     const header = document.createElement("div");
     header.className = "subagent-view-header";
     const backBtn = document.createElement("button");
@@ -213,7 +226,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     header.appendChild(backBtn);
     header.appendChild(title);
     header.appendChild(taskEl);
-    $messages.appendChild(header);
+    $subagentView.appendChild(header);
 
     const entries = parseSubagentMessages(view.messages);
     _lastSubagentAssistantEl = null;
@@ -221,7 +234,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     for (const entry of entries) {
       renderSubagentEntry(entry);
     }
-    forceScrollToBottom();
   }
 
   let _lastSubagentAssistantEl = null;
@@ -232,7 +244,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
       const el = document.createElement("div");
       el.className = "message user";
       el.innerHTML = escapeHtml(entry.text || "");
-      $messages.appendChild(el);
+      $subagentView.appendChild(el);
       _lastSubagentAssistantEl = null;
     } else if (entry.role === "assistant") {
       const el = document.createElement("div");
@@ -255,7 +267,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
         }
       }
       if (el.children.length > 0) {
-        $messages.appendChild(el);
+        $subagentView.appendChild(el);
         _lastSubagentAssistantEl = el;
       }
     } else if (entry.role === "toolResult") {
@@ -271,26 +283,19 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
         resultEl.textContent = entry.text;
         if (entry.isError) resultEl.classList.add("error");
         el.appendChild(resultEl);
-        $messages.appendChild(el);
+        $subagentView.appendChild(el);
       }
     }
   }
 
   function closeSubagentView() {
     activeSubagentId = null;
-    $messages.innerHTML = savedMessagesHTML;
-    savedMessagesHTML = "";
+    $subagentView.style.display = "none";
+    $subagentView.innerHTML = "";
+    $messages.style.display = "";
     $chat.scrollTop = parentScrollTop;
-    // innerHTML restore drops event listeners on subagent open buttons.
-    // Re-bind them so subagent views can be re-opened.
-    $messages.querySelectorAll(".subagent-open-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const block = btn.closest(".subagent-block");
-        const id = block?.dataset?.subagentId;
-        if (id) openSubagentView(id);
-      });
-    });
+    // $messages was only hidden, never rebuilt — its open-button listeners and
+    // the live incremental-render pointers are still intact. No re-bind needed.
   }
 
   function updateSubagentViews(toolCallId, details) {
@@ -298,30 +303,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     for (const view of views) {
       subagentViews.set(view.id, view);
       if (activeSubagentId === view.id) {
-        // Re-render the subagent view if currently viewing this subagent
-        const header = $messages.querySelector(".subagent-view-header");
-        if (header) {
-          // Update title stats
-          const title = header.querySelector(".subagent-view-title");
-          if (title) {
-            title.textContent = `${statusIcon(view.status)} subagent: ${view.agent}  ${formatUsage(view.usage)}`;
-            if (view.model) {
-              const modelSpan = document.createElement("span");
-              modelSpan.className = "subagent-view-model";
-              modelSpan.textContent = view.model;
-              title.appendChild(modelSpan);
-            }
-          }
-          // Re-render messages (simple approach: clear and redraw)
-          const headerEl = $messages.querySelector(".subagent-view-header");
-          $messages.innerHTML = "";
-          $messages.appendChild(headerEl);
-          const entries = parseSubagentMessages(view.messages);
-          _lastSubagentAssistantEl = null;
-          subagentToolResultMap.clear();
-          for (const entry of entries) renderSubagentEntry(entry);
-          forceScrollToBottom();
-        }
+        // Live re-render the open subagent view ($subagentView only; $messages
+        // is untouched behind the overlay).
+        renderSubagentView(view);
+        forceScrollToBottom();
       } else {
         // Update the subagent block in parent view
         const block = $messages.querySelector(`.subagent-block[data-subagent-id="${view.id}"]`);
