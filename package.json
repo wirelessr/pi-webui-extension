@@ -8,7 +8,10 @@
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "lint": "biome check packages/"
+    "lint": "biome check packages/",
+    "set-version": "node scripts/set-version.mjs",
+    "build-dist": "node scripts/build-dist.mjs",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3"

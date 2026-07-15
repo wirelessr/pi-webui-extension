@@ -1,0 +1,67 @@
+name: release
+
+# Push a version tag and everything is handled: versions are re-stamped from
+# the tag (so a hand-bump that forgot the dep ranges or lockfile can't ship a
+# broken artifact), the suite runs, and the flat pi-installable extension is
+# published to the `release` branch + a GitHub Release.
+#
+#   npm run release 0.5.0   # bumps + commits + tags locally
+#   git push origin main --follow-tags
+#
+# Users install/update with:
+#   pi install git:github.com/wirelessr/pi-webui-extension@release
+#   pi update
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Derive version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Re-stamp versions from the tag (safety net against a partial bump)
+        run: node scripts/set-version.mjs "${{ steps.ver.outputs.version }}"
+
+      - name: Install, validate, test
+        run: |
+          npm install
+          npx biome check packages/
+          npm test
+
+      - name: Build flat pi-installable extension
+        run: node scripts/build-dist.mjs "${{ steps.ver.outputs.version }}" dist
+
+      - name: Publish to the release branch (single force-pushed artifact branch)
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "release ${GITHUB_REF_NAME}"
+          git push --force -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" HEAD:release
+
+      - name: Package tarball + GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -czf "pi-webui-extension-${GITHUB_REF_NAME}.tgz" -C dist .
+          gh release create "${GITHUB_REF_NAME}" \
+            "pi-webui-extension-${GITHUB_REF_NAME}.tgz" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
