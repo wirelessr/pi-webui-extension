@@ -30,7 +30,8 @@
       <div class="modal-content">
         <div class="modal-header">New / Open Session</div>
         <input id="session-id-input" class="modal-input" type="text" placeholder="Session ID to resume (empty = new session)" autocomplete="off" />
-        <input id="session-cwd-input" class="modal-input" type="text" placeholder="Working directory (empty = inherit current; ignored when resuming)" autocomplete="off" />
+        <input id="session-cwd-input" class="modal-input" type="text" list="session-cwd-candidates" placeholder="Working directory (empty = inherit current; ignored when resuming)" autocomplete="off" />
+        <datalist id="session-cwd-candidates"></datalist>
         <div class="modal-actions">
           <button id="session-modal-cancel" class="ghost-btn">Cancel</button>
           <button id="session-modal-ok" class="send-btn">OK</button>

@@ -256,6 +256,7 @@ import { formatStats } from "/utils.js";
   const $sessionModal = document.getElementById("new-session-modal");
   const $sessionIdInput = document.getElementById("session-id-input");
   const $sessionCwdInput = document.getElementById("session-cwd-input");
+  const $sessionCwdList = document.getElementById("session-cwd-candidates");
   const $sessionModalCancel = document.getElementById("session-modal-cancel");
   const $sessionModalOk = document.getElementById("session-modal-ok");
 
@@ -308,6 +309,11 @@ import { formatStats } from "/utils.js";
   function openSessionModal() {
     $sessionIdInput.value = "";
     $sessionCwdInput.value = "";
+    // Offer the cwds of currently-running sessions as pick-or-type candidates.
+    const cwds = [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].sort();
+    $sessionCwdList.innerHTML = cwds
+      .map((c) => `<option value="${c.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></option>`)
+      .join("");
     $sessionModal.classList.remove("hidden");
     $sessionIdInput.focus();
   }
