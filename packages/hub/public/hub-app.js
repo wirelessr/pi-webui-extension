@@ -46,6 +46,7 @@ import { formatStats } from "/utils.js";
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
   let draggingGroupId = null; // group being dragged (reorders groups)
   let activeStreaming = false; // a live stream is feeding the active header (so the poll must not override it)
+  let activePromptAbort = null; // AbortController for the active session's outgoing /api/prompt stream
 
   let toolsExpanded = localStorage.getItem("pi-hub-tools-expanded") === "true";
   const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded });
@@ -160,6 +161,11 @@ import { formatStats } from "/utils.js";
 
   async function switchTo(sessionId) {
     if (activeAttach) { activeAttach.abort(); activeAttach = null; }
+    // Release any outgoing prompt stream we were holding on the session we're
+    // leaving, so its bridge frees the SSE slot. Otherwise switching back can't
+    // re-attach (the bridge won't let attach steal an active prompt stream →
+    // 409). The turn keeps running on the bridge; re-attach resumes it live.
+    if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
     activeSessionId = sessionId;
     activeStreaming = false;
     renderSessions();
@@ -198,19 +204,45 @@ import { formatStats } from "/utils.js";
 
   // ── Send / stop (active session) ──
 
+  // doSendPrompt drives the shared chat/input directly and isn't session-aware,
+  // so wrap them to no-op once we've switched away — otherwise a prompt stream
+  // aborted on switch (or finishing in the background) would splatter its
+  // cleanup (error bubble, old-session history reload) onto the session we
+  // switched to.
+  function guardedFor(id) {
+    const g = (fn) => (...a) => { if (id === activeSessionId) return fn(...a); };
+    return {
+      chat: {
+        addMessage: g((...a) => chat.addMessage(...a)),
+        startAssistantMessage: g((...a) => chat.startAssistantMessage(...a)),
+        finishAssistantMessage: g((...a) => chat.finishAssistantMessage(...a)),
+        handleEvent: g((...a) => chat.handleEvent(...a)),
+        showError: g((...a) => chat.showError(...a)),
+        loadHistory: g((...a) => chat.loadHistory(...a)),
+      },
+      input: { setStreaming: g((s) => input.setStreaming(s)) },
+    };
+  }
+
   async function handleSend(text) {
     if (!activeSessionId) return;
     const id = activeSessionId;
     const f = scopedFetch(id);
+    const promptAbort = new AbortController();
+    if (activePromptAbort) activePromptAbort.abort();
+    activePromptAbort = promptAbort;
+    const streamFetch = scopedFetch(id, promptAbort.signal);
+    const guard = guardedFor(id);
     const result = await doSendPrompt({
-      text, chat, input,
+      text, chat: guard.chat, input: guard.input,
       setBusyFn: (b) => { if (id === activeSessionId) { setBusy(b); activeStreaming = b; } },
-      sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, onEvent, f),
+      sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, onEvent, streamFetch),
       getHistoryFn: () => getHistory(f),
       getStatusFn: () => getStatus(f),
       onCompleteFn: () => notifyActiveDone(activeName()),
       onStatusUpdateFn: (status) => { if (id === activeSessionId) updateHeader(status); },
     });
+    if (activePromptAbort === promptAbort) activePromptAbort = null;
     if (result && !result.completed && id === activeSessionId) {
       // dropped stream — reattach
       const attach = new AbortController();
