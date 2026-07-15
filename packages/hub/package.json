@@ -1,6 +1,6 @@
 {
   "name": "pi-webui-hub",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Central hub: single web entry that reverse-proxies and aggregates all pi WebUI sessions",
