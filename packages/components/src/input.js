@@ -39,6 +39,7 @@ export function createInput({
   onSend,
   onSelectCommand,
   onStop,
+  allowQueueWhileStreaming = false,
 }) {
   let isStreaming = false;
 
@@ -152,7 +153,7 @@ export function createInput({
 
   function sendMessage() {
     const text = $input.value.trim();
-    if (!shouldSend(text, isStreaming)) return;
+    if (!shouldSend(text, isStreaming, allowQueueWhileStreaming)) return;
 
     $input.value = "";
     autoResize();

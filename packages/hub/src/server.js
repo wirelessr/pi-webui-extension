@@ -132,7 +132,9 @@ async function pollBusy() {
     busyState = nextBusy;
     for (const d of done) {
       broadcast({ type: "session_done", sessionId: d.sessionId, sessionName: d.sessionName });
+      dispatchQueue(d.sessionId); // a just-idle session drains its queue next
     }
+    pruneQueues(sessions.map((s) => s.sessionId));
   } finally {
     polling = false;
   }
@@ -140,6 +142,93 @@ async function pollBusy() {
 
 function currentBusy(sessionId) {
   return busyState.get(sessionId) ?? null;
+}
+
+// ── Per-session message queue (in-memory, no persistence) ──
+// Messages fired while a session is busy queue here; the hub dispatches the
+// next one whenever that session goes idle (driven by the busy watcher above),
+// so a queue keeps draining even after the user switches away. On a dispatch
+// failure the whole session's queue pauses until the user resumes it.
+
+const msgQueues = new Map(); // sessionId -> [{ id, message }]
+const dispatching = new Set(); // sessionId currently draining (in-flight lock)
+const pausedSessions = new Set(); // sessionId paused after a dispatch failure
+let queueSeq = 0;
+
+function queueSnapshot(sessionId) {
+  const items = (msgQueues.get(sessionId) || []).map((x) => ({ id: x.id, message: x.message }));
+  return { items, paused: pausedSessions.has(sessionId) };
+}
+
+function broadcastQueue(sessionId) {
+  broadcast({ type: "queue", sessionId, ...queueSnapshot(sessionId) });
+}
+
+// Drain a session's queue back-to-back while it stays idle. Non-streaming
+// /api/prompt (sendAndWait) is used deliberately: it doesn't hold the bridge's
+// SSE slot, so a browser viewing the session can still attach to watch the
+// dispatched turn live. A large timeout prevents the 5-min default from
+// aborting a long turn.
+async function dispatchQueue(sessionId) {
+  if (dispatching.has(sessionId) || pausedSessions.has(sessionId)) return;
+  const q = msgQueues.get(sessionId);
+  if (!q || q.length === 0) return;
+  const session = pickSession(listSessions(), sessionId);
+  if (!session) return; // gone; queue is pruned by the watcher
+  const busy = await fetchBusy(session);
+  if (!busy || busy.busy) return; // unknown or still busy → wait for the watcher
+  dispatching.add(sessionId);
+  try {
+    while (q.length > 0 && !pausedSessions.has(sessionId)) {
+      const item = q[0];
+      broadcast({ type: "session_busy", sessionId });
+      const res = await fetch(`http://localhost:${session.port}/api/prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: item.message, timeout: 86_400_000 }),
+      });
+      if (!res.ok) throw new Error(`bridge HTTP ${res.status}`);
+      await res.json(); // resolves when the turn completes (session idle again)
+      q.shift();
+      broadcastQueue(sessionId);
+    }
+  } catch (err) {
+    pausedSessions.add(sessionId);
+    broadcastQueue(sessionId);
+    broadcast({ type: "queue_error", sessionId, message: err.message });
+  } finally {
+    dispatching.delete(sessionId);
+  }
+}
+
+function enqueueMessage(sessionId, message) {
+  if (!msgQueues.has(sessionId)) msgQueues.set(sessionId, []);
+  const item = { id: ++queueSeq, message };
+  msgQueues.get(sessionId).push(item);
+  broadcastQueue(sessionId);
+  dispatchQueue(sessionId); // fire-and-forget; sends now if the session is idle
+  return item;
+}
+
+function removeQueued(sessionId, id) {
+  const q = msgQueues.get(sessionId);
+  if (!q) return;
+  const i = q.findIndex((x) => x.id === id);
+  if (i !== -1) q.splice(i, 1);
+  broadcastQueue(sessionId);
+}
+
+function resumeQueue(sessionId) {
+  pausedSessions.delete(sessionId);
+  broadcastQueue(sessionId);
+  dispatchQueue(sessionId);
+}
+
+// Drop queue state for sessions that no longer exist.
+function pruneQueues(liveIds) {
+  const live = new Set(liveIds);
+  for (const sid of msgQueues.keys()) if (!live.has(sid)) msgQueues.delete(sid);
+  for (const sid of [...pausedSessions]) if (!live.has(sid)) pausedSessions.delete(sid);
 }
 
 // Spawn a brand-new pi session directly (works even with zero existing
@@ -274,7 +363,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (url === "/api/sessions") {
-    const sessions = listSessions().map((s) => ({ ...s, busy: currentBusy(s.sessionId) }));
+    const sessions = listSessions().map((s) => ({ ...s, busy: currentBusy(s.sessionId), queue: queueSnapshot(s.sessionId) }));
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions }));
     return;
@@ -326,6 +415,45 @@ const server = createServer(async (req, res) => {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
     }
+    return;
+  }
+
+  if (url === "/api/queue" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    if (!body.sessionId || typeof body.message !== "string" || !body.message.trim()) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sessionId and non-empty message are required" }));
+      return;
+    }
+    const item = enqueueMessage(body.sessionId, body.message);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, id: item.id, ...queueSnapshot(body.sessionId) }));
+    return;
+  }
+
+  if (url === "/api/queue/remove" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    if (!body.sessionId || typeof body.id !== "number") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sessionId and numeric id are required" }));
+      return;
+    }
+    removeQueued(body.sessionId, body.id);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, ...queueSnapshot(body.sessionId) }));
+    return;
+  }
+
+  if (url === "/api/queue/resume" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    if (!body.sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sessionId is required" }));
+      return;
+    }
+    resumeQueue(body.sessionId);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, ...queueSnapshot(body.sessionId) }));
     return;
   }
 
