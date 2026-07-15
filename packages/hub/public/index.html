@@ -7,6 +7,25 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>pi hub</title>
   <link rel="stylesheet" href="/style.css">
+  <style>
+    .session-item[draggable="true"] { cursor: grab; }
+    .session-item.dragging { opacity: 0.45; cursor: grabbing; }
+    .group-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; margin-top: 4px;
+      font-size: 12px; font-weight: 600; opacity: 0.85;
+      cursor: pointer; user-select: none;
+    }
+    .group-header:hover { opacity: 1; }
+    .group-toggle { width: 1em; display: inline-block; }
+    .group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-count { opacity: 0.6; font-weight: 400; }
+    .group-del { background: none; border: none; color: inherit; cursor: pointer; opacity: 0.5; font-size: 14px; padding: 0 2px; }
+    .group-del:hover { opacity: 1; }
+    .group-body { padding-left: 10px; border-left: 2px solid rgba(128,128,128,0.25); margin-left: 6px; min-height: 6px; }
+    .group.collapsed .group-body { display: none; }
+    .group.group-dragging { opacity: 0.45; }
+  </style>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>hub</text></svg>">
 </head>
 <body>
@@ -45,6 +64,7 @@
           <span>sessions</span>
           <div class="header-actions">
             <button id="new-session" class="icon-btn" title="New session">+</button>
+            <button id="new-group" class="icon-btn" title="New group">&#128193;</button>
             <button id="reload-all" class="icon-btn" title="Reload all sessions">&#10227;</button>
             <button id="refresh-sessions" class="icon-btn" title="Refresh">&#8635;</button>
           </div>
