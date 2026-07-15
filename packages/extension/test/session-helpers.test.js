@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildOpenSessionCommand, buildReloadCommand, buildSpawnCommand, dedupSessions, recoverStaleSessions } from "../session-helpers.js";
+import { buildReloadCommand, dedupSessions, recoverStaleSessions } from "../session-helpers.js";
 
 // ── buildReloadCommand ─────────────────────────────────
 
@@ -74,51 +74,8 @@ describe("buildReloadCommand", () => {
 
 // ── buildSpawnCommand ─────────────────────────────────
 
-describe("buildSpawnCommand", () => {
-  test("includes pi --mode rpc and stderr redirect with prefix", () => {
-    const cmd = buildSpawnCommand({ logFile: "/tmp/bridge.log", port: 7333 });
-    assert.match(cmd, /pi --mode rpc/);
-    assert.match(cmd, /2>&1 1>\/dev\/null \| sed -u "s\/\^\/\[7333\] \/" >> "\/tmp\/bridge.log"/);
-    assert.match(cmd, /tail -f \/dev\/null/);
-  });
-
-  test("without port uses [new] prefix", () => {
-    const cmd = buildSpawnCommand({ logFile: "/tmp/bridge.log" });
-    assert.match(cmd, /\[new\]/);
-  });
-});
-
-// ── buildOpenSessionCommand ──────────────────────────
-
-describe("buildOpenSessionCommand", () => {
-  test("includes pi --mode rpc --session with ID", () => {
-    const cmd = buildOpenSessionCommand({ sessionId: "019f5aad-7e4d-7c78-b0b9-831ae740d081", logFile: "/tmp/bridge.log" });
-    assert.match(cmd, /pi --mode rpc/);
-    assert.match(cmd, /--session "019f5aad-7e4d-7c78-b0b9-831ae740d081"/);
-    assert.match(cmd, /tail -f \/dev\/null/);
-    assert.match(cmd, /\[new\]/);
-  });
-
-  test("includes --name when name is provided", () => {
-    const cmd = buildOpenSessionCommand({ sessionId: "abc-123", name: "my session", logFile: "/tmp/bridge.log" });
-    assert.match(cmd, /--name "my session"/);
-  });
-
-  test("omits --name when name is not provided", () => {
-    const cmd = buildOpenSessionCommand({ sessionId: "abc-123", logFile: "/tmp/bridge.log" });
-    assert.doesNotMatch(cmd, /--name/);
-  });
-
-  test("escapes double quotes in sessionId", () => {
-    const cmd = buildOpenSessionCommand({ sessionId: 'test"quote', logFile: "/tmp/bridge.log" });
-    assert.match(cmd, /--session "test\\"quote"/);
-  });
-
-  test("escapes double quotes in name", () => {
-    const cmd = buildOpenSessionCommand({ sessionId: "abc", name: 'name"quote', logFile: "/tmp/bridge.log" });
-    assert.match(cmd, /--name "name\\"quote"/);
-  });
-});
+// buildSpawnCommand / buildOpenSessionCommand moved to the shared
+// @wirelessr/pi-webui-components/session-spawn.js and are tested there.
 
 // ── dedupSessions ──────────────────────────────────────
 

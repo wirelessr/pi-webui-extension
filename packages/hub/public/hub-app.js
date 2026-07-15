@@ -253,15 +253,41 @@ import { formatStats } from "/utils.js";
 
   const $newSession = document.getElementById("new-session");
   const $reloadAll = document.getElementById("reload-all");
+  const $sessionModal = document.getElementById("new-session-modal");
+  const $sessionIdInput = document.getElementById("session-id-input");
+  const $sessionCwdInput = document.getElementById("session-cwd-input");
+  const $sessionModalCancel = document.getElementById("session-modal-cancel");
+  const $sessionModalOk = document.getElementById("session-modal-ok");
 
-  async function handleNew() {
+  // Spawn a fresh session, or resume an existing one by ID.
+  //  - sessionId given  → resume; cwd is ignored (server resolves the session's
+  //    original cwd from its history — pi won't resume from the wrong project).
+  //  - no sessionId, cwd given → new session in that cwd.
+  //  - no sessionId, no cwd    → new session inheriting the currently-viewed
+  //    session's cwd (server falls back to homedir when there's no active one).
+  async function handleNew(sessionId, cwd) {
+    // Already open (exact id, or the 8-char prefix shown in the sidebar)?
+    // Just switch to it instead of spawning a duplicate.
+    if (sessionId) {
+      const existing = sessions.find((s) => s.sessionId === sessionId || s.sessionId.startsWith(sessionId));
+      if (existing) { switchTo(existing.sessionId); return; }
+    }
     const prevIds = new Set(sessions.map((s) => s.sessionId));
+    let endpoint;
+    let body;
+    if (sessionId) {
+      endpoint = "/api/open-session";
+      body = JSON.stringify({ sessionId });
+    } else {
+      endpoint = "/api/new-session";
+      const inheritCwd = cwd || sessions.find((s) => s.sessionId === activeSessionId)?.cwd;
+      body = JSON.stringify(inheritCwd ? { cwd: inheritCwd } : {});
+    }
     try {
-      // The hub spawns directly (works even with zero existing sessions).
-      const res = await fetch("/api/new-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
     } catch (err) {
-      alert(`Failed to create session: ${err.message}`);
+      alert(`Failed to ${sessionId ? "open" : "create"} session: ${err.message}`);
       return;
     }
     // wait for the new session's discovery to appear, then switch to it
@@ -271,8 +297,38 @@ import { formatStats } from "/utils.js";
       return (data.sessions || []).find((s) => !prevIds.has(s.sessionId)) || false;
     }, 1000, 15);
     renderSessions();
-    if (fresh) switchTo(fresh.sessionId);
+    if (fresh) {
+      switchTo(fresh.sessionId);
+    } else if (sessionId) {
+      // pi exits silently when it can't resume the id, so no bridge appears.
+      alert(`Could not open session "${sessionId}".\nCheck it's a valid pi session id with saved history.`);
+    }
   }
+
+  function openSessionModal() {
+    $sessionIdInput.value = "";
+    $sessionCwdInput.value = "";
+    $sessionModal.classList.remove("hidden");
+    $sessionIdInput.focus();
+  }
+  function closeSessionModal() {
+    $sessionModal.classList.add("hidden");
+  }
+  function submitSessionModal() {
+    const sessionId = $sessionIdInput.value.trim();
+    const cwd = $sessionCwdInput.value.trim();
+    closeSessionModal();
+    handleNew(sessionId || undefined, cwd || undefined);
+  }
+  $sessionModalCancel?.addEventListener("click", closeSessionModal);
+  $sessionModal?.addEventListener("click", (e) => { if (e.target === $sessionModal) closeSessionModal(); });
+  $sessionModalOk?.addEventListener("click", submitSessionModal);
+  const modalKeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitSessionModal(); }
+    if (e.key === "Escape") closeSessionModal();
+  };
+  $sessionIdInput?.addEventListener("keydown", modalKeydown);
+  $sessionCwdInput?.addEventListener("keydown", modalKeydown);
 
   async function handleClose(s) {
     if (!confirm(`Close session "${s.sessionName || s.sessionId.slice(0, 8)}"?`)) return;
@@ -353,7 +409,7 @@ import { formatStats } from "/utils.js";
     setTimeout(loadSessions, 2500);
   }
 
-  $newSession?.addEventListener("click", handleNew);
+  $newSession?.addEventListener("click", openSessionModal);
   $reloadAll?.addEventListener("click", handleReloadAll);
   $refreshSessions?.addEventListener("click", loadSessions);
   $commandsTitle.textContent = "commands";

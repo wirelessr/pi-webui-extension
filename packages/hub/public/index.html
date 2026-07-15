@@ -26,6 +26,18 @@
       </div>
     </header>
 
+    <div id="new-session-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">New / Open Session</div>
+        <input id="session-id-input" class="modal-input" type="text" placeholder="Session ID to resume (empty = new session)" autocomplete="off" />
+        <input id="session-cwd-input" class="modal-input" type="text" placeholder="Working directory (empty = inherit current; ignored when resuming)" autocomplete="off" />
+        <div class="modal-actions">
+          <button id="session-modal-cancel" class="ghost-btn">Cancel</button>
+          <button id="session-modal-ok" class="send-btn">OK</button>
+        </div>
+      </div>
+    </div>
+
     <div id="main-layout">
       <aside id="sidebar-left" class="sidebar" data-view="sessions">
         <div class="sidebar-header">

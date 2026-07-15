@@ -56,18 +56,9 @@ export function buildSessionList(discoveries, isPidAlive) {
     .sort((a, b) => a.port - b.port);
 }
 
-/**
- * Build the sh command the hub uses to spawn a brand-new pi session.
- * (The hub sets PI_BRIDGE_DIR via the spawn env, not in this string, so the
- * new session writes its discovery file where the hub is watching.)
- * @param {object} opts
- * @param {string} opts.logFile — shared stderr log file path
- * @returns {string} sh command string
- */
-export function buildSpawnCommand({ logFile }) {
-  const escapedLog = logFile.replace(/"/g, '\\"');
-  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed -u "s/^/[hub-new] /" >> "${escapedLog}"`;
-}
+// Session spawn/resume command builders + findSessionCwd live in the shared
+// @wirelessr/pi-webui-components/session-spawn.js (single source of truth for
+// both hub and extension). server.js imports them from there directly.
 
 /**
  * Detect busy→idle transitions between polls (a session "finishing").

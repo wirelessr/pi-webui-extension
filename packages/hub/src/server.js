@@ -17,7 +17,8 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSessionList, buildSpawnCommand, diffBusyTransitions, parseProxyPath, pickSession } from "./hub-helpers.js";
+import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
+import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "./hub-helpers.js";
 
 const require = createRequire(import.meta.url);
 const HUB_DIR = dirname(fileURLToPath(import.meta.url));
@@ -121,9 +122,25 @@ function currentBusy(sessionId) {
 // sessions — no bridge to proxy through). The child writes its discovery
 // file into the hub's BRIDGE_DIR via the env below.
 function spawnSession(cwd) {
-  const cmd = buildSpawnCommand({ logFile: join(BRIDGE_DIR, "hub-spawn.log") });
+  const cmd = buildSpawnCommand({ logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-new]" });
   const child = spawn("sh", ["-c", cmd], {
     cwd: cwd || homedir(),
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
+  });
+  child.unref();
+  if (!child.pid) throw new Error("spawn failed");
+  return child.pid;
+}
+
+// Open (resume) an existing session by ID. cwd is auto-resolved (shared
+// findSessionCwd) from the session's own log so it comes back in the right
+// directory — pi refuses to resume from the wrong project directory.
+function openSession(sessionId, name) {
+  const cmd = buildOpenSessionCommand({ sessionId, name, logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-open]" });
+  const child = spawn("sh", ["-c", cmd], {
+    cwd: findSessionCwd(sessionId) || homedir(),
     detached: true,
     stdio: "ignore",
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
@@ -223,6 +240,24 @@ const server = createServer(async (req, res) => {
     const body = await readJsonBody(req);
     try {
       const pid = spawnSession(body.cwd);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, pid }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (url === "/api/open-session" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    if (!body.sessionId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "sessionId is required" }));
+      return;
+    }
+    try {
+      const pid = openSession(body.sessionId, body.name);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, pid }));
     } catch (err) {
