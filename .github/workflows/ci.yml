@@ -44,3 +44,16 @@ jobs:
             if [ "$pct" != "10000" ]; then echo "ERROR: $mod.js coverage $line"; exit 1; fi
             echo "OK: $mod.js — 100%"
           done
+
+      - name: hub — tests + 100% line coverage
+        working-directory: packages/hub
+        run: |
+          node --test test/*.test.js
+          node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/cov-hub.txt
+          for mod in hub-helpers hub-state-logic; do
+            line=$(grep " $mod.js " /tmp/cov-hub.txt || true)
+            if [ -z "$line" ]; then echo "ERROR: $mod.js not found in coverage"; exit 1; fi
+            pct=$(echo "$line" | awk -F'|' '{print $2}' | awk '{print $1}' | tr -d '.')
+            if [ "$pct" != "10000" ]; then echo "ERROR: $mod.js coverage $line"; exit 1; fi
+            echo "OK: $mod.js — 100%"
+          done

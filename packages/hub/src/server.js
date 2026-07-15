@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
+import { normalizeState, pruneState } from "../public/hub-state-logic.js";
 import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "./hub-helpers.js";
 
 const require = createRequire(import.meta.url);
@@ -30,6 +31,10 @@ const HOST = process.env.PI_HUB_HOST || "0.0.0.0";
 // Match the extension's default discovery dir so the hub sees real sessions.
 const BRIDGE_DIR =
   process.env.PI_BRIDGE_DIR || join(homedir(), ".pi", "agent", "extensions", "pi-webui-extension", "data");
+// Hub-owned persistent prefs (sidebar order + groups). One JSON file, atomic
+// write. Cross-device: every client hits this one hub, so ordering/grouping is
+// shared rather than per-browser.
+const HUB_STATE_PATH = join(BRIDGE_DIR, "hub-state.json");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -65,6 +70,25 @@ function listSessions() {
     }
   }
   return buildSessionList(discoveries, isPidAlive);
+}
+
+// ── Hub state (sidebar order + groups) ──
+
+function loadHubState() {
+  try {
+    return normalizeState(JSON.parse(readFileSync(HUB_STATE_PATH, "utf-8")));
+  } catch {
+    return normalizeState(null);
+  }
+}
+
+// Persist normalized+pruned state atomically (write temp, then rename).
+function saveHubState(rawState, liveIds) {
+  const state = pruneState(normalizeState(rawState), liveIds);
+  const tmp = `${HUB_STATE_PATH}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state));
+  renameSync(tmp, HUB_STATE_PATH);
+  return state;
 }
 
 // ── Cross-session busy watcher + aggregate event stream ──
@@ -210,6 +234,28 @@ function proxy(session, rest, req, res) {
 
 const server = createServer(async (req, res) => {
   const url = req.url || "/";
+
+  if (url === "/api/hub-state" && req.method === "GET") {
+    // Return state pruned against live sessions so clients never see ghosts.
+    const liveIds = listSessions().map((s) => s.sessionId);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(pruneState(loadHubState(), liveIds)));
+    return;
+  }
+
+  if (url === "/api/hub-state" && req.method === "PUT") {
+    const body = await readJsonBody(req);
+    const liveIds = listSessions().map((s) => s.sessionId);
+    try {
+      const state = saveHubState(body, liveIds);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(state));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
 
   if (url === "/api/sessions") {
     const sessions = listSessions().map((s) => ({ ...s, busy: currentBusy(s.sessionId) }));
