@@ -60,6 +60,10 @@ export default function (pi: ExtensionAPI) {
 
 	let idleWaiters: IdleWaiter[] = [];
 	let pendingDone: any = null;
+	// Buffer of the current web-initiated turn's agent events, accumulated even
+	// while no client is attached, so a re-attaching client can replay the turn
+	// so far and resume live rendering instead of seeing a frozen message.
+	let turnEventBuffer: any[] = [];
 	let sessionFile: string | undefined;
 	let sessionId: string | undefined;
 	let sessionName: string | undefined;
@@ -245,9 +249,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", () => {
 		isBusy = true;
-		if (sse && ourTurnActive) {
-			writeSse({ type: "agent_start" });
-		}
+		if (!ourTurnActive) return;
+		turnEventBuffer = [];
+		writeTurnEvent({ type: "agent_start" });
 	});
 
 	pi.on("agent_end", (event: any) => {
@@ -334,19 +338,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", (event: any) => {
-		if (sse && ourTurnActive) {
-			writeSse({ type: "turn_start", turnIndex: event.turnIndex });
-		}
+		writeTurnEvent({ type: "turn_start", turnIndex: event.turnIndex });
 	});
 
 	pi.on("turn_end", (event: any) => {
-		if (sse && ourTurnActive) {
-			writeSse({ type: "turn_end", turnIndex: event.turnIndex });
-		}
+		writeTurnEvent({ type: "turn_end", turnIndex: event.turnIndex });
 	});
 
 	pi.on("message_update", (event: any) => {
-		if (!sse || !ourTurnActive) return;
+		if (!ourTurnActive) return;
 		const ae = event.assistantMessageEvent;
 		if (!ae) return;
 
@@ -356,41 +356,35 @@ export default function (pi: ExtensionAPI) {
 			"toolcall_start", "toolcall_delta", "toolcall_end",
 		];
 		if (forwardTypes.includes(ae.type)) {
-			writeSse(ae);
+			writeTurnEvent(ae);
 		}
 	});
 
 	pi.on("tool_execution_start", (event: any) => {
-		if (sse && ourTurnActive) {
-			writeSse({
-				type: "tool_execution_start",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				args: event.args,
-			});
-		}
+		writeTurnEvent({
+			type: "tool_execution_start",
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			args: event.args,
+		});
 	});
 
 	pi.on("tool_execution_update", (event: any) => {
-		if (sse && ourTurnActive) {
-			writeSse({
-				type: "tool_execution_update",
-				toolCallId: event.toolCallId,
-				partialResult: event.partialResult,
-			});
-		}
+		writeTurnEvent({
+			type: "tool_execution_update",
+			toolCallId: event.toolCallId,
+			partialResult: event.partialResult,
+		});
 	});
 
 	pi.on("tool_execution_end", (event: any) => {
-		if (sse && ourTurnActive) {
-			writeSse({
-				type: "tool_execution_end",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				isError: event.isError,
-				result: event.result,
-			});
-		}
+		writeTurnEvent({
+			type: "tool_execution_end",
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			isError: event.isError,
+			result: event.result,
+		});
 	});
 
 	pi.on("session_info_changed", (event: any) => {
@@ -416,6 +410,15 @@ export default function (pi: ExtensionAPI) {
 			serverLog("writeSse failed, closing stream:", err);
 			closeSse();
 		}
+	}
+
+	// Record a turn event into the replay buffer and, if a client is attached,
+	// stream it live. Buffering happens regardless of attachment so events that
+	// occur while the client is switched away are not lost.
+	function writeTurnEvent(data: any): void {
+		if (!ourTurnActive) return;
+		turnEventBuffer.push(data);
+		if (sse) writeSse(data);
 	}
 
 	function closeSse(): void {
@@ -472,7 +475,14 @@ export default function (pi: ExtensionAPI) {
 			closeSse();
 			pendingDone = null;
 		} else {
-			serverLog("attachStream: re-attached SSE to busy agent");
+			// Replay the current turn's events so the re-attaching client rebuilds
+			// the in-progress assistant message, then continues live. Synchronous:
+			// no pi event can interleave between here and the return.
+			serverLog(`attachStream: re-attached SSE to busy agent, replaying ${turnEventBuffer.length} buffered events`);
+			for (const ev of turnEventBuffer) {
+				if (!sse) break;
+				writeSse(ev);
+			}
 		}
 		return true;
 	}
