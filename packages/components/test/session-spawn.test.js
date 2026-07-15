@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "../src/session-spawn.js";
+import { buildForkSessionCommand, buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "../src/session-spawn.js";
 
 describe("buildSpawnCommand", () => {
   test("default prefix is [new]", () => {
@@ -37,6 +37,25 @@ describe("buildOpenSessionCommand", () => {
   test("escapes double quotes in id, name, and log", () => {
     const cmd = buildOpenSessionCommand({ sessionId: 'a"b', name: 'n"m', logFile: '/tmp/"x".log' });
     assert.match(cmd, /--name "n\\"m" --session "a\\"b"/);
+    assert.match(cmd, />> "\/tmp\/\\"x\\".log"/);
+  });
+});
+
+describe("buildForkSessionCommand", () => {
+  test("default prefix [new], includes --fork, no --name", () => {
+    const cmd = buildForkSessionCommand({ sessionId: "abc", logFile: "/tmp/b.log" });
+    assert.match(cmd, /pi --mode rpc --fork "abc"/);
+    assert.match(cmd, /sed -u "s\/\^\/\[new\] \/"/);
+    assert.doesNotMatch(cmd, /--name/);
+  });
+  test("custom prefix and name (name before --fork)", () => {
+    const cmd = buildForkSessionCommand({ sessionId: "abc", name: "my sesh (copy)", logFile: "/tmp/b.log", prefix: "[hub-clone]" });
+    assert.match(cmd, /--name "my sesh \(copy\)" --fork "abc"/);
+    assert.match(cmd, /sed -u "s\/\^\/\[hub-clone\] \/"/);
+  });
+  test("escapes double quotes in id, name, and log", () => {
+    const cmd = buildForkSessionCommand({ sessionId: 'a"b', name: 'n"m', logFile: '/tmp/"x".log' });
+    assert.match(cmd, /--name "n\\"m" --fork "a\\"b"/);
     assert.match(cmd, />> "\/tmp\/\\"x\\".log"/);
   });
 });

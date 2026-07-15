@@ -4,6 +4,7 @@ import {
   addGroup,
   displayLayout,
   EMPTY_STATE,
+  moveToGroup,
   normalizeState,
   pruneState,
   rebuildItems,
@@ -94,6 +95,32 @@ describe("group mutations", () => {
     const s = normalizeState({ items: [sess("A"), grp("g1", ["m1", "m2"]), sess("B")] });
     const r = removeGroup(s, "g1");
     assert.deepEqual(r.items, [sess("A"), sess("m1"), sess("m2"), sess("B")]);
+  });
+});
+
+describe("moveToGroup", () => {
+  test("top-level session into a group appends to its members", () => {
+    const s = normalizeState({ items: [sess("A"), grp("g1", ["m1"]), sess("B")] });
+    const r = moveToGroup(s, "A", "g1");
+    assert.deepEqual(r.items, [grp("g1", ["m1", "A"]), sess("B")]);
+  });
+
+  test("gid null ungroups a member back to top level (at end)", () => {
+    const s = normalizeState({ items: [grp("g1", ["m1", "m2"]), sess("B")] });
+    const r = moveToGroup(s, "m1", null);
+    assert.deepEqual(r.items, [grp("g1", ["m2"]), sess("B"), sess("m1")]);
+  });
+
+  test("moves a member from one group to another", () => {
+    const s = normalizeState({ items: [grp("g1", ["m1"]), grp("g2", [])] });
+    const r = moveToGroup(s, "m1", "g2");
+    assert.deepEqual(r.items, [grp("g1", []), grp("g2", ["m1"])]);
+  });
+
+  test("unknown gid falls back to top-level (session removed from old spot)", () => {
+    const s = normalizeState({ items: [grp("g1", ["m1"]), sess("B")] });
+    const r = moveToGroup(s, "m1", "nope");
+    assert.deepEqual(r.items, [grp("g1", []), sess("B"), sess("m1")]);
   });
 });
 
