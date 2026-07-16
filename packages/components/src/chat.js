@@ -88,7 +88,24 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     return renderMarkdown(text);
   }
 
+  // Syntax-highlight code blocks in place, if the highlighter loaded (global
+  // hljs from highlight-lib.js, non-module script). Uses the block's
+  // language-* class when present, else hljs auto-detects. Guarded so a
+  // missing lib just leaves plain (already-readable) code.
+  function highlightCode(container) {
+    if (!window.hljs) return;
+    for (const code of container.querySelectorAll("pre code")) {
+      if (code.dataset.highlighted) continue;
+      // If the fence names a language hljs doesn't ship, drop the class so it
+      // auto-detects instead of leaving the block unhighlighted.
+      const cls = [...code.classList].find((c) => c.startsWith("language-"));
+      if (cls && !window.hljs.getLanguage(cls.slice(9))) code.classList.remove(cls);
+      try { window.hljs.highlightElement(code); } catch {}
+    }
+  }
+
   function attachCopyButtons(container) {
+    highlightCode(container);
     const pres = container.querySelectorAll("pre");
     for (const pre of pres) {
       if (pre.querySelector(".copy-code-btn")) continue;
@@ -337,6 +354,25 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     return row;
   }
 
+  // Map a file path to a highlight.js language hint (empty → let hljs
+  // auto-detect). Covers the languages agents commonly write.
+  const HLJS_EXT = {
+    py: "python", js: "javascript", mjs: "javascript", cjs: "javascript",
+    ts: "typescript", tsx: "typescript", jsx: "javascript", sh: "bash",
+    bash: "bash", zsh: "bash", json: "json", yaml: "yaml", yml: "yaml",
+    sql: "sql", go: "go", rb: "ruby", rs: "rust", java: "java", kt: "kotlin",
+    c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp", cs: "csharp",
+    php: "php", html: "xml", htm: "xml", xml: "xml", css: "css", scss: "scss",
+    toml: "ini", ini: "ini", cfg: "ini", diff: "diff", patch: "diff",
+  };
+  function hljsLangForPath(path) {
+    const name = fileName(path);
+    if (/^dockerfile$/i.test(name)) return "dockerfile";
+    if (/^makefile$/i.test(name)) return "makefile";
+    const ext = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
+    return HLJS_EXT[ext] || "";
+  }
+
   // Render one file body (markdown rendered, anything else as a code block).
   function renderFileBody(path, content) {
     const body = document.createElement("div");
@@ -347,6 +383,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
       body.className = "file-view-body code";
       const pre = document.createElement("pre");
       const code = document.createElement("code");
+      const lang = hljsLangForPath(path);
+      if (lang) code.className = `language-${lang}`;
       code.textContent = content || "";
       pre.appendChild(code);
       body.appendChild(pre);
