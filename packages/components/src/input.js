@@ -130,12 +130,15 @@ export function createInput({
       shiftKey: e.shiftKey,
       hasFilter: !!hasFilter,
       selectedIndex: commandsView.getSelectedIndex(),
+      filteredCount: commandsView.getFilteredCount(),
     });
 
     switch (action) {
       case "move:1": e.preventDefault(); commandsView.move(1); return;
       case "move:-1": e.preventDefault(); commandsView.move(-1); return;
       case "select": e.preventDefault(); commandsView.select(); return;
+      // No highlight yet: move to the first match, then select it.
+      case "complete": e.preventDefault(); commandsView.move(1); commandsView.select(); return;
       case "escape": {
         e.preventDefault();
         const ctx = getCommandToken();

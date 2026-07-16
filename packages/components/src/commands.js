@@ -135,5 +135,5 @@ export function createCommandsView({ $list, $count, $title, onSelect, getCommand
     render();
   }
 
-  return { load, filter, move, select, hasFilter: state.hasFilter, getSelectedIndex: state.getSelectedIndex };
+  return { load, filter, move, select, hasFilter: state.hasFilter, getSelectedIndex: state.getSelectedIndex, getFilteredCount: () => state.getFiltered().length };
 }

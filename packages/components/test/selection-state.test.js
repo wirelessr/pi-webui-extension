@@ -136,6 +136,8 @@ describe("decideKeyAction", () => {
     { name: "ArrowUp with filter → move:-1", opts: { key: "ArrowUp", shiftKey: false, hasFilter: true, selectedIndex: 0 }, expected: "move:-1" },
     { name: "Enter with filter + selected → select", opts: { key: "Enter", shiftKey: false, hasFilter: true, selectedIndex: 0 }, expected: "select" },
     { name: "Tab with filter + selected → select", opts: { key: "Tab", shiftKey: false, hasFilter: true, selectedIndex: 0 }, expected: "select" },
+    { name: "Tab with filter, no selection, matches → complete", opts: { key: "Tab", shiftKey: false, hasFilter: true, selectedIndex: -1, filteredCount: 3 }, expected: "complete" },
+    { name: "Tab with filter, no selection, no matches → passthrough", opts: { key: "Tab", shiftKey: false, hasFilter: true, selectedIndex: -1, filteredCount: 0 }, expected: "passthrough" },
     { name: "Enter with filter but no selection → send", opts: { key: "Enter", shiftKey: false, hasFilter: true, selectedIndex: -1 }, expected: "send" },
     { name: "Escape with filter → escape", opts: { key: "Escape", shiftKey: false, hasFilter: true, selectedIndex: -1 }, expected: "escape" },
     // Normal mode (hasFilter=false)
