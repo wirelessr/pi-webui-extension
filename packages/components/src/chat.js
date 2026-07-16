@@ -13,7 +13,10 @@ import { createStreamAccumulator } from "./stream-accumulator.js";
 import { doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
-export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {}, getFileContentFn = null, statFilesFn = null }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null }) {
+  // Whether a node (tool by name, or "thinking") should start expanded. Per-type
+  // preference when isNodeExpanded is provided; else the old global flag.
+  const nodeOpen = (type) => (isNodeExpanded ? !!isNodeExpanded(type) : !!isToolsExpanded?.());
   let currentAssistantEl = null;
   let currentTextEl = null;
   let currentThinkingEl = null;
@@ -486,6 +489,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function buildThinkingBlock(text) {
     const block = document.createElement("div");
     block.className = "thinking-block";
+    if (nodeOpen("thinking")) block.classList.add("expanded");
     const header = document.createElement("div");
     header.className = "thinking-header";
     header.textContent = "thinking";
@@ -501,6 +505,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function buildStaticToolBlock(tc) {
     const block = document.createElement("div");
     block.className = "tool-block";
+    block.dataset.toolName = tc.name || "";
+    if (nodeOpen(tc.name)) block.classList.add("expanded");
     const header = document.createElement("div");
     header.className = "tool-header";
     const nameSpan = document.createElement("span");
@@ -588,7 +594,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     if (currentThinkingEl) return;
     currentThinkingEl = document.createElement("div");
     currentThinkingEl.className = "thinking-block";
-    if (isToolsExpanded?.()) currentThinkingEl.classList.add("expanded");
+    if (nodeOpen("thinking")) currentThinkingEl.classList.add("expanded");
 
     const header = document.createElement("div");
     header.className = "thinking-header";
@@ -633,7 +639,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
 
     const block = document.createElement("div");
     block.className = "tool-block";
-    if (isToolsExpanded?.()) block.classList.add("expanded");
+    block.dataset.toolName = toolName || "";
+    if (nodeOpen(toolName)) block.classList.add("expanded");
 
     const header = document.createElement("div");
     header.className = "tool-header";
@@ -967,6 +974,24 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     $messages.querySelectorAll(".thinking-block").forEach((el) => el.classList.remove("expanded"));
   }
 
+  // Distinct node types present in the transcript (tool names + "thinking"),
+  // for building a per-type preference UI.
+  function getPresentNodeTypes() {
+    const tools = new Set();
+    for (const b of $messages.querySelectorAll(".tool-block")) {
+      if (b.dataset.toolName) tools.add(b.dataset.toolName);
+    }
+    const types = [...tools].sort();
+    if ($messages.querySelector(".thinking-block")) types.push("thinking");
+    return types;
+  }
+
+  // Expand/collapse every block of one type (apply a changed per-type default).
+  function setTypeExpanded(type, open) {
+    const sel = type === "thinking" ? ".thinking-block" : `.tool-block[data-tool-name="${CSS.escape(type)}"]`;
+    for (const el of $messages.querySelectorAll(sel)) el.classList.toggle("expanded", open);
+  }
+
   return {
     addMessage,
     loadHistory,
@@ -978,6 +1003,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     scrollToBottom,
     expandAllTools,
     collapseAllTools,
+    getPresentNodeTypes,
+    setTypeExpanded,
     closeSubagentView,
     closeFileView,
     clearWatched: () => watched.clear(),
