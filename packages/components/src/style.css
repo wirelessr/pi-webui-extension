@@ -120,6 +120,22 @@ body {
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
+.status.interrupted {
+  background: rgba(224, 148, 42, 0.18);
+  color: #e0942a;
+  cursor: help;
+}
+
+.status.interrupted::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e0942a;
+  margin-right: 5px;
+}
+
 .port {
   font-family: var(--mono);
   font-size: 13px;

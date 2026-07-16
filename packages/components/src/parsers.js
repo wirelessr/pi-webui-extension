@@ -5,6 +5,25 @@
  */
 
 /**
+ * Whether a transcript ends mid-turn — the agent stopped without delivering a
+ * final answer (e.g. the model stream dropped after a thinking block or a tool
+ * call). A normally-finished turn ends with the assistant's text response, so
+ * an ending on assistant-thinking / a bare tool call, or on a tool result the
+ * agent never wrapped up, means the turn was cut off. Callers pair this with an
+ * idle (not-busy) session to show "interrupted" instead of "idle", so it's
+ * clear nothing is still running.
+ * @param {Array<{role?: string, text?: string}>} history
+ * @returns {boolean}
+ */
+export function isTranscriptInterrupted(history) {
+  if (!Array.isArray(history) || history.length === 0) return false;
+  const last = history[history.length - 1];
+  if (!last || typeof last !== "object") return false;
+  if (last.role === "assistant" && typeof last.text === "string" && last.text.trim() !== "") return false;
+  return last.role === "assistant" || last.role === "toolResult";
+}
+
+/**
  * Detect if a tool call is a read of a SKILL.md file.
  * @param {string} toolName
  * @param {object} args — tool call arguments

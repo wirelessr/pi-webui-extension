@@ -18,6 +18,7 @@ import { doInit, doSendPrompt, doStop } from "/flow.js";
 import { addGroup, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
+import { isTranscriptInterrupted } from "/parsers.js";
 import { createStore } from "/store.js";
 import { formatStats } from "/utils.js";
 
@@ -97,9 +98,15 @@ import { formatStats } from "/utils.js";
 
   // ── Header / busy ──
 
+  // When idle, if the active session's transcript ends mid-turn (agent stopped
+  // without a final answer — e.g. the model dropped), show "interrupted" so it's
+  // clear nothing is still running and there's nothing to wait for.
+  let activeInterrupted = false;
   function setBusy(busy) {
-    $busyIndicator.textContent = busy ? "busy" : "idle";
-    $busyIndicator.className = `status ${busy ? "busy" : "idle"}`;
+    const state = busy ? "busy" : activeInterrupted ? "interrupted" : "idle";
+    $busyIndicator.textContent = state;
+    $busyIndicator.className = `status ${state}`;
+    $busyIndicator.title = state === "interrupted" ? "The last turn ended without finishing — nothing is running." : "";
   }
 
   function updateHeader(status) {
@@ -167,7 +174,10 @@ import { formatStats } from "/utils.js";
         if (event.type === "done") {
           notifyActiveDone(activeName());
           getHistory(scopedFetch(sessionId)).then((data) => {
-            if (sessionId === activeSessionId && data.history?.length) chat.loadHistory(data.history);
+            if (sessionId === activeSessionId && data.history?.length) {
+              chat.loadHistory(data.history);
+              activeInterrupted = isTranscriptInterrupted(data.history);
+            }
           }).catch(() => {});
         }
       } else {
@@ -187,6 +197,7 @@ import { formatStats } from "/utils.js";
     // 409). The turn keeps running on the bridge; re-attach resumes it live.
     if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
     activeStreaming = false;
+    activeInterrupted = false; // recomputed once this session's history loads
     chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
     try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
@@ -204,7 +215,12 @@ import { formatStats } from "/utils.js";
       getHistoryFn: () => getHistory(f),
       loadCommandsFn: () => commandsView.load(),
       loadSessionsFn: () => {},
-      loadHistoryFn: (history) => { if (sessionId === activeSessionId) chat.loadHistory(history); },
+      loadHistoryFn: (history) => {
+        if (sessionId !== activeSessionId) return;
+        chat.loadHistory(history);
+        activeInterrupted = isTranscriptInterrupted(history);
+        if (!activeStreaming) setBusy(false); // refresh the pill (idle vs interrupted)
+      },
       autoResizeFn: () => input.autoResize(),
       onStatusFn: (status) => { if (sessionId === activeSessionId) updateHeader(status); },
       attachStreamFn: (onEvent) => attachStream(onEvent, attachF),
@@ -243,6 +259,18 @@ import { formatStats } from "/utils.js";
       },
       input: { setStreaming: g((s) => input.setStreaming(s)) },
     };
+  }
+
+  // Recompute the interrupted hint from the current transcript. Turn-end paths
+  // that don't reload history through switchTo/attach (a live send, an abort)
+  // call this so the pill reflects a cut-off turn.
+  async function refreshActiveInterrupted(id) {
+    try {
+      const data = await getHistory(scopedFetch(id));
+      if (id !== activeSessionId) return;
+      activeInterrupted = isTranscriptInterrupted(data.history || []);
+      if (!activeStreaming) setBusy(false);
+    } catch {}
   }
 
   async function handleSend(text) {
@@ -289,11 +317,14 @@ import { formatStats } from "/utils.js";
       activeAttach = attach;
       attachStream(makeStreamHandler(id), scopedFetch(id, attach.signal)).catch(() => {});
     }
+    refreshActiveInterrupted(id);
   }
 
   async function handleStop() {
     if (!activeSessionId) return;
-    await doStop({ chat, abortFn: () => abortAgent(scopedFetch(activeSessionId)) });
+    const id = activeSessionId;
+    await doStop({ chat, abortFn: () => abortAgent(scopedFetch(id)) });
+    refreshActiveInterrupted(id);
   }
 
   // ── Session sidebar ──
