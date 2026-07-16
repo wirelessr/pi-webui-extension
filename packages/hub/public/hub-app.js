@@ -72,6 +72,23 @@ import { formatStats } from "/utils.js";
     statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
   });
   const mobileNav = createMobileNav({ $app });
+
+  // Expand/collapse all tool + thinking blocks (persisted).
+  const $expandToolsBtn = document.getElementById("expand-tools-btn");
+  function setExpandButtonState(expanded) {
+    toolsExpanded = expanded;
+    localStorage.setItem("pi-hub-tools-expanded", String(expanded));
+    if ($expandToolsBtn) {
+      $expandToolsBtn.textContent = expanded ? "▲" : "▼";
+      $expandToolsBtn.title = expanded ? "Collapse all tool/thinking blocks" : "Expand all tool/thinking blocks";
+    }
+  }
+  setExpandButtonState(toolsExpanded); // reflect the persisted state on load
+  $expandToolsBtn?.addEventListener("click", () => {
+    if (toolsExpanded) { chat.collapseAllTools(); setExpandButtonState(false); }
+    else { chat.expandAllTools(); setExpandButtonState(true); }
+  });
+
   // Kept for the input's "/" command filtering; commands load per active
   // session (the hub has no aggregated /api/commands endpoint).
   const commandsView = createCommandsView({
