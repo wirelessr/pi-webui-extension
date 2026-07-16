@@ -109,6 +109,16 @@ export async function getFile(path, fetchFn = fetch) {
   return res.json();
 }
 
+export async function statFiles(paths, fetchFn = fetch) {
+  const res = await fetchFn("/api/file/stat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  });
+  if (!res.ok) return {};
+  return (await res.json()).stats || {};
+}
+
 export async function abortAgent(fetchFn = fetch) {
   const res = await fetchFn("/api/abort", { method: "POST" });
   return res.json();

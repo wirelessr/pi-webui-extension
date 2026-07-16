@@ -7,7 +7,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize } from "node:path";
 import { collectWrittenPaths } from "@wirelessr/pi-webui-components/artifacts.js";
@@ -387,6 +387,7 @@ const uploadRoute = createRoute({
 const FileResponse = z.object({
 	path: z.string(),
 	content: z.string(),
+	mtime: z.number(),
 }).openapi("FileResponse");
 
 const fileRoute = createRoute({
@@ -400,6 +401,19 @@ const fileRoute = createRoute({
 		200: { description: "OK", content: { "application/json": { schema: FileResponse } } },
 		403: { description: "Path not produced by this session", content: { "application/json": { schema: ErrorResponse } } },
 		404: { description: "File not found on disk", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const FileStatResponse = z.object({
+	stats: z.record(z.string(), z.number().nullable()),
+}).openapi("FileStatResponse");
+
+const fileStatRoute = createRoute({
+	method: "post",
+	path: "/api/file/stat",
+	summary: "Current mtimes for allowlisted files (watch for out-of-band changes)",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: FileStatResponse } } },
 	},
 });
 
@@ -540,11 +554,32 @@ export function createBridgeApp(deps) {
 			if (!existsSync(requested)) {
 				return c.json({ error: "File not found on disk" }, 404);
 			}
-			const content = await readFile(requested, "utf8");
-			return c.json({ path: requested, content });
+			const [content, st] = await Promise.all([readFile(requested, "utf8"), stat(requested)]);
+			return c.json({ path: requested, content, mtime: st.mtimeMs });
 		} catch (err) {
 			return c.json({ error: err.message }, 404);
 		}
+	});
+
+	app.openapi(fileStatRoute, async (c) => {
+		let paths = [];
+		try {
+			paths = (await c.req.json()).paths || [];
+		} catch {
+			return c.json({ stats: {} });
+		}
+		const { history } = await deps.readSessionHistory(deps.getSessionFile(), 0, 0);
+		const allowed = collectWrittenPaths(history);
+		const stats = {};
+		for (const p of paths) {
+			if (!allowed.has(p)) continue; // never stat outside the allowlist
+			try {
+				stats[p] = (await stat(p)).mtimeMs;
+			} catch {
+				stats[p] = null; // gone/unreadable
+			}
+		}
+		return c.json({ stats });
 	});
 
 	app.openapi(commandsRoute, (c) => {

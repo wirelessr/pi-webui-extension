@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getCommands, getFile, getHistory, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream } from "/api.js";
+import { abortAgent, attachStream, getCommands, getFile, getHistory, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream, statFiles } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
@@ -68,6 +68,7 @@ import { formatStats } from "/utils.js";
   const chat = createChat({
     $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded,
     getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
+    statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
   });
   const mobileNav = createMobileNav({ $app });
   // Kept for the input's "/" command filtering; commands load per active
@@ -186,6 +187,7 @@ import { formatStats } from "/utils.js";
     // 409). The turn keeps running on the bridge; re-attach resumes it live.
     if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
     activeStreaming = false;
+    chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
     try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
     $messages.innerHTML = "";
