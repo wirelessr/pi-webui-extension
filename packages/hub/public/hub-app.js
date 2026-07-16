@@ -66,8 +66,16 @@ import { formatStats } from "/utils.js";
   let activePromptAbort = null; // AbortController for the active session's outgoing /api/prompt stream
 
   let toolsExpanded = localStorage.getItem("pi-hub-tools-expanded") === "true";
+  // Per-type default expansion: which node types (tool name, or "thinking")
+  // start expanded. Default: edits open, everything else collapsed.
+  function loadNodePrefs() {
+    try { const raw = localStorage.getItem("pi-hub-node-expand"); if (raw) return JSON.parse(raw) || {}; } catch {}
+    return { edit: true };
+  }
+  let nodePrefs = loadNodePrefs();
   const chat = createChat({
     $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded,
+    isNodeExpanded: (type) => !!nodePrefs[type],
     getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
     statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
   });
@@ -87,6 +95,64 @@ import { formatStats } from "/utils.js";
   $expandToolsBtn?.addEventListener("click", () => {
     if (toolsExpanded) { chat.collapseAllTools(); setExpandButtonState(false); }
     else { chat.expandAllTools(); setExpandButtonState(true); }
+  });
+
+  // Per-type default-expand preferences (⚙ dropdown of the node types in view).
+  const $nodePrefsBtn = document.getElementById("node-prefs-btn");
+  let $nodePrefsMenu = null;
+  function saveNodePrefs() { try { localStorage.setItem("pi-hub-node-expand", JSON.stringify(nodePrefs)); } catch {} }
+  function closeNodePrefsMenu() {
+    if (!$nodePrefsMenu) return;
+    $nodePrefsMenu.remove();
+    $nodePrefsMenu = null;
+    document.removeEventListener("click", onNodePrefsOutside, true);
+  }
+  function onNodePrefsOutside(e) {
+    if ($nodePrefsMenu && !$nodePrefsMenu.contains(e.target) && e.target !== $nodePrefsBtn) closeNodePrefsMenu();
+  }
+  function openNodePrefsMenu() {
+    const menu = document.createElement("div");
+    menu.className = "node-prefs-menu";
+    const title = document.createElement("div");
+    title.className = "node-prefs-title";
+    title.textContent = "Expand by default";
+    menu.appendChild(title);
+    const types = chat.getPresentNodeTypes();
+    if (types.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "node-prefs-empty";
+      empty.textContent = "no blocks in view yet";
+      menu.appendChild(empty);
+    }
+    for (const type of types) {
+      const row = document.createElement("label");
+      row.className = "node-prefs-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!nodePrefs[type];
+      cb.addEventListener("change", () => {
+        nodePrefs[type] = cb.checked;
+        saveNodePrefs();
+        chat.setTypeExpanded(type, cb.checked);
+      });
+      const span = document.createElement("span");
+      span.textContent = type;
+      row.appendChild(cb);
+      row.appendChild(span);
+      menu.appendChild(row);
+    }
+    const r = $nodePrefsBtn.getBoundingClientRect();
+    menu.style.position = "fixed";
+    menu.style.top = `${r.bottom + 4}px`;
+    menu.style.right = `${window.innerWidth - r.right}px`;
+    document.body.appendChild(menu);
+    $nodePrefsMenu = menu;
+    setTimeout(() => document.addEventListener("click", onNodePrefsOutside, true), 0);
+  }
+  $nodePrefsBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if ($nodePrefsMenu) closeNodePrefsMenu();
+    else openNodePrefsMenu();
   });
 
   // Kept for the input's "/" command filtering; commands load per active
