@@ -3,11 +3,32 @@ import { describe, test } from "node:test";
 import {
   extractSubagentViews,
   isSkillRead,
+  isTranscriptInterrupted,
   parseSkillBlock,
   parseSkillFrontmatter,
   parseSubagentMessages,
   subagentStatus,
 } from "../src/parsers.js";
+
+describe("isTranscriptInterrupted", () => {
+  const cases = [
+    { name: "empty → false", history: [], expected: false },
+    { name: "non-array → false", history: null, expected: false },
+    { name: "ends with assistant text → false (normal completion)", history: [{ role: "user", text: "hi" }, { role: "assistant", text: "done" }], expected: false },
+    { name: "ends with assistant thinking only → true", history: [{ role: "assistant", text: "", thinking: "hmm" }], expected: true },
+    { name: "ends with assistant tool call, no text → true", history: [{ role: "assistant", toolCalls: [{ name: "bash" }] }], expected: true },
+    { name: "ends with a tool result → true", history: [{ role: "assistant", toolCalls: [{ name: "bash" }] }, { role: "toolResult", text: "out" }], expected: true },
+    { name: "ends with user message → false", history: [{ role: "assistant", text: "ok" }, { role: "user", text: "next" }], expected: false },
+    { name: "ends with system message → false", history: [{ role: "system", text: "--- Compacted" }], expected: false },
+    { name: "last entry null → false", history: [{ role: "assistant", text: "x" }, null], expected: false },
+    { name: "assistant text of only whitespace → true", history: [{ role: "assistant", text: "   " }], expected: true },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      assert.equal(isTranscriptInterrupted(c.history), c.expected);
+    });
+  }
+});
 
 // ── parseSkillBlock ──────────────────────────────────
 
