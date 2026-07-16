@@ -77,15 +77,18 @@ export function createSelectionState(onSelectFn) {
  * @param {boolean} opts.shiftKey
  * @param {boolean} opts.hasFilter — commandsView.hasFilter() AND a / token exists
  * @param {number} opts.selectedIndex — current selection index (-1 if none)
- * @returns {"move:1"|"move:-1"|"select"|"escape"|"send"|"passthrough"}
+ * @param {number} [opts.filteredCount] — number of currently matching commands
+ * @returns {"move:1"|"move:-1"|"select"|"complete"|"escape"|"send"|"passthrough"}
  */
 export function decideKeyAction(opts) {
-  const { key, shiftKey, hasFilter, selectedIndex } = opts;
+  const { key, shiftKey, hasFilter, selectedIndex, filteredCount = 0 } = opts;
 
   if (hasFilter) {
     if (key === "ArrowDown") return "move:1";
     if (key === "ArrowUp") return "move:-1";
     if ((key === "Enter" && !shiftKey || key === "Tab") && selectedIndex >= 0) return "select";
+    // Tab with nothing highlighted yet autocompletes the first match (shell-style).
+    if (key === "Tab" && filteredCount > 0) return "complete";
     if (key === "Escape") return "escape";
   }
 
