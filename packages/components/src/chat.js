@@ -6,6 +6,7 @@
  */
 
 import { extractFilePaths, fileName, isMarkdownPath } from "./artifacts.js";
+import { diffLines } from "./diff.js";
 import { renderMarkdown } from "./markdown.js";
 import { extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
@@ -512,7 +513,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     header.appendChild(statusSpan);
     const argsEl = document.createElement("div");
     argsEl.className = "tool-args";
-    argsEl.textContent = formatArgs(tc.arguments);
+    if (isEditArgs(tc.name, tc.arguments)) argsEl.appendChild(buildEditDiff(tc.arguments));
+    else argsEl.textContent = formatArgs(tc.arguments);
     const resultEl = document.createElement("div");
     resultEl.className = "tool-result";
     resultEl.dataset.toolCallId = tc.id || "";
@@ -649,7 +651,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
 
     const argsEl = document.createElement("div");
     argsEl.className = "tool-args";
-    argsEl.textContent = formatArgs(args);
+    if (isEditArgs(toolName, args)) argsEl.appendChild(buildEditDiff(args));
+    else argsEl.textContent = formatArgs(args);
 
     const resultEl = document.createElement("div");
     resultEl.className = "tool-result";
@@ -700,6 +703,39 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     if (!args) return "";
     try { return JSON.stringify(args, null, 2); }
     catch { return String(args); }
+  }
+
+  // An `edit` tool call carries {path, edits:[{oldText,newText}]}. Render the
+  // edits as a read-only line diff (─ path header, then +/- hunks) instead of
+  // raw JSON, so it's clear what changed.
+  function isEditArgs(name, args) {
+    return name === "edit" && Array.isArray(args?.edits);
+  }
+  function buildEditDiff(args) {
+    const wrap = document.createElement("div");
+    wrap.className = "diff-view";
+    const path = args.path || args.file_path;
+    if (path) {
+      const head = document.createElement("div");
+      head.className = "diff-path";
+      head.textContent = path;
+      wrap.appendChild(head);
+    }
+    args.edits.forEach((e, idx) => {
+      if (idx > 0) {
+        const sep = document.createElement("div");
+        sep.className = "diff-sep";
+        wrap.appendChild(sep);
+      }
+      for (const line of diffLines(e.oldText ?? e.old_string ?? "", e.newText ?? e.new_string ?? "")) {
+        const el = document.createElement("div");
+        el.className = `diff-line diff-${line.type}`;
+        const mark = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+        el.textContent = mark + line.text;
+        wrap.appendChild(el);
+      }
+    });
+    return wrap;
   }
 
   // ── Streaming cursor ──
