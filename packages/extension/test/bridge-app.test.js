@@ -6,6 +6,9 @@
  */
 
 import assert from "node:assert/strict";
+import { unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createBridgeApp } from "../bridge-app.js";
 
@@ -168,6 +171,41 @@ test("GET /api/history returns paginated history", async () => {
 	const body = await res.json();
 	assert.strictEqual(body.total, 1);
 	assert.strictEqual(body.history[0].text, "hi");
+});
+
+test("GET /api/file serves an allowlisted file the agent wrote", async () => {
+	const filePath = join(tmpdir(), `pi-file-route-${process.pid}.md`);
+	writeFileSync(filePath, "# hello\n\ndisk content", "utf8");
+	const history = [
+		{ role: "assistant", toolCalls: [{ name: "write", arguments: { path: filePath, content: "stale" } }] },
+	];
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history, total: 1 }) }));
+	try {
+		const res = await app.fetch(req(`/api/file?path=${encodeURIComponent(filePath)}`));
+		assert.strictEqual(res.status, 200);
+		const body = await res.json();
+		assert.strictEqual(body.path, filePath);
+		// Content comes from disk, not the (stale) write event.
+		assert.strictEqual(body.content, "# hello\n\ndisk content");
+	} finally {
+		unlinkSync(filePath);
+	}
+});
+
+test("GET /api/file rejects a path the session never wrote", async () => {
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history: [], total: 0 }) }));
+	const res = await app.fetch(req(`/api/file?path=${encodeURIComponent("/etc/passwd")}`));
+	assert.strictEqual(res.status, 403);
+});
+
+test("GET /api/file returns 404 for an allowlisted path missing on disk", async () => {
+	const missing = join(tmpdir(), `pi-file-route-missing-${process.pid}.md`);
+	const history = [
+		{ role: "assistant", toolCalls: [{ name: "write", arguments: { path: missing, content: "x" } }] },
+	];
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history, total: 1 }) }));
+	const res = await app.fetch(req(`/api/file?path=${encodeURIComponent(missing)}`));
+	assert.strictEqual(res.status, 404);
 });
 
 test("POST /api/command executes compact", async () => {

@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, extname, join, normalize } from "node:path";
+import { collectWrittenPaths } from "@wirelessr/pi-webui-components/artifacts.js";
 import * as helpers from "./helpers.js";
 
 // Resolve hono from the extension's own node_modules
@@ -383,6 +384,25 @@ const uploadRoute = createRoute({
 	},
 });
 
+const FileResponse = z.object({
+	path: z.string(),
+	content: z.string(),
+}).openapi("FileResponse");
+
+const fileRoute = createRoute({
+	method: "get",
+	path: "/api/file",
+	summary: "Read a file the agent wrote/edited this session (read-only, allowlisted)",
+	request: {
+		query: z.object({ path: z.string() }),
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: FileResponse } } },
+		403: { description: "Path not produced by this session", content: { "application/json": { schema: ErrorResponse } } },
+		404: { description: "File not found on disk", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
 // ── Static file serving ───────────────────────────────────────────
 
 async function serveStatic(path, c) {
@@ -504,6 +524,26 @@ export function createBridgeApp(deps) {
 			return c.json({ history, total });
 		} catch (err) {
 			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(fileRoute, async (c) => {
+		const requested = c.req.query("path");
+		try {
+			// Allowlist = exactly the paths this session's agent wrote/edited via
+			// the write/edit tools. Reading is confined to files the agent itself
+			// authored — never an arbitrary path.
+			const { history } = await deps.readSessionHistory(deps.getSessionFile(), 0, 0);
+			if (!collectWrittenPaths(history).has(requested)) {
+				return c.json({ error: "Path not produced by this session" }, 403);
+			}
+			if (!existsSync(requested)) {
+				return c.json({ error: "File not found on disk" }, 404);
+			}
+			const content = await readFile(requested, "utf8");
+			return c.json({ path: requested, content });
+		} catch (err) {
+			return c.json({ error: err.message }, 404);
 		}
 	});
 

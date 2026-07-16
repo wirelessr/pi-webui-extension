@@ -539,7 +539,8 @@ body {
 }
 
 #messages,
-.subagent-view {
+.subagent-view,
+.file-view {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1161,4 +1162,81 @@ pre:hover .copy-code-btn {
   font-size: 13px;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+/* Agent-authored file chips + read-only file view */
+.file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--mono, monospace);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip::before {
+  content: "\1F4C4"; /* page facing up */
+}
+
+.file-chip:hover {
+  background: rgba(124, 108, 240, 0.15);
+}
+
+.file-view-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.file-back-btn {
+  display: block;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.file-back-btn:hover {
+  background: rgba(124, 108, 240, 0.15);
+}
+
+.file-view-title {
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+  font-family: var(--mono, monospace);
+  font-size: 13px;
+}
+
+.file-view-body {
+  color: var(--text);
+}
+
+.file-view-body.error {
+  color: var(--text-dim);
+}
+
+.file-view-body.code pre {
+  overflow-x: auto;
+  max-width: 100%;
 }

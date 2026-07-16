@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getHistory, getStatus, navUrl, newSession, openSession, sendPromptStream } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getStatus, navUrl, newSession, openSession, sendPromptStream } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
@@ -57,7 +57,7 @@ import { formatStats } from "./utils.js";
 
   // ── Module instances ──────────────────────────────
 
-  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog });
+  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog, getFileContentFn: (path) => getFile(path) });
 
   const mobileNav = createMobileNav({ $app });
 
