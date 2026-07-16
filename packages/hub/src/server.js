@@ -180,22 +180,28 @@ async function dispatchQueue(sessionId) {
   dispatching.add(sessionId);
   try {
     while (q.length > 0 && !pausedSessions.has(sessionId)) {
-      const item = q[0];
-      broadcast({ type: "session_busy", sessionId });
-      const res = await fetch(`http://localhost:${session.port}/api/prompt`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: item.message, timeout: 86_400_000 }),
-      });
-      if (!res.ok) throw new Error(`bridge HTTP ${res.status}`);
-      await res.json(); // resolves when the turn completes (session idle again)
-      q.shift();
+      // Remove it from the pending queue the moment we start running it — a
+      // message being answered is no longer "queued" (its turn shows in the
+      // chat). On failure we put it back at the head so Resume can retry.
+      const item = q.shift();
       broadcastQueue(sessionId);
+      broadcast({ type: "session_busy", sessionId });
+      try {
+        const res = await fetch(`http://localhost:${session.port}/api/prompt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: item.message, timeout: 86_400_000 }),
+        });
+        if (!res.ok) throw new Error(`bridge HTTP ${res.status}`);
+        await res.json(); // resolves when the turn completes (session idle again)
+      } catch (err) {
+        q.unshift(item);
+        pausedSessions.add(sessionId);
+        broadcastQueue(sessionId);
+        broadcast({ type: "queue_error", sessionId, message: err.message });
+        break;
+      }
     }
-  } catch (err) {
-    pausedSessions.add(sessionId);
-    broadcastQueue(sessionId);
-    broadcast({ type: "queue_error", sessionId, message: err.message });
   } finally {
     dispatching.delete(sessionId);
   }
