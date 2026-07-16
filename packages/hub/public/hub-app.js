@@ -184,6 +184,7 @@ import { formatStats } from "/utils.js";
     if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
     activeStreaming = false;
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
+    try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
     $messages.innerHTML = "";
     setBusy(false);
     input.setStreaming(false);
@@ -490,7 +491,12 @@ import { formatStats } from "/utils.js";
       if (a) setBusy(!!a.busy);
     }
     ensureActiveAttached();
-    if (!activeSessionId && sessions.length) switchTo(firstLiveSessionId());
+    if (!activeSessionId && sessions.length) {
+      // Restore the session we were viewing before a refresh; fall back to the
+      // first live one if it's gone.
+      const saved = localStorage.getItem("pi-hub-active-session");
+      switchTo(saved && sessions.some((s) => s.sessionId === saved) ? saved : firstLiveSessionId());
+    }
   }
 
   // ── Session management (proxied to a session's bridge) ──
