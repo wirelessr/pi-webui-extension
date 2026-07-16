@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getCommands, getHistory, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream } from "/api.js";
+import { abortAgent, attachStream, getCommands, getFile, getHistory, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
@@ -65,7 +65,10 @@ import { formatStats } from "/utils.js";
   let activePromptAbort = null; // AbortController for the active session's outgoing /api/prompt stream
 
   let toolsExpanded = localStorage.getItem("pi-hub-tools-expanded") === "true";
-  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded });
+  const chat = createChat({
+    $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded,
+    getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
+  });
   const mobileNav = createMobileNav({ $app });
   // Kept for the input's "/" command filtering; commands load per active
   // session (the hub has no aggregated /api/commands endpoint).

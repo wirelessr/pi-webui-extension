@@ -6,6 +6,7 @@ import {
   clientLog,
   executeCommand,
   getCommands,
+  getFile,
   getHistory,
   getSessions,
   getStatus,
@@ -193,6 +194,20 @@ describe("GET wrappers", () => {
       assert.deepEqual(result, { ok: true });
     });
   }
+});
+
+describe("getFile", () => {
+  test("GETs /api/file with the path query-encoded and returns JSON", async () => {
+    const fetchFn = mockFetch({ jsonData: { path: "/a b/x.md", content: "hi" } });
+    const result = await getFile("/a b/x.md", fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/file?path=%2Fa%20b%2Fx.md");
+    assert.deepEqual(result, { path: "/a b/x.md", content: "hi" });
+  });
+
+  test("throws on a non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 403, jsonData: { error: "nope" } });
+    await assert.rejects(() => getFile("/etc/passwd", fetchFn), /file 403/);
+  });
 });
 
 // ── POST wrappers ─────────────────────────────────────

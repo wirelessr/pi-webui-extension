@@ -103,6 +103,12 @@ export async function getHistory(fetchFn = fetch) {
   return res.json();
 }
 
+export async function getFile(path, fetchFn = fetch) {
+  const res = await fetchFn(`/api/file?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`file ${res.status}`);
+  return res.json();
+}
+
 export async function abortAgent(fetchFn = fetch) {
   const res = await fetchFn("/api/abort", { method: "POST" });
   return res.json();

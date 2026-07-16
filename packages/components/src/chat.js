@@ -5,13 +5,14 @@
  * methods for the main app to drive.
  */
 
+import { extractFilePaths, fileName, isMarkdownPath } from "./artifacts.js";
 import { renderMarkdown } from "./markdown.js";
 import { extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
-export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {} }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {}, getFileContentFn = null }) {
   let currentAssistantEl = null;
   let currentTextEl = null;
   let currentThinkingEl = null;
@@ -31,6 +32,18 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   $subagentView.className = "subagent-view";
   $subagentView.style.display = "none";
   $chat.appendChild($subagentView);
+
+  // ── File view state ──
+  // Chips list the files the current turn wrote/edited (paths come from the
+  // transcript); the content is fetched from disk on click, so a file later
+  // changed via sed/python still shows its true current state. currentFilePaths
+  // buffers the in-flight turn's paths until it finishes. The file view is a
+  // sibling overlay, same hide/show pattern as the subagent view above.
+  let currentFilePaths = [];
+  const $fileView = document.createElement("div");
+  $fileView.className = "file-view";
+  $fileView.style.display = "none";
+  $chat.appendChild($fileView);
 
   // ── Scroll ──
 
@@ -298,6 +311,95 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     // the live incremental-render pointers are still intact. No re-bind needed.
   }
 
+  // ── Agent-authored file chips + read-only file view ──
+
+  // Build a row of clickable chips for the files a message wrote/edited. The
+  // path is all a chip needs — content is read from disk when it's opened.
+  function buildFileChips(paths) {
+    const row = document.createElement("div");
+    row.className = "file-chips";
+    for (const path of paths) {
+      const chip = document.createElement("button");
+      chip.className = "file-chip";
+      chip.textContent = fileName(path);
+      chip.title = path;
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openFileView(path);
+      });
+      row.appendChild(chip);
+    }
+    return row;
+  }
+
+  // Render one file body (markdown rendered, anything else as a code block).
+  function renderFileBody(path, content) {
+    const body = document.createElement("div");
+    if (isMarkdownPath(path)) {
+      body.className = "file-view-body markdown";
+      body.innerHTML = renderMarkdown(content || "");
+    } else {
+      body.className = "file-view-body code";
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      code.textContent = content || "";
+      pre.appendChild(code);
+      body.appendChild(pre);
+    }
+    attachCopyButtons(body);
+    return body;
+  }
+
+  async function openFileView(path) {
+    parentScrollTop = $chat.scrollTop;
+    $messages.style.display = "none";
+    $subagentView.style.display = "none";
+    $fileView.style.display = "";
+    $fileView.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "file-view-header";
+    const backBtn = document.createElement("button");
+    backBtn.className = "file-back-btn";
+    backBtn.textContent = "← back to main session";
+    backBtn.addEventListener("click", closeFileView);
+    const title = document.createElement("div");
+    title.className = "file-view-title";
+    title.textContent = path;
+    header.appendChild(backBtn);
+    header.appendChild(title);
+    $fileView.appendChild(header);
+
+    const status = document.createElement("div");
+    status.className = "file-view-body";
+    status.textContent = "Loading…";
+    $fileView.appendChild(status);
+    $chat.scrollTop = 0;
+
+    // A late fetch must not paint over a view the user already navigated away
+    // from (back or a different chip).
+    const token = {};
+    openFileView._token = token;
+    try {
+      if (!getFileContentFn) throw new Error("file viewing not available");
+      const { content } = await getFileContentFn(path);
+      if (openFileView._token !== token) return;
+      status.replaceWith(renderFileBody(path, content));
+    } catch (err) {
+      if (openFileView._token !== token) return;
+      status.className = "file-view-body error";
+      status.textContent = `Could not read ${path}: ${err.message}`;
+    }
+  }
+
+  function closeFileView() {
+    openFileView._token = null;
+    $fileView.style.display = "none";
+    $fileView.innerHTML = "";
+    $messages.style.display = "";
+    $chat.scrollTop = parentScrollTop;
+  }
+
   function updateSubagentViews(toolCallId, details) {
     const views = extractSubagentViews(toolCallId, details);
     for (const view of views) {
@@ -387,10 +489,16 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     accumulator = createStreamAccumulator();
     currentThinkingEl = null;
     currentToolMap.clear();
+    currentFilePaths = [];
   }
 
   function finishAssistantMessage() {
     removeStreamingCursor();
+    // Surface the files this turn wrote/edited as chips under the message.
+    if (currentAssistantEl && currentFilePaths.length > 0) {
+      currentAssistantEl.appendChild(buildFileChips(currentFilePaths));
+    }
+    currentFilePaths = [];
     currentAssistantEl = null;
     currentTextEl = null;
     currentThinkingEl = null;
@@ -421,6 +529,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function addToolBlock(toolCallId, toolName, args) {
     if (!currentAssistantEl) return;
     removeStreamingCursor();
+
+    for (const p of extractFilePaths([{ name: toolName, arguments: args }])) {
+      if (!currentFilePaths.includes(p)) currentFilePaths.push(p);
+    }
 
     // Subagent tools get a special block with open button
     if (toolName === "subagent") {
@@ -648,6 +760,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   // ── History rendering ──
 
   function loadHistory(history) {
+    closeFileView();
     $messages.innerHTML = "";
     let lastAssistantEl = null;
     for (const entry of history) {
@@ -671,6 +784,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
             const { block } = buildStaticToolBlock(tc);
             el.appendChild(block);
           }
+          const paths = extractFilePaths(entry.toolCalls);
+          if (paths.length > 0) el.appendChild(buildFileChips(paths));
         }
         if (el.children.length > 0) {
           $messages.appendChild(el);
@@ -756,5 +871,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     expandAllTools,
     collapseAllTools,
     closeSubagentView,
+    closeFileView,
   };
 }
