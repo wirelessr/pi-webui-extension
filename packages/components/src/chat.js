@@ -12,7 +12,7 @@ import { createStreamAccumulator } from "./stream-accumulator.js";
 import { doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
-export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {}, getFileContentFn = null }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, logFn = () => {}, getFileContentFn = null, statFilesFn = null }) {
   let currentAssistantEl = null;
   let currentTextEl = null;
   let currentThinkingEl = null;
@@ -34,12 +34,17 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   $chat.appendChild($subagentView);
 
   // ── File view state ──
-  // Chips list the files the current turn wrote/edited (paths come from the
+  // Chips list the files a message wrote/edited (paths come from the
   // transcript); the content is fetched from disk on click, so a file later
-  // changed via sed/python still shows its true current state. currentFilePaths
-  // buffers the in-flight turn's paths until it finishes. The file view is a
-  // sibling overlay, same hide/show pattern as the subagent view above.
-  let currentFilePaths = [];
+  // changed via sed/python still shows its true current state. The file view is
+  // a sibling overlay, same hide/show pattern as the subagent view above.
+  //
+  // Opening a file "watches" it: we remember its mtime, and at each turn end
+  // re-stat the watched set. A file changed by ANY means (sed/shell/write) has
+  // a new mtime, so it re-surfaces as a chip on that turn's message — covering
+  // edits the write/edit tools never see. Lifetime = while viewing this session
+  // (cleared on loadHistory).
+  const watched = new Map(); // path → last-seen mtime
   const $fileView = document.createElement("div");
   $fileView.className = "file-view";
   $fileView.style.display = "none";
@@ -382,8 +387,11 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     openFileView._token = token;
     try {
       if (!getFileContentFn) throw new Error("file viewing not available");
-      const { content } = await getFileContentFn(path);
+      const { content, mtime } = await getFileContentFn(path);
       if (openFileView._token !== token) return;
+      // Watch from the version you actually looked at, so only later changes
+      // re-surface.
+      if (typeof mtime === "number") watched.set(path, mtime);
       status.replaceWith(renderFileBody(path, content));
     } catch (err) {
       if (openFileView._token !== token) return;
@@ -489,22 +497,51 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     accumulator = createStreamAccumulator();
     currentThinkingEl = null;
     currentToolMap.clear();
-    currentFilePaths = [];
   }
 
   function finishAssistantMessage() {
     removeStreamingCursor();
-    // Surface the files this turn wrote/edited as chips under the message.
-    if (currentAssistantEl && currentFilePaths.length > 0) {
-      currentAssistantEl.appendChild(buildFileChips(currentFilePaths));
-    }
-    currentFilePaths = [];
     currentAssistantEl = null;
     currentTextEl = null;
     currentThinkingEl = null;
     currentThinkingContent = null;
     currentToolMap.clear();
     accumulator = null;
+    // Every turn-end path calls this (live send, attach stream, standalone),
+    // whereas loadHistory only runs on some — so this is the reliable hook for
+    // re-checking watched files. Idempotent, so running again after a history
+    // reload is harmless.
+    surfaceWatchedChanges();
+  }
+
+  // Re-stat the watched files and, for any whose mtime differs from the version
+  // you last opened, add a chip to the latest message — so a file edited by ANY
+  // means (sed/shell/write) re-surfaces. The baseline is updated only when you
+  // open the file (see openFileView), NOT here, so this is idempotent: a turn
+  // can trigger several history reloads and the chip is added once (deduped),
+  // and it keeps showing until you actually look at the new version.
+  async function surfaceWatchedChanges() {
+    if (!statFilesFn || watched.size === 0) return;
+    let stats;
+    try {
+      stats = await statFilesFn([...watched.keys()]);
+    } catch {
+      return;
+    }
+    const changed = [];
+    for (const [p, seen] of watched) {
+      const now = stats[p];
+      if (now != null && now !== seen) changed.push(p);
+    }
+    if (changed.length === 0) return;
+    const assistants = $messages.querySelectorAll(".message.assistant");
+    const last = assistants[assistants.length - 1];
+    if (!last) return;
+    // Don't duplicate a chip already shown (e.g. the turn also write/edit'd it,
+    // or an earlier reload this turn already added it).
+    const shown = new Set([...last.querySelectorAll(".file-chip")].map((c) => c.title));
+    const fresh = changed.filter((p) => !shown.has(p));
+    if (fresh.length > 0) last.appendChild(buildFileChips(fresh));
   }
 
   function ensureThinkingBlock() {
@@ -529,10 +566,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
   function addToolBlock(toolCallId, toolName, args) {
     if (!currentAssistantEl) return;
     removeStreamingCursor();
-
-    for (const p of extractFilePaths([{ name: toolName, arguments: args }])) {
-      if (!currentFilePaths.includes(p)) currentFilePaths.push(p);
-    }
 
     // Subagent tools get a special block with open button
     if (toolName === "subagent") {
@@ -847,6 +880,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
       }
     }
     scrollToBottom();
+    surfaceWatchedChanges(); // fire-and-forget: re-flag any watched file changed since last view
   }
 
   function expandAllTools() {
@@ -872,5 +906,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, l
     collapseAllTools,
     closeSubagentView,
     closeFileView,
+    clearWatched: () => watched.clear(),
   };
 }

@@ -208,6 +208,36 @@ test("GET /api/file returns 404 for an allowlisted path missing on disk", async 
 	assert.strictEqual(res.status, 404);
 });
 
+test("POST /api/file/stat returns mtimes for allowlisted paths, skips others, null for missing", async () => {
+	const present = join(tmpdir(), `pi-stat-present-${process.pid}.md`);
+	const missing = join(tmpdir(), `pi-stat-missing-${process.pid}.md`);
+	writeFileSync(present, "x", "utf8");
+	const history = [
+		{ role: "assistant", toolCalls: [
+			{ name: "write", arguments: { path: present, content: "x" } },
+			{ name: "write", arguments: { path: missing, content: "x" } },
+		] },
+	];
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history, total: 1 }) }));
+	try {
+		const res = await app.fetch(postJson("/api/file/stat", { paths: [present, missing, "/etc/passwd"] }));
+		assert.strictEqual(res.status, 200);
+		const { stats } = await res.json();
+		assert.strictEqual(typeof stats[present], "number");
+		assert.strictEqual(stats[missing], null);
+		assert.ok(!("/etc/passwd" in stats)); // not allowlisted → omitted
+	} finally {
+		unlinkSync(present);
+	}
+});
+
+test("POST /api/file/stat tolerates a bad body", async () => {
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history: [], total: 0 }) }));
+	const res = await app.fetch(req("/api/file/stat", { method: "POST", headers: { "Content-Type": "application/json" }, body: "not json" }));
+	assert.strictEqual(res.status, 200);
+	assert.deepEqual((await res.json()).stats, {});
+});
+
 test("POST /api/command executes compact", async () => {
 	const deps = createMockDeps();
 	const app = createBridgeApp(deps);

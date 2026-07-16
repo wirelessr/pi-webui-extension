@@ -19,6 +19,7 @@ import {
   renameSession,
   sendPromptStream,
   sessionUrl,
+  statFiles,
   uploadImage,
 } from "../src/api.js";
 
@@ -207,6 +208,27 @@ describe("getFile", () => {
   test("throws on a non-ok response", async () => {
     const fetchFn = mockFetch({ status: 403, jsonData: { error: "nope" } });
     await assert.rejects(() => getFile("/etc/passwd", fetchFn), /file 403/);
+  });
+});
+
+describe("statFiles", () => {
+  test("POSTs the paths and returns the stats map", async () => {
+    const fetchFn = mockFetch({ jsonData: { stats: { "a.md": 111 } } });
+    const stats = await statFiles(["a.md"], fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/file/stat");
+    assert.equal(fetchFn.calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { paths: ["a.md"] });
+    assert.deepEqual(stats, { "a.md": 111 });
+  });
+
+  test("returns {} on a non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 500, jsonData: {} });
+    assert.deepEqual(await statFiles(["a.md"], fetchFn), {});
+  });
+
+  test("tolerates a response with no stats field", async () => {
+    const fetchFn = mockFetch({ jsonData: {} });
+    assert.deepEqual(await statFiles([], fetchFn), {});
   });
 });
 
