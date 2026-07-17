@@ -259,7 +259,9 @@ import { formatStats } from "/utils.js";
     let loopStarts = 0;
     return (event) => {
       if (sessionId !== activeSessionId) return; // stale stream after a switch
-      if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error")) {
+      // user_message precedes agent_start in the replay — it must not trigger
+      // the lazy assistant-bubble open, or the user bubble lands below it.
+      if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error" && event.type !== "user_message")) {
         if (event.type === "agent_start") loopStarts++;
         chat.startAssistantMessage();
       }

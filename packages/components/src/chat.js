@@ -88,6 +88,11 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
 
   // ── Rendering ──
 
+  // The raw text of the last user bubble added (live send, history reload, or
+  // a replayed user_message) — the user_message dedup compares against this
+  // rather than DOM textContent, which diverges for skill-block invocations.
+  let lastUserText = null;
+
   function renderContent(role, text) {
     if (role === "user") return escapeHtml(text);
     return renderMarkdown(text);
@@ -142,6 +147,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
 
   function addMessage(role, text) {
     if (role === "user") {
+      lastUserText = text;
       const skill = parseSkillBlock(text);
       if (skill) {
         // Skill block: neutral full-width, like compaction marker
@@ -821,6 +827,16 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   // ── Event dispatch ──
 
   function handleEvent(event) {
+    // The prompt text of a turn this client didn't send (queued dispatch,
+    // another tab's send), replayed BEFORE agent_start — i.e. before the
+    // assistant bubble and its accumulator exist — so it's handled ahead of
+    // the accumulator guard below. Deduped against the last user bubble:
+    // switchTo loads history (which already contains the in-progress turn's
+    // user message) right before attaching.
+    if (event.type === "user_message") {
+      if (typeof event.text === "string" && lastUserText !== event.text) addMessage("user", event.text);
+      return;
+    }
     if (!accumulator) return;
     try {
       accumulator.handleEvent(event);

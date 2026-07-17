@@ -61,6 +61,11 @@ export default function (pi: ExtensionAPI) {
 
 	let idleWaiters: IdleWaiter[] = [];
 	let pendingDone: any = null;
+	// The web-initiated prompt text, captured at the input event and recorded
+	// into the replay buffer at the next agent_start — so a viewer that attaches
+	// later (queued dispatch, another tab) renders the user bubble too, not just
+	// the assistant's reply.
+	let pendingUserText: string | null = null;
 	// Turn-active/busy tracking, finalize grace scheduling, and the coalescing
 	// replay buffer all live in turn-lifecycle.js (pure, unit-tested — the
 	// multi-loop/orphaned-turn bugs were here). This file only feeds pi events
@@ -356,6 +361,14 @@ export default function (pi: ExtensionAPI) {
 		// isBusy=true on its next poll, re-attaches, and replays the buffer.
 		const { reasserted } = lifecycle.agentStart();
 		if (reasserted) serverLog("agent_start: re-asserting ourTurnActive (orphaned continuation)");
+		if (pendingUserText != null) {
+			// Buffer-only, never live-broadcast: the only client connected this
+			// early is the sender's own prompt stream, which already rendered its
+			// bubble. Attach viewers join later and get it via replay, ordered
+			// before agent_start so the user bubble renders above the reply.
+			lifecycle.recordEvent({ type: "user_message", text: pendingUserText });
+			pendingUserText = null;
+		}
 		writeTurnEvent({ type: "agent_start" });
 	});
 
@@ -376,6 +389,7 @@ export default function (pi: ExtensionAPI) {
 		if (waitingForExtensionInput && event.source === "extension") {
 			waitingForExtensionInput = false;
 			lifecycle.beginTurn();
+			pendingUserText = typeof event.text === "string" ? event.text : null;
 			if (inputWatchdog) {
 				clearTimeout(inputWatchdog);
 				inputWatchdog = null;
@@ -778,6 +792,7 @@ export default function (pi: ExtensionAPI) {
 					pending = null;
 					waitingForExtensionInput = false;
 					lifecycle.abandonTurn();
+					pendingUserText = null;
 					try { sessionCtx?.abort(); } catch {}
 					reject(new Error("Agent response timeout"));
 				}, timeoutMs),
@@ -790,6 +805,7 @@ export default function (pi: ExtensionAPI) {
 			if (waitingForExtensionInput) {
 				waitingForExtensionInput = false;
 				lifecycle.abandonTurn();
+				pendingUserText = null;
 				if (pending) { clearTimeout(pending.timeout); pending = null; }
 				if (watchdogReject) watchdogReject(new Error("Agent did not start processing the message (input event not received)"));
 			}
@@ -903,6 +919,7 @@ export default function (pi: ExtensionAPI) {
 				serverLog("input watchdog: agent did not start processing message");
 				waitingForExtensionInput = false;
 				lifecycle.abandonTurn();
+				pendingUserText = null;
 				sendSseError("Agent did not start processing the message (input event not received)");
 			}
 		}, 10000);
@@ -1035,6 +1052,7 @@ export default function (pi: ExtensionAPI) {
 
 		waitingForExtensionInput = false;
 		lifecycle.shutdown();
+		pendingUserText = null;
 		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 
 		const waiters = idleWaiters;

@@ -296,7 +296,9 @@ import { formatStats } from "./utils.js";
     // Attaching mid-turn means agent_start already streamed before we
     // connected — lazily open an assistant message on the first event,
     // otherwise chat.handleEvent drops everything (no accumulator).
-    if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error")) {
+    // user_message precedes agent_start in the replay — it must not trigger
+    // the lazy assistant-bubble open, or the user bubble lands below it.
+    if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error" && event.type !== "user_message")) {
       chat.startAssistantMessage();
     }
     if (event.type === "done" || event.type === "error") {
