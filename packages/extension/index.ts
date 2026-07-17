@@ -247,16 +247,35 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Agent event handlers ──────────────────────────────────────────
 
-	pi.on("agent_start", () => {
-		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse}`);
+	// An agent_start/agent_end pair also fires for each *subagent* run (spawned
+	// via the subagent tool), on the same emitter. Those belong to an ephemeral
+	// child session, NOT our turn — if we let a subagent's agent_end clear
+	// ourTurnActive, the rest of the main turn is orphaned (never streamed, no
+	// done, isBusy left toggled → the "斷更 / stuck busy" bug). Skip any lifecycle
+	// event whose session is positively a different or ephemeral session than the
+	// bridge's own. Conservative: when the session can't be identified we fall
+	// through, so the main session's events are never skipped.
+	function isForeignAgentEvent(ctx: any): boolean {
+		const sid = ctx?.sessionManager?.getSessionId?.();
+		if (sid && sessionId && sid !== sessionId) return true;
+		if (ctx?.sessionManager?.isPersisted?.() === false) return true;
+		return false;
+	}
+
+	pi.on("agent_start", (_event: any, ctx: any) => {
+		const foreign = isForeignAgentEvent(ctx);
+		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		if (foreign) return;
 		isBusy = true;
 		if (!ourTurnActive) return;
 		turnEventBuffer = [];
 		writeTurnEvent({ type: "agent_start" });
 	});
 
-	pi.on("agent_end", (event: any) => {
-		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending}`);
+	pi.on("agent_end", (event: any, ctx: any) => {
+		const foreign = isForeignAgentEvent(ctx);
+		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		if (foreign) return;
 		isBusy = false;
 
 		if (ourTurnActive) {
