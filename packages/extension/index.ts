@@ -274,8 +274,18 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", (event: any, ctx: any) => {
 		const foreign = isForeignAgentEvent(ctx);
-		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		const willRetry = event?.willRetry === true;
+		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
+		// pi auto-retries a retryable error (e.g. "Stream ended without
+		// finish_reason") by running ANOTHER agent loop for the SAME turn. Its
+		// agent_end carries willRetry=true. Don't finalize on it: keep isBusy and
+		// ourTurnActive so the retry keeps streaming and the client never sees a
+		// premature done / goes silent (斷更) / sticks on "busy". The turn's final
+		// agent_end (success or give-up) has willRetry=false and finalizes below.
+		// (An abort during the retry backoff fires its own final willRetry=false
+		// agent_end, so we can't get stuck here.)
+		if (willRetry) return;
 		isBusy = false;
 
 		if (ourTurnActive) {
