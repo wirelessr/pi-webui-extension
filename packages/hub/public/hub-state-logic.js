@@ -146,3 +146,29 @@ export function rebuildItems(state, layout) {
   });
   return { items };
 }
+
+/**
+ * Decide how to reconcile the active session's busy pill against the bridge's
+ * authoritative busy state on each poll tick.
+ *
+ * The pill is normally owned by the live SSE stream (activeStreaming). But if
+ * the bridge reports the turn has ended while we still think we're streaming,
+ * our SSE is stuck — the agent disconnected mid-turn and no terminal event
+ * (done/error) ever arrived, so activeStreaming never cleared and the pill is
+ * frozen on "busy". Two consecutive idle ticks trigger a heal; requiring two
+ * avoids tripping on the sliver between a healthy agent_end (bridge clears
+ * busy) and the `done` reaching our stream a moment later.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.activeStreaming — hub believes a live stream owns the pill
+ * @param {boolean} opts.bridgeBusy — authoritative busy from the latest poll
+ * @param {number} [opts.stuckTicks] — consecutive prior ticks of streaming-but-idle
+ * @returns {{action: "sync"|"heal"|"none", busy?: boolean, stuckTicks: number}}
+ */
+export function decideStreamReconcile({ activeStreaming, bridgeBusy, stuckTicks = 0 }) {
+  if (!activeStreaming) return { action: "sync", busy: !!bridgeBusy, stuckTicks: 0 };
+  if (bridgeBusy) return { action: "none", stuckTicks: 0 };
+  const next = stuckTicks + 1;
+  if (next >= 2) return { action: "heal", stuckTicks: 0 };
+  return { action: "none", stuckTicks: next };
+}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   addGroup,
+  decideStreamReconcile,
   displayLayout,
   EMPTY_STATE,
   moveToGroup,
@@ -140,4 +141,21 @@ describe("rebuildItems", () => {
     const r = rebuildItems(EMPTY_STATE, [{ type: "group", id: "gX", members: [] }]);
     assert.deepEqual(r.items, [{ type: "group", id: "gX", name: "group", collapsed: false, members: [] }]);
   });
+});
+
+describe("decideStreamReconcile", () => {
+  const cases = [
+    // not streaming → mirror the bridge's busy onto the pill, ticks reset
+    { name: "idle, bridge idle → sync idle", in: { activeStreaming: false, bridgeBusy: false, stuckTicks: 0 }, out: { action: "sync", busy: false, stuckTicks: 0 } },
+    { name: "idle, bridge busy → sync busy", in: { activeStreaming: false, bridgeBusy: true, stuckTicks: 5 }, out: { action: "sync", busy: true, stuckTicks: 0 } },
+    // healthy live stream: bridge busy while we stream → leave it, ticks reset
+    { name: "streaming, bridge busy → none", in: { activeStreaming: true, bridgeBusy: true, stuckTicks: 1 }, out: { action: "none", stuckTicks: 0 } },
+    // stuck stream: bridge idle while we still think we stream → arm, then heal
+    { name: "streaming, bridge idle, first tick → arm", in: { activeStreaming: true, bridgeBusy: false, stuckTicks: 0 }, out: { action: "none", stuckTicks: 1 } },
+    { name: "streaming, bridge idle, second tick → heal", in: { activeStreaming: true, bridgeBusy: false, stuckTicks: 1 }, out: { action: "heal", stuckTicks: 0 } },
+    { name: "stuckTicks defaults to 0", in: { activeStreaming: true, bridgeBusy: false }, out: { action: "none", stuckTicks: 1 } },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.deepEqual(decideStreamReconcile(c.in), c.out));
+  }
 });
