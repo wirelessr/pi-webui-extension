@@ -619,21 +619,26 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   function ensureThinkingBlock() {
     if (currentThinkingEl) return;
     finalizeTextSegment(); // close the open text segment so thinking appends below it
-    currentThinkingEl = document.createElement("div");
-    currentThinkingEl.className = "thinking-block";
-    if (nodeOpen("thinking")) currentThinkingEl.classList.add("expanded");
+    // Bind the click handler to a stable local, not currentThinkingEl — that
+    // var is nulled when the segment closes, so the closure would go stale.
+    const block = document.createElement("div");
+    block.className = "thinking-block";
+    if (nodeOpen("thinking")) block.classList.add("expanded");
 
     const header = document.createElement("div");
     header.className = "thinking-header";
     header.textContent = "thinking";
-    header.addEventListener("click", () => currentThinkingEl.classList.toggle("expanded"));
+    header.addEventListener("click", () => block.classList.toggle("expanded"));
 
-    currentThinkingContent = document.createElement("div");
-    currentThinkingContent.className = "thinking-content";
+    const content = document.createElement("div");
+    content.className = "thinking-content";
 
-    currentThinkingEl.appendChild(header);
-    currentThinkingEl.appendChild(currentThinkingContent);
-    currentAssistantEl.appendChild(currentThinkingEl);
+    block.appendChild(header);
+    block.appendChild(content);
+    currentAssistantEl.appendChild(block);
+
+    currentThinkingEl = block;
+    currentThinkingContent = content;
   }
 
   function addToolBlock(toolCallId, toolName, args) {
