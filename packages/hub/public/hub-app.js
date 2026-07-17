@@ -15,7 +15,7 @@ import { abortAgent, attachStream, getCommands, getFile, getHistory, getStatus, 
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doSendPrompt, doStop } from "/flow.js";
-import { addGroup, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
+import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { isTranscriptInterrupted } from "/parsers.js";
@@ -63,6 +63,7 @@ import { formatStats } from "/utils.js";
   let openMenu = null; // open session context menu element (right-click)
   let attachingActive = false; // guard: an auto-attach to the active session is in flight
   let activeStreaming = false; // a live stream is feeding the active header (so the poll must not override it)
+  let streamStuckTicks = 0; // consecutive polls where we think we're streaming but the bridge is idle
   let activePromptAbort = null; // AbortController for the active session's outgoing /api/prompt stream
 
   let toolsExpanded = localStorage.getItem("pi-hub-tools-expanded") === "true";
@@ -280,6 +281,7 @@ import { formatStats } from "/utils.js";
     // 409). The turn keeps running on the bridge; re-attach resumes it live.
     if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
     activeStreaming = false;
+    streamStuckTicks = 0;
     activeInterrupted = false; // recomputed once this session's history loads
     chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
@@ -356,6 +358,25 @@ import { formatStats } from "/utils.js";
     } catch {}
   }
 
+  // Tear down a stuck/aborted live stream and reconcile the pill to the
+  // authoritative state. Used by the poll self-heal and by an explicit stop, so
+  // the header can leave "busy" even when the bridge never sends a terminal SSE
+  // event for the turn (agent disconnected mid-turn).
+  function releaseActiveStream() {
+    if (activeAttach) { activeAttach.abort(); activeAttach = null; }
+    if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
+    activeStreaming = false;
+    streamStuckTicks = 0;
+    if (chat.hasActiveMessage()) chat.finishAssistantMessage();
+    input.setStreaming(false);
+  }
+
+  function healStuckStream() {
+    const id = activeSessionId;
+    releaseActiveStream();
+    refreshActiveInterrupted(id);
+  }
+
   async function handleSend(text) {
     if (!activeSessionId) return;
     const id = activeSessionId;
@@ -394,11 +415,16 @@ import { formatStats } from "/utils.js";
     });
     if (activePromptAbort === promptAbort) activePromptAbort = null;
     if (result && !result.completed && id === activeSessionId) {
-      // dropped stream — reattach
-      const attach = new AbortController();
-      if (activeAttach) activeAttach.abort();
-      activeAttach = attach;
-      attachStream(makeStreamHandler(id), scopedFetch(id, attach.signal)).catch(() => {});
+      // Dropped stream. Reattach only if the bridge says the turn is still
+      // running — otherwise (stopped, or ended-while-hung) reattaching would
+      // re-open a dead SSE and re-freeze the pill on "busy".
+      const still = sessions.find((s) => s.sessionId === id);
+      if (still?.busy) {
+        const attach = new AbortController();
+        if (activeAttach) activeAttach.abort();
+        activeAttach = attach;
+        attachStream(makeStreamHandler(id), scopedFetch(id, attach.signal)).catch(() => {});
+      }
     }
     refreshActiveInterrupted(id);
   }
@@ -407,6 +433,9 @@ import { formatStats } from "/utils.js";
     if (!activeSessionId) return;
     const id = activeSessionId;
     await doStop({ chat, abortFn: () => abortAgent(scopedFetch(id)) });
+    // Force-release the stream so the pill leaves "busy" immediately, even if
+    // the bridge never delivers a terminal event for the aborted turn.
+    releaseActiveStream();
     refreshActiveInterrupted(id);
   }
 
@@ -602,12 +631,18 @@ import { formatStats } from "/utils.js";
     let active = activeSessionId;
     if (active && !next.some((s) => s.sessionId === active)) active = null;
     setState({ sessions: next, hubState: hs, activeSessionId: active }); // → renders sidebar + queue
-    // Keep the active session's header busy in sync with the poll (same source
-    // as the sidebar), unless a live stream is currently driving it. This
-    // clears a stuck "busy" when a turn we couldn't attach to ends.
-    if (!activeStreaming) {
+    // Reconcile the active header against the poll (authoritative bridge state).
+    // A live stream owns the pill, but if the bridge says the turn ended while
+    // we still think we're streaming, our SSE is stuck (agent disconnected
+    // mid-turn, no terminal event) — heal it after two idle ticks.
+    {
       const a = sessions.find((s) => s.sessionId === activeSessionId);
-      if (a) setBusy(!!a.busy);
+      if (a) {
+        const d = decideStreamReconcile({ activeStreaming, bridgeBusy: !!a.busy, stuckTicks: streamStuckTicks });
+        streamStuckTicks = d.stuckTicks;
+        if (d.action === "sync") setBusy(d.busy);
+        else if (d.action === "heal") healStuckStream();
+      }
     }
     ensureActiveAttached();
     if (!activeSessionId && sessions.length) {
