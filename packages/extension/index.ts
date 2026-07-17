@@ -233,12 +233,23 @@ export default function (pi: ExtensionAPI) {
 				// via the discovery file and kill THAT group.
 			const shellPid = markDiscoveryForClose(piPid);
 			const groupPid = shellPid ?? piPid;
+			// Kill the shell's process group to clean up the shell + children.
+			// But pi may have setsid'd into its own group (e.g. when launched
+			// directly rather than via the hub's sh -c wrapper), so the group
+			// kill can succeed without reaching pi. Always send SIGTERM to piPid
+			// directly as well — group kill cleans up the shell, direct kill
+			// guarantees pi dies.
 			try {
 				process.kill(-groupPid, "SIGTERM");
 				serverLog(`killSession: killed process group -${groupPid}`);
 			} catch (err: any) {
-				serverLog(`killSession: group kill failed (${err.message}), trying direct kill`);
+				serverLog(`killSession: group kill failed (${err.message})`);
+			}
+			try {
 				process.kill(piPid, "SIGTERM");
+				serverLog(`killSession: sent SIGTERM to piPid=${piPid}`);
+			} catch (err: any) {
+				serverLog(`killSession: direct kill failed (${err.message})`);
 			}
 			return true;
 		} catch (err: any) {
