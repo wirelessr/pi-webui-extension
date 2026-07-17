@@ -252,9 +252,15 @@ import { formatStats } from "/utils.js";
   // ── Stream event handler (bound to the session it was created for) ──
 
   function makeStreamHandler(sessionId) {
+    // agent_start count for this streaming episode. A single user prompt can
+    // span multiple agent loops (auto-retry, post-compaction, queued chain);
+    // each loop opens its own bubble below, and only the post-done history
+    // reload merges them back into one canonical bubble.
+    let loopStarts = 0;
     return (event) => {
       if (sessionId !== activeSessionId) return; // stale stream after a switch
       if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error")) {
+        if (event.type === "agent_start") loopStarts++;
         chat.startAssistantMessage();
       }
       if (event.type === "done" || event.type === "error") {
@@ -265,12 +271,22 @@ import { formatStats } from "/utils.js";
         activeStreaming = false;
         if (event.type === "done") {
           notifyActiveDone(activeName());
-          getHistory(scopedFetch(sessionId)).then((data) => {
-            if (sessionId === activeSessionId && data.history?.length) {
-              chat.loadHistory(data.history);
-              activeInterrupted = isTranscriptInterrupted(data.history);
-            }
-          }).catch(() => {});
+          if (loopStarts > 1) {
+            // Multi-loop turn: bubbles need the canonical re-group.
+            getHistory(scopedFetch(sessionId)).then((data) => {
+              if (sessionId === activeSessionId && data.history?.length) {
+                chat.loadHistory(data.history);
+                activeInterrupted = isTranscriptInterrupted(data.history);
+              }
+            }).catch(() => {});
+          } else {
+            // Single-loop turn: the live render already has the whole turn
+            // (attach replays the buffer from agent_start) and the file chips
+            // are on the bubble (finishAssistantMessage). Don't rebuild the
+            // transcript DOM — just refetch history to recompute the
+            // interrupted pill (done also fires for an aborted turn).
+            refreshActiveInterrupted(sessionId);
+          }
         }
       } else {
         activeStreaming = true;
