@@ -248,6 +248,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Agent event handlers ──────────────────────────────────────────
 
 	pi.on("agent_start", () => {
+		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse}`);
 		isBusy = true;
 		if (!ourTurnActive) return;
 		turnEventBuffer = [];
@@ -338,10 +339,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", (event: any) => {
+		serverLog(`turn_start fired: turnIndex=${event.turnIndex} ourTurnActive=${ourTurnActive} isBusy=${isBusy}`);
 		writeTurnEvent({ type: "turn_start", turnIndex: event.turnIndex });
 	});
 
 	pi.on("turn_end", (event: any) => {
+		serverLog(`turn_end fired: turnIndex=${event.turnIndex} ourTurnActive=${ourTurnActive} isBusy=${isBusy}`);
 		writeTurnEvent({ type: "turn_end", turnIndex: event.turnIndex });
 	});
 
