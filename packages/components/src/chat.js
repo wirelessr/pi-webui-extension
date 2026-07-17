@@ -555,6 +555,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     if (raw) {
       currentTextEl.innerHTML = renderContent("assistant", raw);
       attachCopyButtons(currentTextEl);
+      // The markdown render can be much taller than the streamed plain text
+      // (lists, paragraph spacing) — keep following, or the viewport is left
+      // stranded mid-bubble.
+      scrollToBottom();
     } else {
       currentTextEl.remove();
     }
@@ -570,7 +574,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     if (currentAssistantEl && turnFilePaths.length > 0) {
       const shown = new Set([...currentAssistantEl.querySelectorAll(".file-chip")].map((c) => c.title));
       const fresh = turnFilePaths.filter((p) => !shown.has(p));
-      if (fresh.length > 0) currentAssistantEl.appendChild(buildFileChips(fresh));
+      if (fresh.length > 0) {
+        currentAssistantEl.appendChild(buildFileChips(fresh));
+        scrollToBottom();
+      }
     }
     turnFilePaths = [];
     currentAssistantEl = null;
@@ -909,6 +916,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     if (!currentThinkingContent) return;
     // pendingThinking is the current thinking segment (reset on thinking_start).
     currentThinkingContent.textContent = state.pendingThinking;
+    // An EXPANDED thinking block grows the page as it streams — follow along
+    // like text deltas do (no-op while collapsed: height doesn't change, and
+    // scrollToBottom is gated on userAtBottom anyway).
+    scrollToBottom();
   }
 
   function renderThinkingCommitted() {
