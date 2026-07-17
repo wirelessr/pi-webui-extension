@@ -60,6 +60,14 @@ export default function (pi: ExtensionAPI) {
 
 	let idleWaiters: IdleWaiter[] = [];
 	let pendingDone: any = null;
+	// A single user prompt can span MULTIPLE agent loops (pi's _runAgentPrompt
+	// runs `while (_handlePostAgentRun()) agent.continue()`): auto-retry, auto-
+	// compaction, or queued messages. Each loop fires its own agent_start/
+	// agent_end. We must only finalize the turn (send done, close SSE) after the
+	// LAST loop — so a non-retry agent_end waits out a short grace window before
+	// finalizing, and a continuation (agent_start / compaction_start) cancels it.
+	let finalizeTimer: ReturnType<typeof setTimeout> | null = null;
+	const TURN_FINALIZE_GRACE_MS = 300;
 	// Buffer of the current web-initiated turn's agent events, accumulated even
 	// while no client is attached, so a re-attaching client can replay the turn
 	// so far and resume live rendering instead of seeing a frozen message.
@@ -262,30 +270,21 @@ export default function (pi: ExtensionAPI) {
 		return false;
 	}
 
-	pi.on("agent_start", (_event: any, ctx: any) => {
-		const foreign = isForeignAgentEvent(ctx);
-		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
-		if (foreign) return;
-		isBusy = true;
-		if (!ourTurnActive) return;
-		turnEventBuffer = [];
-		writeTurnEvent({ type: "agent_start" });
-	});
+	// Cancel a pending end-of-turn finalize because the turn is continuing (pi
+	// started another agent loop for the same prompt: post-compaction or a
+	// queued message). Keeps isBusy/ourTurnActive as-is so streaming continues
+	// on the already-open SSE.
+	function cancelPendingFinalize(): void {
+		if (finalizeTimer) {
+			clearTimeout(finalizeTimer);
+			finalizeTimer = null;
+		}
+	}
 
-	pi.on("agent_end", (event: any, ctx: any) => {
-		const foreign = isForeignAgentEvent(ctx);
-		const willRetry = event?.willRetry === true;
-		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
-		if (foreign) return;
-		// pi auto-retries a retryable error (e.g. "Stream ended without
-		// finish_reason") by running ANOTHER agent loop for the SAME turn. Its
-		// agent_end carries willRetry=true. Don't finalize on it: keep isBusy and
-		// ourTurnActive so the retry keeps streaming and the client never sees a
-		// premature done / goes silent (斷更) / sticks on "busy". The turn's final
-		// agent_end (success or give-up) has willRetry=false and finalizes below.
-		// (An abort during the retry backoff fires its own final willRetry=false
-		// agent_end, so we can't get stuck here.)
-		if (willRetry) return;
+	// Actually end the turn: clear busy, send/buffer the done event, resolve any
+	// pending RPC + idle waiters. Runs after the grace window with no continuation.
+	function finalizeTurn(event: any): void {
+		finalizeTimer = null;
 		isBusy = false;
 
 		if (ourTurnActive) {
@@ -317,11 +316,11 @@ export default function (pi: ExtensionAPI) {
 				// SSE disconnected (client navigated away). Buffer the done event
 				// so attachStream can deliver it when the client reconnects.
 				pendingDone = doneEvent;
-				serverLog("agent_end: SSE disconnected, buffered done event");
+				serverLog("finalizeTurn: SSE disconnected, buffered done event");
 			}
 		} else {
 			if (sse || pending) {
-				serverLog("agent_end received but ourTurnActive=false", {
+				serverLog("finalizeTurn: ourTurnActive=false", {
 					hasSse: !!sse,
 					hasPending: !!pending,
 					waitingForExtensionInput,
@@ -335,6 +334,50 @@ export default function (pi: ExtensionAPI) {
 			clearTimeout(w.timeout);
 			w.resolve();
 		}
+	}
+
+	pi.on("agent_start", (_event: any, ctx: any) => {
+		const foreign = isForeignAgentEvent(ctx);
+		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		if (foreign) return;
+		// A queued-message continuation of the same turn — keep the turn alive.
+		cancelPendingFinalize();
+		isBusy = true;
+		if (!ourTurnActive) return;
+		turnEventBuffer = [];
+		writeTurnEvent({ type: "agent_start" });
+	});
+
+	pi.on("agent_end", (event: any, ctx: any) => {
+		const foreign = isForeignAgentEvent(ctx);
+		const willRetry = event?.willRetry === true;
+		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		if (foreign) return;
+		// pi auto-retries a retryable error (e.g. "Stream ended without
+		// finish_reason") by running ANOTHER agent loop for the SAME turn. Its
+		// agent_end carries willRetry=true. Don't finalize on it: keep isBusy and
+		// ourTurnActive so the retry keeps streaming and the client never sees a
+		// premature done / goes silent (斷更) / sticks on "busy".
+		if (willRetry) return;
+		// Even with willRetry=false, pi may still run another loop for this same
+		// prompt (auto-compaction or a queued message). Those continuations arrive
+		// as a fresh agent_start (queue) or a compaction_start (compaction) shortly
+		// after this event, and cancel the finalize below. If none arrives within
+		// the grace window, this really was the last loop → finalize the turn.
+		// Deferring (rather than finalizing now) avoids sending a premature done /
+		// closing the SSE mid-turn and orphaning the continuation (斷更 / stuck busy).
+		cancelPendingFinalize();
+		finalizeTimer = setTimeout(() => finalizeTurn(event), TURN_FINALIZE_GRACE_MS);
+	});
+
+	// Auto-compaction runs BETWEEN agent loops of one prompt: agent_end fires,
+	// then compaction_start, then (seconds later, after the summarization call)
+	// the continuation agent_start. The post-compaction agent_start is too far
+	// off to catch the finalize grace window, so cancel it here the moment
+	// compaction begins.
+	pi.on("compaction_start", (event: any) => {
+		serverLog(`compaction_start fired: reason=${event?.reason} ourTurnActive=${ourTurnActive} hasPendingFinalize=${!!finalizeTimer}`);
+		cancelPendingFinalize();
 	});
 
 	pi.on("input", (event: any) => {
@@ -1053,6 +1096,7 @@ export default function (pi: ExtensionAPI) {
 
 		waitingForExtensionInput = false;
 		ourTurnActive = false;
+		cancelPendingFinalize();
 		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 
 		const waiters = idleWaiters;
