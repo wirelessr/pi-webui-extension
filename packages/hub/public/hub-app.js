@@ -76,7 +76,9 @@ import { formatStats } from "/utils.js";
   let nodePrefs = loadNodePrefs();
   const chat = createChat({
     $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded,
-    isNodeExpanded: (type) => !!nodePrefs[type],
+    // Per-type pref wins when set; otherwise fall back to the global
+    // expand-all state so new bubbles inherit "全部展開/收合".
+    isNodeExpanded: (type) => (type in nodePrefs ? !!nodePrefs[type] : toolsExpanded),
     getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
     statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
   });
@@ -94,8 +96,14 @@ import { formatStats } from "/utils.js";
   }
   setExpandButtonState(toolsExpanded); // reflect the persisted state on load
   $expandToolsBtn?.addEventListener("click", () => {
-    if (toolsExpanded) { chat.collapseAllTools(); setExpandButtonState(false); }
-    else { chat.expandAllTools(); setExpandButtonState(true); }
+    const open = !toolsExpanded;
+    // Rewrite present per-type prefs so a lingering explicit pref (e.g. edit:true)
+    // doesn't reopen a new bubble right after a "collapse all".
+    for (const type of chat.getPresentNodeTypes()) nodePrefs[type] = open;
+    saveNodePrefs();
+    if (open) chat.expandAllTools();
+    else chat.collapseAllTools();
+    setExpandButtonState(open);
   });
 
   // Per-type default-expand preferences (⚙ dropdown of the node types in view).
