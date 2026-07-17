@@ -286,29 +286,13 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       $subagentView.appendChild(el);
       _lastSubagentAssistantEl = null;
     } else if (entry.role === "assistant") {
+      const parts = entryParts(entry);
+      if (parts.length === 0) return;
       const el = document.createElement("div");
       el.className = "message assistant";
-      const textEl = document.createElement("div");
-      textEl.className = "text";
-      if (entry.thinking) {
-        el.appendChild(buildThinkingBlock(entry.thinking));
-      }
-      if (entry.text) {
-        textEl.innerHTML = renderMarkdown(entry.text);
-        attachCopyButtons(textEl);
-        el.appendChild(textEl);
-      }
-      if (entry.toolCalls) {
-        for (const tc of entry.toolCalls) {
-          const { block, resultEl } = buildStaticToolBlock(tc);
-          el.appendChild(block);
-          if (tc.id) subagentToolResultMap.set(tc.id, resultEl);
-        }
-      }
-      if (el.children.length > 0) {
-        $subagentView.appendChild(el);
-        _lastSubagentAssistantEl = el;
-      }
+      for (const part of parts) appendPart(el, part, subagentToolResultMap);
+      $subagentView.appendChild(el);
+      _lastSubagentAssistantEl = el;
     } else if (entry.role === "toolResult") {
       if (entry.toolCallId && subagentToolResultMap.has(entry.toolCallId)) {
         const resultEl = subagentToolResultMap.get(entry.toolCallId);
@@ -535,14 +519,44 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   function startAssistantMessage() {
     currentAssistantEl = document.createElement("div");
     currentAssistantEl.className = "message assistant";
-    currentTextEl = document.createElement("div");
-    currentTextEl.className = "text";
-    currentAssistantEl.appendChild(currentTextEl);
     $messages.appendChild(currentAssistantEl);
 
     accumulator = createStreamAccumulator();
+    currentTextEl = null;
     currentThinkingEl = null;
+    currentThinkingContent = null;
     currentToolMap.clear();
+  }
+
+  // Live streaming appends thinking / text / tool blocks to the bubble in event
+  // order. A text "segment" is one run of text_delta events; a fresh one starts
+  // whenever a thinking or tool block interrupts the flow, so the transcript
+  // reads in the order the agent produced it (talk, tool, talk) instead of every
+  // tool stacked above one merged block of text.
+  function ensureTextSegment() {
+    if (currentTextEl) return;
+    currentThinkingEl = null;
+    currentThinkingContent = null;
+    currentTextEl = document.createElement("div");
+    currentTextEl.className = "text";
+    currentAssistantEl.appendChild(currentTextEl);
+  }
+
+  // Close the open text segment: render its raw text (already in the element from
+  // the deltas) as markdown, or drop it if empty. Called on text_end AND whenever
+  // a tool/thinking block interrupts, since the stream doesn't guarantee a
+  // text_end before a tool starts.
+  function finalizeTextSegment() {
+    if (!currentTextEl) return;
+    removeStreamingCursor();
+    const raw = currentTextEl.textContent;
+    if (raw) {
+      currentTextEl.innerHTML = renderContent("assistant", raw);
+      attachCopyButtons(currentTextEl);
+    } else {
+      currentTextEl.remove();
+    }
+    currentTextEl = null;
   }
 
   function finishAssistantMessage() {
@@ -592,6 +606,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
 
   function ensureThinkingBlock() {
     if (currentThinkingEl) return;
+    finalizeTextSegment(); // close the open text segment so thinking appends below it
     currentThinkingEl = document.createElement("div");
     currentThinkingEl.className = "thinking-block";
     if (nodeOpen("thinking")) currentThinkingEl.classList.add("expanded");
@@ -606,12 +621,17 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
 
     currentThinkingEl.appendChild(header);
     currentThinkingEl.appendChild(currentThinkingContent);
-    currentAssistantEl.insertBefore(currentThinkingEl, currentTextEl);
+    currentAssistantEl.appendChild(currentThinkingEl);
   }
 
   function addToolBlock(toolCallId, toolName, args) {
     if (!currentAssistantEl) return;
     removeStreamingCursor();
+    // Close open text/thinking segments so the tool block appends below them,
+    // preserving the agent's talk→tool→talk order.
+    finalizeTextSegment();
+    currentThinkingEl = null;
+    currentThinkingContent = null;
 
     // Subagent tools get a special block with open button
     if (toolName === "subagent") {
@@ -631,7 +651,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       subagentViews.set(placeholderView.id, placeholderView);
       const saBlock = createSubagentBlock(placeholderView);
       block.appendChild(saBlock);
-      currentAssistantEl.insertBefore(block, currentTextEl);
+      currentAssistantEl.appendChild(block);
       if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan: null, resultEl: null });
       scrollToBottom();
       return;
@@ -669,7 +689,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     block.appendChild(argsEl);
     block.appendChild(resultEl);
     if (isSkillRead(toolName, args)) block.dataset.skillRead = "true";
-    currentAssistantEl.insertBefore(block, currentTextEl);
+    currentAssistantEl.appendChild(block);
 
     if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan, resultEl });
     scrollToBottom();
@@ -808,10 +828,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       }
       case "text_start": break;
       case "text_delta": appendTextDelta(state); break;
-      case "text_end": renderTextCommitted(state); break;
+      case "text_end": renderTextCommitted(); break;
       case "thinking_start": ensureThinkingBlock(); break;
       case "thinking_delta": renderThinking(state); break;
-      case "thinking_end": renderThinkingCommitted(state); break;
+      case "thinking_end": renderThinkingCommitted(); break;
       case "toolcall_start": break;
       case "toolcall_end": break;
       case "tool_execution_start": addToolBlock(event.toolCallId, event.toolName, event.args); break;
@@ -839,73 +859,121 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   }
 
   function renderText(state) {
-    if (!currentTextEl) return;
-    currentTextEl.innerHTML = renderContent("assistant", state.committedText + state.pendingText);
+    // Only the uncommitted tail — committed segments are already rendered and
+    // frozen in their own elements. Don't spawn an empty segment on a flush.
+    if (!state.pendingText) return;
+    ensureTextSegment();
+    currentTextEl.innerHTML = renderContent("assistant", state.pendingText);
     attachCopyButtons(currentTextEl);
     addStreamingCursor();
     scrollToBottom();
   }
 
   function appendTextDelta(state) {
-    if (!currentTextEl) return;
-    // During streaming, use textContent for performance — avoid full
-    // markdown re-parse on every delta. Markdown is rendered on text_end / done.
-    currentTextEl.textContent = state.committedText + state.pendingText;
+    ensureTextSegment();
+    // During streaming, use textContent for performance — avoid full markdown
+    // re-parse on every delta. pendingText is just the current segment (reset on
+    // text_start), so each segment renders its own text. Markdown on text_end.
+    currentTextEl.textContent = state.pendingText;
     addStreamingCursor();
     scrollToBottom();
   }
 
-  function renderTextCommitted(state) {
-    if (!currentTextEl) return;
-    currentTextEl.innerHTML = renderContent("assistant", state.committedText);
-    attachCopyButtons(currentTextEl);
+  function renderTextCommitted() {
+    // The segment's raw text is already in the element (from the deltas); render
+    // it as markdown and close it so the next text_start opens a fresh element.
+    finalizeTextSegment();
   }
 
   function renderThinking(state) {
     if (!currentThinkingContent) return;
-    currentThinkingContent.textContent = state.committedThinking + state.pendingThinking;
+    // pendingThinking is the current thinking segment (reset on thinking_start).
+    currentThinkingContent.textContent = state.pendingThinking;
   }
 
-  function renderThinkingCommitted(state) {
-    if (!currentThinkingContent) return;
-    currentThinkingContent.textContent = state.committedThinking;
+  function renderThinkingCommitted() {
+    // The text already shown (from the last thinking_delta) is this segment's
+    // full content. Close the block so a later thinking_start opens a new one.
+    currentThinkingEl = null;
+    currentThinkingContent = null;
   }
 
   // ── History rendering ──
 
+  // The ordered-parts contract shared by the live and reload paths. A message is
+  // a sequence of thinking / text / toolCall parts in the order the agent
+  // produced them. The server may one day send `entry.parts` directly; until
+  // then we reconstruct it from the normalized buckets — an assistant message's
+  // parts are always thinking → text → toolCalls (a tool_use ends the API turn,
+  // so no text ever follows a tool call within one message).
+  function entryParts(entry) {
+    if (Array.isArray(entry.parts)) return entry.parts;
+    const parts = [];
+    if (entry.thinking) parts.push({ type: "thinking", text: entry.thinking });
+    if (entry.text) parts.push({ type: "text", text: entry.text });
+    if (entry.toolCalls) for (const tc of entry.toolCalls) parts.push({ type: "toolCall", tc });
+    return parts;
+  }
+
+  // Append one part's static block to a bubble. Used by both reload (loadHistory)
+  // and the subagent transcript, so a reloaded turn looks identical to the live
+  // one: one bubble, blocks in event order. `toolMap` (optional) receives the
+  // tool-result element keyed by tool call id, for callers that fill results by
+  // id rather than by DOM query.
+  function appendPart(bubbleEl, part, toolMap) {
+    if (part.type === "thinking") {
+      bubbleEl.appendChild(buildThinkingBlock(part.text));
+    } else if (part.type === "text") {
+      const textEl = document.createElement("div");
+      textEl.className = "text";
+      textEl.innerHTML = renderMarkdown(part.text);
+      attachCopyButtons(textEl);
+      bubbleEl.appendChild(textEl);
+    } else if (part.type === "toolCall") {
+      const { block, resultEl } = buildStaticToolBlock(part.tc);
+      bubbleEl.appendChild(block);
+      if (toolMap && part.tc?.id) toolMap.set(part.tc.id, resultEl);
+    }
+  }
+
   function loadHistory(history) {
     closeFileView();
     $messages.innerHTML = "";
-    let lastAssistantEl = null;
+    // Group each turn's assistant messages + tool results into ONE bubble, so
+    // reload matches the live view (one bubble per turn, blocks interleaved).
+    let turnEl = null;
+    let turnPaths = null;
+
+    const closeTurn = () => {
+      if (turnEl && turnPaths.length > 0) turnEl.appendChild(buildFileChips(turnPaths));
+      turnEl = null;
+      turnPaths = null;
+    };
+    const ensureTurn = () => {
+      if (turnEl) return turnEl;
+      turnEl = document.createElement("div");
+      turnEl.className = "message assistant";
+      turnPaths = [];
+      $messages.appendChild(turnEl);
+      return turnEl;
+    };
+
     for (const entry of history) {
       if (entry.role === "user") {
+        closeTurn();
         addMessage("user", entry.text);
       } else if (entry.role === "assistant") {
-        const el = document.createElement("div");
-        el.className = "message assistant";
-        const textEl = document.createElement("div");
-        textEl.className = "text";
-        if (entry.thinking) {
-          el.appendChild(buildThinkingBlock(entry.thinking));
-        }
-        if (entry.text) {
-          textEl.innerHTML = renderMarkdown(entry.text);
-          attachCopyButtons(textEl);
-          el.appendChild(textEl);
-        }
+        const parts = entryParts(entry);
+        if (parts.length === 0) continue;
+        const el = ensureTurn();
+        for (const part of parts) appendPart(el, part);
         if (entry.toolCalls) {
-          for (const tc of entry.toolCalls) {
-            const { block } = buildStaticToolBlock(tc);
-            el.appendChild(block);
+          for (const p of extractFilePaths(entry.toolCalls)) {
+            if (!turnPaths.includes(p)) turnPaths.push(p);
           }
-          const paths = extractFilePaths(entry.toolCalls);
-          if (paths.length > 0) el.appendChild(buildFileChips(paths));
-        }
-        if (el.children.length > 0) {
-          $messages.appendChild(el);
-          lastAssistantEl = el;
         }
       } else if (entry.role === "system") {
+        closeTurn();
         if (entry.text?.startsWith("--- Compacted")) {
           const block = document.createElement("div");
           block.className = "compaction-block";
@@ -930,20 +998,20 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
           for (const view of views) {
             subagentViews.set(view.id, view);
             const saBlock = createSubagentBlock(view);
-            if (lastAssistantEl) {
+            if (turnEl) {
               // Replace the corresponding tool block if it exists
-              const toolBlock = lastAssistantEl.querySelector(`.tool-block [data-tool-call-id="${toolCallId}"]`)?.closest(".tool-block");
+              const toolBlock = turnEl.querySelector(`.tool-block [data-tool-call-id="${toolCallId}"]`)?.closest(".tool-block");
               if (toolBlock) {
                 toolBlock.parentElement.replaceChild(saBlock, toolBlock);
               } else {
-                lastAssistantEl.appendChild(saBlock);
+                turnEl.appendChild(saBlock);
               }
             } else {
               $messages.appendChild(saBlock);
             }
           }
-        } else if (entry.toolCallId && entry.text && lastAssistantEl) {
-          const resultEl = lastAssistantEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);
+        } else if (entry.toolCallId && entry.text && turnEl) {
+          const resultEl = turnEl.querySelector(`.tool-result[data-tool-call-id="${entry.toolCallId}"]`);
           if (resultEl) {
             const toolBlock = resultEl.closest(".tool-block");
             if (toolBlock?.dataset.skillRead === "true") {
@@ -960,6 +1028,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
         }
       }
     }
+    closeTurn();
     scrollToBottom();
     surfaceWatchedChanges(); // fire-and-forget: re-flag any watched file changed since last view
   }
