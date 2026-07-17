@@ -1,6 +1,6 @@
 {
   "name": "@wirelessr/pi-webui-components",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Shared browser UI + pure modules for the pi WebUI (used by the per-session extension and the central hub)",
   "exports": {
