@@ -353,28 +353,41 @@ export default function (pi: ExtensionAPI) {
 		const willRetry = event?.willRetry === true;
 		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
-		// pi auto-retries a retryable error (e.g. "Stream ended without
-		// finish_reason") by running ANOTHER agent loop for the SAME turn. Its
-		// agent_end carries willRetry=true. Don't finalize on it: keep isBusy and
-		// ourTurnActive so the retry keeps streaming and the client never sees a
-		// premature done / goes silent (斷更) / sticks on "busy".
+		// willRetry=true is a definite "another loop is coming" (pi will auto-retry
+		// a retryable error like "Stream ended without finish_reason"). Keep the
+		// turn fully alive — no finalize scheduled.
 		if (willRetry) return;
-		// Even with willRetry=false, pi may still run another loop for this same
-		// prompt (auto-compaction or a queued message). Those continuations arrive
-		// as a fresh agent_start (queue) or a compaction_start (compaction) shortly
-		// after this event, and cancel the finalize below. If none arrives within
-		// the grace window, this really was the last loop → finalize the turn.
-		// Deferring (rather than finalizing now) avoids sending a premature done /
-		// closing the SSE mid-turn and orphaning the continuation (斷更 / stuck busy).
+		// willRetry=false does NOT mean this was the last loop: pi may still run
+		// another loop for the same prompt via a retry (willRetry can be false yet
+		// a retry follows), auto-compaction, or a queued message. Each of those
+		// emits a prompt signal (auto_retry_start / compaction_start / the next
+		// agent_start) that cancels the finalize below, all BEFORE any backoff or
+		// summarization delay. So defer the finalize by a short grace window rather
+		// than running it inline; if no continuation signal arrives, this really
+		// was the last loop → finalize. Deferring avoids sending a premature done /
+		// closing the SSE mid-turn and orphaning the rest (斷更 / stuck busy).
 		cancelPendingFinalize();
 		finalizeTimer = setTimeout(() => finalizeTurn(event), TURN_FINALIZE_GRACE_MS);
 	});
 
-	// Auto-compaction runs BETWEEN agent loops of one prompt: agent_end fires,
-	// then compaction_start, then (seconds later, after the summarization call)
-	// the continuation agent_start. The post-compaction agent_start is too far
-	// off to catch the finalize grace window, so cancel it here the moment
-	// compaction begins.
+	// A retryable error (e.g. "Stream ended without finish_reason") makes pi run
+	// ANOTHER loop for the same prompt. This SHOULD be flagged by agent_end's
+	// willRetry, but observed sessions show agent_end arriving with
+	// willRetry=false immediately followed by a retry continuation (pi's
+	// _willRetryAfterAgentEnd and _prepareRetry can disagree). So don't trust
+	// willRetry alone: pi emits auto_retry_start the moment it commits to a retry
+	// — crucially BEFORE its exponential-backoff sleep, so it lands well inside
+	// the finalize grace window even though the retry's agent_start is seconds
+	// away. Cancel the pending finalize here so the turn isn't orphaned (斷更).
+	pi.on("auto_retry_start", (event: any) => {
+		serverLog(`auto_retry_start fired: attempt=${event?.attempt}/${event?.maxAttempts} ourTurnActive=${ourTurnActive} hasPendingFinalize=${!!finalizeTimer}`);
+		cancelPendingFinalize();
+	});
+
+	// Auto-compaction likewise runs BETWEEN agent loops of one prompt: agent_end
+	// fires, then compaction_start, then (seconds later, after the summarization
+	// call) the continuation agent_start. compaction_start lands inside the grace
+	// window, so cancel the finalize the moment compaction begins.
 	pi.on("compaction_start", (event: any) => {
 		serverLog(`compaction_start fired: reason=${event?.reason} ourTurnActive=${ourTurnActive} hasPendingFinalize=${!!finalizeTimer}`);
 		cancelPendingFinalize();
