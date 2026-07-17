@@ -7,7 +7,7 @@
 //
 // Usage: node scripts/build-dist.mjs <x.y.z> [outDir=dist]
 
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const version = process.argv[2];
@@ -22,8 +22,16 @@ const INTERNAL = "@wirelessr/pi-webui-components";
 const skip = new Set(["node_modules", "data", "package-lock.json"]);
 const filter = (base) => (src) => !skip.has(src.slice(base.length + 1).split("/")[0]);
 
-rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
+// Clear stale build output but preserve runtime data/ (session discovery
+// files) when deploying into the live extension dir. A blanket rmSync(out)
+// would nuke data/ and orphan every running session from the hub.
+if (existsSync(out)) {
+	for (const entry of readdirSync(out)) {
+		if (entry === "data") continue;
+		rmSync(join(out, entry), { recursive: true, force: true });
+	}
+}
 
 // 1. Extension files at the root.
 cpSync("packages/extension", out, { recursive: true, filter: filter("packages/extension") });
