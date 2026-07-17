@@ -192,7 +192,10 @@ export default function (pi: ExtensionAPI) {
 		return { pid: child.pid };
 	}
 
-	function markDiscoveryForClose(pid: number): void {
+	// Find the discovery file matching a piPid (from /api/status) or pid
+	// (shell ppid), mark it intentionalClose, and return the shell pid
+	// stored in that file so the caller can kill the correct process group.
+	function markDiscoveryForClose(targetPid: number): number | undefined {
 		try {
 			const files = readdirSync(BRIDGE_DIR);
 			for (const f of files) {
@@ -201,11 +204,13 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const content = JSON.parse(readFileSync(fullPath, "utf-8"));
 					// Match by piPid (process.pid from /api/status) or pid (shell ppid)
-					if (content.piPid === pid || content.pid === pid) {
+					if (content.piPid === targetPid || content.pid === targetPid) {
 						content.intentionalClose = true;
 						writeFileSync(fullPath, JSON.stringify(content, null, 2));
 						serverLog(`killSession: marked ${f} as intentionalClose`);
-						return;
+						// content.pid is the shell ppid = process group leader.
+						// Fall back to piPid only if shell pid missing.
+						return content.pid ?? content.piPid;
 					}
 				} catch {
 					// Skip
@@ -214,18 +219,26 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// Dir doesn't exist
 		}
+		return undefined;
 	}
 
-	function killSession(pid: number): boolean {
+	function killSession(piPid: number): boolean {
 		try {
-			serverLog(`killSession: pid=${pid}`);
-			markDiscoveryForClose(pid);
+			serverLog(`killSession: piPid=${piPid}`);
+			// piPid (from /api/status = process.pid) is the pi process, NOT the
+			// process group leader. The group leader is the shell whose pid is
+				// stored as content.pid in the discovery file. Killing -piPid hits a
+				// non-existent group, falls back to direct kill, and orphans the shell
+				// (which keeps the discovery file looking alive). Resolve the shell pid
+				// via the discovery file and kill THAT group.
+			const shellPid = markDiscoveryForClose(piPid);
+			const groupPid = shellPid ?? piPid;
 			try {
-				process.kill(-pid, "SIGTERM");
-				serverLog(`killSession: killed process group -${pid}`);
+				process.kill(-groupPid, "SIGTERM");
+				serverLog(`killSession: killed process group -${groupPid}`);
 			} catch (err: any) {
 				serverLog(`killSession: group kill failed (${err.message}), trying direct kill`);
-				process.kill(pid, "SIGTERM");
+				process.kill(piPid, "SIGTERM");
 			}
 			return true;
 		} catch (err: any) {
@@ -788,6 +801,9 @@ export default function (pi: ExtensionAPI) {
 				if (!f.endsWith(".json")) continue;
 				try {
 					const content = JSON.parse(readFileSync(join(BRIDGE_DIR, f), "utf-8"));
+					// A session marked intentionalClose was killed via the UI; even
+					// if the orphaned shell is still alive, don't surface it.
+					if (content.intentionalClose) continue;
 					if (content.pid && isPidAlive(content.pid)) sessions.push(content);
 				} catch {
 					// Skip
