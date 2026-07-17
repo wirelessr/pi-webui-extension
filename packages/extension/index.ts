@@ -23,6 +23,7 @@ import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./helpers.js";
 import { generateSessionName } from "./name-generator.js";
 import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
+import { createTurnLifecycle, lastAssistantEndedOnError } from "./turn-lifecycle.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -52,36 +53,19 @@ export default function (pi: ExtensionAPI) {
 	let actualPort = BASE_PORT;
 	let pending: PendingRequest | null = null;
 	let sse: SseState | null = null;
-	let isBusy = false;
 
 	let waitingForExtensionInput = false;
-	let ourTurnActive = false;
 	let inputWatchdog: ReturnType<typeof setTimeout> | null = null;
 
 	let idleWaiters: IdleWaiter[] = [];
 	let pendingDone: any = null;
-	// A single user prompt can span MULTIPLE agent loops (pi's _runAgentPrompt
-	// runs `while (_handlePostAgentRun()) agent.continue()`): auto-retry, auto-
-	// compaction, or queued messages. Each loop fires its own agent_start/
-	// agent_end, and agent_end's willRetry does NOT reliably flag them. Extensions
-	// can't see auto_retry_start / compaction_start (not in the extension event
-	// set), so the ONLY continuation signal is the next agent_start — which for a
-	// retry lands only after pi's exponential backoff. So finalize only after a
-	// grace window with no continuation: long enough to cover the retry backoff
-	// when a loop ended on a retryable error, short otherwise. Any agent_start
-	// cancels a pending finalize (and re-asserts the turn if one already fired).
-	let finalizeTimer: ReturnType<typeof setTimeout> | null = null;
-	// Clean end (stopReason "stop"): only a fast queued-message continuation is
-	// possible, so a short window suffices.
-	const TURN_FINALIZE_GRACE_MS = 1000;
-	// Error end: pi may auto-retry after exponential backoff (defaults maxRetries=3,
-	// baseDelayMs=2000 → 2s/4s/8s). Cover the worst-case gap before the retry's
-	// agent_start; if pi instead gives up, the pill clears after this window.
-	const TURN_FINALIZE_ERROR_GRACE_MS = 15000;
-	// Buffer of the current web-initiated turn's agent events, accumulated even
-	// while no client is attached, so a re-attaching client can replay the turn
-	// so far and resume live rendering instead of seeing a frozen message.
-	let turnEventBuffer: any[] = [];
+	// Turn-active/busy tracking, finalize grace scheduling, and the coalescing
+	// replay buffer all live in turn-lifecycle.js (pure, unit-tested — the
+	// multi-loop/orphaned-turn bugs were here). This file only feeds pi events
+	// in and delivers the done event out via onFinalize (below).
+	const lifecycle = createTurnLifecycle({
+		onFinalize: (event: any, wasActive: boolean) => finalizeTurn(event, wasActive),
+	});
 	let sessionFile: string | undefined;
 	let sessionId: string | undefined;
 	let sessionName: string | undefined;
@@ -110,7 +94,7 @@ export default function (pi: ExtensionAPI) {
 		getPid: () => process.pid,
 		getStartedAt: () => sessionStartTime,
 	getCwd: () => sessionCtx?.cwd ?? process.cwd(),
-		getIsBusy: () => isBusy,
+		getIsBusy: () => lifecycle.isBusy(),
 		getSessionFile: () => sessionFile,
 		getSessionId: () => sessionId,
 		getSessionName: () => sessionName,
@@ -145,7 +129,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function serverLog(message: string, data?: any): void {
-		const prefix = `[${actualPort}] [http-bridge]`;
+		const prefix = `${new Date().toISOString()} [${actualPort}] [http-bridge]`;
 		const dataStr = data ? ` ${JSON.stringify(data)}` : "";
 		const line = `${prefix} ${message}${dataStr}`;
 		try {
@@ -156,7 +140,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function clientLog(level: string, message: string, data?: any): void {
-		const prefix = `[${actualPort}] [client]`;
+		const prefix = `${new Date().toISOString()} [${actualPort}] [client]`;
 		const dataStr = data ? ` ${JSON.stringify(data)}` : "";
 		const line = `${prefix} [${level}] ${message}${dataStr}`;
 		try {
@@ -304,25 +288,11 @@ export default function (pi: ExtensionAPI) {
 		return false;
 	}
 
-	// Cancel a pending end-of-turn finalize because the turn is continuing (pi
-	// started another agent loop for the same prompt: post-compaction or a
-	// queued message). Keeps isBusy/ourTurnActive as-is so streaming continues
-	// on the already-open SSE.
-	function cancelPendingFinalize(): void {
-		if (finalizeTimer) {
-			clearTimeout(finalizeTimer);
-			finalizeTimer = null;
-		}
-	}
-
-	// Actually end the turn: clear busy, send/buffer the done event, resolve any
-	// pending RPC + idle waiters. Runs after the grace window with no continuation.
-	function finalizeTurn(event: any): void {
-		finalizeTimer = null;
-		isBusy = false;
-
-		if (ourTurnActive) {
-			ourTurnActive = false;
+	// Deliver the end of a turn: send/buffer the done event, resolve any pending
+	// RPC + idle waiters. Called by the lifecycle after the grace window expired
+	// with no continuation (busy/turn-active state is already cleared there).
+	function finalizeTurn(event: any, wasActive: boolean): void {
+		if (wasActive) {
 			const messages = event.messages ?? [];
 			const doneEvent = {
 				type: "done",
@@ -354,7 +324,7 @@ export default function (pi: ExtensionAPI) {
 			}
 		} else {
 			if (sse || pending) {
-				serverLog("finalizeTurn: ourTurnActive=false", {
+				serverLog("finalizeTurn: turn not active", {
 					hasSse: !!sse,
 					hasPending: !!pending,
 					waitingForExtensionInput,
@@ -372,64 +342,36 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", (_event: any, ctx: any) => {
 		const foreign = isForeignAgentEvent(ctx);
-		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		serverLog(`agent_start fired: ourTurnActive=${lifecycle.isTurnActive()} isBusy(before)=${lifecycle.isBusy()} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
 		// Any agent_start is a (re)start of the current turn's work — a fresh
 		// prompt, or a continuation loop (retry after backoff, post-compaction, or
-		// a queued message). Cancel a pending finalize so the turn isn't closed out
-		// from under the continuation.
-		cancelPendingFinalize();
-		isBusy = true;
-		if (!ourTurnActive) {
-			// A continuation arrived AFTER the finalize already fired and cleared
-			// ourTurnActive (e.g. a retry whose backoff outran the grace window).
-			// Re-assert the turn so the rest of it streams again; the hub sees
-			// isBusy=true on its next poll, re-attaches, and replays the buffer.
-			// (A genuine new prompt sets ourTurnActive=true via its input event
-			// before agent_start, so this only catches orphaned continuations.)
-			ourTurnActive = true;
-			serverLog("agent_start: re-asserting ourTurnActive (orphaned continuation)");
-		}
-		turnEventBuffer = [];
+		// a queued message). The lifecycle cancels a pending finalize, and if the
+		// finalize already fired (a retry whose backoff outran the grace window)
+		// re-asserts the turn so the rest of it streams again — the hub sees
+		// isBusy=true on its next poll, re-attaches, and replays the buffer.
+		const { reasserted } = lifecycle.agentStart();
+		if (reasserted) serverLog("agent_start: re-asserting ourTurnActive (orphaned continuation)");
 		writeTurnEvent({ type: "agent_start" });
 	});
 
 	pi.on("agent_end", (event: any, ctx: any) => {
 		const foreign = isForeignAgentEvent(ctx);
 		const willRetry = event?.willRetry === true;
-		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		serverLog(`agent_end fired: ourTurnActive=${lifecycle.isTurnActive()} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
-		// willRetry=true is a definite "another loop is coming" — keep the turn
-		// fully alive, no finalize scheduled.
-		if (willRetry) return;
-		// willRetry=false is NOT a reliable "last loop" signal. pi may still run
-		// another loop for this same prompt via an auto-retry (observed: willRetry
-		// reported false yet a retry followed), auto-compaction, or a queued
-		// message. Extensions can't observe auto_retry_start / compaction_start, so
-		// the only continuation signal is the next agent_start — which for a retry
-		// arrives only AFTER pi's exponential backoff. So defer the finalize by a
-		// grace window sized to cover that backoff when the loop ended on a
-		// retryable error, and a short window otherwise. If a continuation still
-		// outruns the window, agent_start re-asserts the turn. This is what keeps a
-		// multi-loop turn from being orphaned (斷更 / stuck busy).
-		const msgs: any[] = event?.messages ?? [];
-		let endedOnError = false;
-		for (let i = msgs.length - 1; i >= 0; i--) {
-			if (msgs[i]?.role === "assistant") {
-				endedOnError = msgs[i]?.stopReason === "error";
-				break;
-			}
-		}
-		const grace = endedOnError ? TURN_FINALIZE_ERROR_GRACE_MS : TURN_FINALIZE_GRACE_MS;
-		serverLog(`agent_end: scheduling finalize in ${grace}ms (endedOnError=${endedOnError})`);
-		cancelPendingFinalize();
-		finalizeTimer = setTimeout(() => finalizeTurn(event), grace);
+		// The lifecycle keeps the turn alive on willRetry, otherwise schedules the
+		// finalize after a grace window (long when the loop ended on a retryable
+		// error, short otherwise) — see turn-lifecycle.js for the full rationale.
+		const endedOnError = lastAssistantEndedOnError(event?.messages ?? []);
+		const { scheduled, graceMs } = lifecycle.agentEnd(event, { willRetry, endedOnError });
+		if (scheduled) serverLog(`agent_end: scheduling finalize in ${graceMs}ms (endedOnError=${endedOnError})`);
 	});
 
 	pi.on("input", (event: any) => {
 		if (waitingForExtensionInput && event.source === "extension") {
 			waitingForExtensionInput = false;
-			ourTurnActive = true;
+			lifecycle.beginTurn();
 			if (inputWatchdog) {
 				clearTimeout(inputWatchdog);
 				inputWatchdog = null;
@@ -457,17 +399,17 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", (event: any) => {
-		serverLog(`turn_start fired: turnIndex=${event.turnIndex} ourTurnActive=${ourTurnActive} isBusy=${isBusy}`);
+		serverLog(`turn_start fired: turnIndex=${event.turnIndex} ourTurnActive=${lifecycle.isTurnActive()} isBusy=${lifecycle.isBusy()}`);
 		writeTurnEvent({ type: "turn_start", turnIndex: event.turnIndex });
 	});
 
 	pi.on("turn_end", (event: any) => {
-		serverLog(`turn_end fired: turnIndex=${event.turnIndex} ourTurnActive=${ourTurnActive} isBusy=${isBusy}`);
+		serverLog(`turn_end fired: turnIndex=${event.turnIndex} ourTurnActive=${lifecycle.isTurnActive()} isBusy=${lifecycle.isBusy()}`);
 		writeTurnEvent({ type: "turn_end", turnIndex: event.turnIndex });
 	});
 
 	pi.on("message_update", (event: any) => {
-		if (!ourTurnActive) return;
+		if (!lifecycle.isTurnActive()) return;
 		const ae = event.assistantMessageEvent;
 		if (!ae) return;
 
@@ -533,12 +475,12 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	// Record a turn event into the replay buffer and, if a client is attached,
-	// stream it live. Buffering happens regardless of attachment so events that
-	// occur while the client is switched away are not lost.
+	// Record a turn event into the replay buffer (coalesced — see
+	// turn-lifecycle.js) and, if a client is attached, stream it live per-event.
+	// Buffering happens regardless of attachment so events that occur while the
+	// client is switched away are not lost.
 	function writeTurnEvent(data: any): void {
-		if (!ourTurnActive) return;
-		turnEventBuffer.push(data);
+		if (!lifecycle.recordEvent(data)) return;
 		if (sse) writeSse(data);
 	}
 
@@ -570,7 +512,7 @@ export default function (pi: ExtensionAPI) {
 			closeSse();
 		}
 		// Allow attach if agent is busy, or if there's a buffered done event
-		if (!isBusy && !pendingDone) return false;
+		if (!lifecycle.isBusy() && !pendingDone) return false;
 		const heartbeat = setInterval(() => {
 			if (sse) {
 				try {
@@ -599,8 +541,8 @@ export default function (pi: ExtensionAPI) {
 			// Replay the current turn's events so the re-attaching client rebuilds
 			// the in-progress assistant message, then continues live. Synchronous:
 			// no pi event can interleave between here and the return.
-			serverLog(`attachStream: re-attached SSE to busy agent, replaying ${turnEventBuffer.length} buffered events`);
-			for (const ev of turnEventBuffer) {
+			serverLog(`attachStream: re-attached SSE to busy agent, replaying ${lifecycle.bufferedCount()} buffered events`);
+			for (const ev of lifecycle.bufferedEvents()) {
 				if (!sse) break;
 				writeSse(ev);
 			}
@@ -787,7 +729,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function waitForIdle(timeoutMs: number): Promise<void> {
-		if (!isBusy) return Promise.resolve();
+		if (!lifecycle.isBusy()) return Promise.resolve();
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				idleWaiters = idleWaiters.filter((w) => w.resolve !== resolve);
@@ -869,7 +811,7 @@ export default function (pi: ExtensionAPI) {
 				timeout: setTimeout(() => {
 					pending = null;
 					waitingForExtensionInput = false;
-					ourTurnActive = false;
+					lifecycle.abandonTurn();
 					try { sessionCtx?.abort(); } catch {}
 					reject(new Error("Agent response timeout"));
 				}, timeoutMs),
@@ -881,7 +823,7 @@ export default function (pi: ExtensionAPI) {
 		inputWatchdog = setTimeout(() => {
 			if (waitingForExtensionInput) {
 				waitingForExtensionInput = false;
-				ourTurnActive = false;
+				lifecycle.abandonTurn();
 				if (pending) { clearTimeout(pending.timeout); pending = null; }
 				if (watchdogReject) watchdogReject(new Error("Agent did not start processing the message (input event not received)"));
 			}
@@ -1010,7 +952,7 @@ export default function (pi: ExtensionAPI) {
 			if (waitingForExtensionInput) {
 				serverLog("input watchdog: agent did not start processing message");
 				waitingForExtensionInput = false;
-				ourTurnActive = false;
+				lifecycle.abandonTurn();
 				sendSseError("Agent did not start processing the message (input event not received)");
 			}
 		}, 10000);
@@ -1144,8 +1086,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		waitingForExtensionInput = false;
-		ourTurnActive = false;
-		cancelPendingFinalize();
+		lifecycle.shutdown();
 		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 
 		const waiters = idleWaiters;
