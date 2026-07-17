@@ -300,9 +300,9 @@ import { formatStats } from "/utils.js";
   async function switchTo(sessionId) {
     if (activeAttach) { activeAttach.abort(); activeAttach = null; }
     // Release any outgoing prompt stream we were holding on the session we're
-    // leaving, so its bridge frees the SSE slot. Otherwise switching back can't
-    // re-attach (the bridge won't let attach steal an active prompt stream →
-    // 409). The turn keeps running on the bridge; re-attach resumes it live.
+    // leaving — the bridge fans out to any number of viewers, but there's no
+    // point keeping a feed nobody renders. The turn keeps running on the
+    // bridge; switching back re-attaches and replays the buffer.
     if (activePromptAbort) { activePromptAbort.abort(); activePromptAbort = null; }
     activeStreaming = false;
     streamStuckTicks = 0;

@@ -23,6 +23,7 @@ import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./helpers.js";
 import { generateSessionName } from "./name-generator.js";
 import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
+import { createSseBroadcast } from "./sse-broadcast.js";
 import { createTurnLifecycle, lastAssistantEndedOnError } from "./turn-lifecycle.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -38,11 +39,6 @@ interface IdleWaiter {
 	timeout: ReturnType<typeof setTimeout>;
 }
 
-interface SseState {
-	res: any;
-	heartbeat: ReturnType<typeof setInterval>;
-	origin: "prompt" | "attach";
-}
 
 export default function (pi: ExtensionAPI) {
 	const BASE_PORT = parseInt(process.env.PI_HTTP_PORT || "7331", 10);
@@ -52,7 +48,13 @@ export default function (pi: ExtensionAPI) {
 	let server: ReturnType<typeof createServer> | null = null;
 	let actualPort = BASE_PORT;
 	let pending: PendingRequest | null = null;
-	let sse: SseState | null = null;
+	// Fan-out: every viewer (attach streams from any number of tabs, plus the
+	// sending client's own /api/prompt stream) is a client in this set and
+	// receives the same turn events live. Client bookkeeping (broadcast,
+	// per-client eviction, shared heartbeat) lives in sse-broadcast.js.
+	const viewers = createSseBroadcast({
+		onEvict: (client: any, reason: string) => serverLog(`sse client evicted (${client.origin}): ${reason}`),
+	});
 
 	let waitingForExtensionInput = false;
 	let inputWatchdog: ReturnType<typeof setTimeout> | null = null;
@@ -115,7 +117,7 @@ export default function (pi: ExtensionAPI) {
 		compactAndStream,
 		attachStream,
 		saveUpload,
-		isPendingOrSse: () => !!(pending || sse),
+		isPendingOrSse: () => !!(pending || viewers.size() > 0),
 		reload: doReload,
 		clientLog,
 	};
@@ -304,9 +306,11 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			let delivered = false;
-			if (sse) {
-				writeSse(doneEvent);
-				closeSse();
+			if (viewers.size() > 0) {
+				// done = end of stream for every viewer; each re-attaches on the
+				// next turn (ensureActiveAttached / busy poll).
+				viewers.broadcast(doneEvent);
+				viewers.closeAll();
 				delivered = true;
 			}
 			if (pending) {
@@ -323,9 +327,9 @@ export default function (pi: ExtensionAPI) {
 				serverLog("finalizeTurn: SSE disconnected, buffered done event");
 			}
 		} else {
-			if (sse || pending) {
+			if (viewers.size() > 0 || pending) {
 				serverLog("finalizeTurn: turn not active", {
-					hasSse: !!sse,
+					clients: viewers.size(),
 					hasPending: !!pending,
 					waitingForExtensionInput,
 				});
@@ -342,7 +346,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", (_event: any, ctx: any) => {
 		const foreign = isForeignAgentEvent(ctx);
-		serverLog(`agent_start fired: ourTurnActive=${lifecycle.isTurnActive()} isBusy(before)=${lifecycle.isBusy()} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		serverLog(`agent_start fired: ourTurnActive=${lifecycle.isTurnActive()} isBusy(before)=${lifecycle.isBusy()} clients=${viewers.size()} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
 		// Any agent_start is a (re)start of the current turn's work — a fresh
 		// prompt, or a continuation loop (retry after backoff, post-compaction, or
@@ -358,7 +362,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", (event: any, ctx: any) => {
 		const foreign = isForeignAgentEvent(ctx);
 		const willRetry = event?.willRetry === true;
-		serverLog(`agent_end fired: ourTurnActive=${lifecycle.isTurnActive()} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
+		serverLog(`agent_end fired: ourTurnActive=${lifecycle.isTurnActive()} clients=${viewers.size()} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
 		// The lifecycle keeps the turn alive on willRetry, otherwise schedules the
 		// finalize after a grace window (long when the loop ended on a retryable
@@ -465,87 +469,49 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	function writeSse(data: any): void {
-		if (!sse) return;
-		try {
-			sse.res.write(`data: ${JSON.stringify(data)}\n\n`);
-		} catch (err) {
-			serverLog("writeSse failed, closing stream:", err);
-			closeSse();
-		}
-	}
-
 	// Record a turn event into the replay buffer (coalesced — see
-	// turn-lifecycle.js) and, if a client is attached, stream it live per-event.
-	// Buffering happens regardless of attachment so events that occur while the
-	// client is switched away are not lost.
+	// turn-lifecycle.js) and stream it live to every connected viewer.
+	// Buffering happens regardless of attachment so events that occur while all
+	// clients are switched away are not lost.
 	function writeTurnEvent(data: any): void {
 		if (!lifecycle.recordEvent(data)) return;
-		if (sse) writeSse(data);
-	}
-
-	function closeSse(): void {
-		if (!sse) return;
-		clearInterval(sse.heartbeat);
-		try {
-			sse.res.end();
-		} catch (err) {
-			serverLog("closeSse res.end failed:", err);
-		}
-		sse = null;
+		viewers.broadcast(data);
 	}
 
 	function sendSseError(message: string): void {
-		if (sse) {
-			writeSse({ type: "error", message });
-			closeSse();
-		}
+		viewers.broadcast({ type: "error", message });
+		viewers.closeAll();
 	}
 
 	function attachStream(res: any): boolean {
-		if (sse) {
-			// Never steal an active /api/prompt stream from the sending client.
-			if (sse.origin !== "attach") return false;
-			// A previous attach stream is still registered (e.g. a suspended
-			// mobile tab whose socket never closed). Newest attach wins.
-			serverLog("attachStream: replacing previous attach stream");
-			closeSse();
-		}
-		// Allow attach if agent is busy, or if there's a buffered done event
+		// Allow attach if agent is busy, or if there's a buffered done event.
+		// Any number of viewers can attach concurrently (fan-out); the sender's
+		// /api/prompt stream is just another viewer, never stolen from.
 		if (!lifecycle.isBusy() && !pendingDone) return false;
-		const heartbeat = setInterval(() => {
-			if (sse) {
-				try {
-					sse.res.write(": heartbeat\n\n");
-				} catch (err) {
-					serverLog("heartbeat write failed:", err);
-					closeSse();
-				}
-			}
-		}, 15000);
-		sse = { res, heartbeat, origin: "attach" };
-		res.onClose = () => {
-			if (sse && sse.res === res) {
-				serverLog("attachStream: client disconnected, closing SSE state");
-				closeSse();
-			}
-		};
-		// If agent already ended while SSE was disconnected, send the
-		// buffered done event immediately so the client can finalize.
+		// If the agent already ended while no client was connected, deliver the
+		// buffered done event on a one-shot stream — first attacher consumes it.
 		if (pendingDone) {
 			serverLog("attachStream: sending buffered done event");
-			writeSse(pendingDone);
-			closeSse();
+			writeSseSafe(res, pendingDone);
+			try {
+				res.end();
+			} catch {}
 			pendingDone = null;
-		} else {
-			// Replay the current turn's events so the re-attaching client rebuilds
-			// the in-progress assistant message, then continues live. Synchronous:
-			// no pi event can interleave between here and the return.
-			serverLog(`attachStream: re-attached SSE to busy agent, replaying ${lifecycle.bufferedCount()} buffered events`);
-			for (const ev of lifecycle.bufferedEvents()) {
-				if (!sse) break;
-				writeSse(ev);
-			}
+			return true;
+		}
+		const client = viewers.add(res, "attach");
+		res.onClose = () => {
+			serverLog("attachStream: client disconnected");
+			viewers.remove(client);
+		};
+		// Replay the current turn's events so the joining client rebuilds the
+		// in-progress assistant message, then continues live. Synchronous: no pi
+		// event can interleave between here and the return, and other viewers'
+		// live feeds are untouched.
+		serverLog(`attachStream: attached viewer, replaying ${lifecycle.bufferedCount()} buffered events (clients=${viewers.size()})`);
+		for (const ev of lifecycle.bufferedEvents()) {
+			if (!viewers.has(client)) break;
+			viewers.writeTo(client, ev);
 		}
 		return true;
 	}
@@ -921,28 +887,12 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const heartbeat = setInterval(() => {
-			if (sse) {
-				try {
-					sse.res.write(": heartbeat\n\n");
-				} catch (err) {
-					serverLog("heartbeat write failed:", err);
-					closeSse();
-				}
-			}
-		}, 15000);
-
-		if (sse) {
-			serverLog("new SSE request while previous still open, closing old");
-			closeSse();
-		}
-
-		sse = { res, heartbeat, origin: "prompt" };
+		// The sender's own stream is a viewer like any attach — other tabs
+		// watching this session keep their streams.
+		const client = viewers.add(res, "prompt");
 		res.onClose = () => {
-			if (sse && sse.res === res) {
-				serverLog("sendAndStream: client disconnected, closing SSE state");
-				closeSse();
-			}
+			serverLog("sendAndStream: client disconnected");
+			viewers.remove(client);
 		};
 
 		const expanded = expandInput(message);
@@ -1028,7 +978,7 @@ export default function (pi: ExtensionAPI) {
 							serverLog("client disconnected during stream");
 							// Cancelling the reader errors the TransformStream writer,
 							// which fires the SSE wrapper's onClose for THIS stream only.
-							// Do not close the global sse here: this close event may
+							// Do not touch the viewer set here: this close event may
 							// belong to an older socket than the currently attached SSE.
 							reader.cancel().catch(() => {});
 						}
@@ -1081,9 +1031,7 @@ export default function (pi: ExtensionAPI) {
 			pending = null;
 		}
 
-		if (sse) {
-			sendSseError("Session shutting down");
-		}
+		sendSseError("Session shutting down");
 
 		waitingForExtensionInput = false;
 		lifecycle.shutdown();
