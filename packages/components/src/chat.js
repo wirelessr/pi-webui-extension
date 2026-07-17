@@ -24,6 +24,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   const currentToolMap = new Map();
   let cursorEl = null;
   let accumulator = null;
+  let turnFilePaths = []; // write/edit targets this live turn, for end-of-turn chips
 
   // ── Subagent view state ──
   const subagentViews = new Map();
@@ -526,6 +527,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     currentThinkingEl = null;
     currentThinkingContent = null;
     currentToolMap.clear();
+    turnFilePaths = [];
   }
 
   // Live streaming appends thinking / text / tool blocks to the bubble in event
@@ -561,6 +563,16 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
 
   function finishAssistantMessage() {
     removeStreamingCursor();
+    // Surface file chips for what THIS turn wrote/edited. loadHistory does this
+    // on reload, but a turn you send in this tab and let finish normally never
+    // reloads (see flow.js), so without this you'd only see chips after switching
+    // away or refreshing. Dedupe against chips already shown.
+    if (currentAssistantEl && turnFilePaths.length > 0) {
+      const shown = new Set([...currentAssistantEl.querySelectorAll(".file-chip")].map((c) => c.title));
+      const fresh = turnFilePaths.filter((p) => !shown.has(p));
+      if (fresh.length > 0) currentAssistantEl.appendChild(buildFileChips(fresh));
+    }
+    turnFilePaths = [];
     currentAssistantEl = null;
     currentTextEl = null;
     currentThinkingEl = null;
@@ -691,6 +703,9 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     if (isSkillRead(toolName, args)) block.dataset.skillRead = "true";
     currentAssistantEl.appendChild(block);
 
+    for (const p of extractFilePaths([{ name: toolName, arguments: args }])) {
+      if (!turnFilePaths.includes(p)) turnFilePaths.push(p);
+    }
     if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan, resultEl });
     scrollToBottom();
   }
