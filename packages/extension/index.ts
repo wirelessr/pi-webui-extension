@@ -63,11 +63,21 @@ export default function (pi: ExtensionAPI) {
 	// A single user prompt can span MULTIPLE agent loops (pi's _runAgentPrompt
 	// runs `while (_handlePostAgentRun()) agent.continue()`): auto-retry, auto-
 	// compaction, or queued messages. Each loop fires its own agent_start/
-	// agent_end. We must only finalize the turn (send done, close SSE) after the
-	// LAST loop — so a non-retry agent_end waits out a short grace window before
-	// finalizing, and a continuation (agent_start / compaction_start) cancels it.
+	// agent_end, and agent_end's willRetry does NOT reliably flag them. Extensions
+	// can't see auto_retry_start / compaction_start (not in the extension event
+	// set), so the ONLY continuation signal is the next agent_start — which for a
+	// retry lands only after pi's exponential backoff. So finalize only after a
+	// grace window with no continuation: long enough to cover the retry backoff
+	// when a loop ended on a retryable error, short otherwise. Any agent_start
+	// cancels a pending finalize (and re-asserts the turn if one already fired).
 	let finalizeTimer: ReturnType<typeof setTimeout> | null = null;
-	const TURN_FINALIZE_GRACE_MS = 300;
+	// Clean end (stopReason "stop"): only a fast queued-message continuation is
+	// possible, so a short window suffices.
+	const TURN_FINALIZE_GRACE_MS = 1000;
+	// Error end: pi may auto-retry after exponential backoff (defaults maxRetries=3,
+	// baseDelayMs=2000 → 2s/4s/8s). Cover the worst-case gap before the retry's
+	// agent_start; if pi instead gives up, the pill clears after this window.
+	const TURN_FINALIZE_ERROR_GRACE_MS = 15000;
 	// Buffer of the current web-initiated turn's agent events, accumulated even
 	// while no client is attached, so a re-attaching client can replay the turn
 	// so far and resume live rendering instead of seeing a frozen message.
@@ -340,10 +350,22 @@ export default function (pi: ExtensionAPI) {
 		const foreign = isForeignAgentEvent(ctx);
 		serverLog(`agent_start fired: ourTurnActive=${ourTurnActive} isBusy(before)=${isBusy} hasSse=${!!sse} foreign=${foreign} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
-		// A queued-message continuation of the same turn — keep the turn alive.
+		// Any agent_start is a (re)start of the current turn's work — a fresh
+		// prompt, or a continuation loop (retry after backoff, post-compaction, or
+		// a queued message). Cancel a pending finalize so the turn isn't closed out
+		// from under the continuation.
 		cancelPendingFinalize();
 		isBusy = true;
-		if (!ourTurnActive) return;
+		if (!ourTurnActive) {
+			// A continuation arrived AFTER the finalize already fired and cleared
+			// ourTurnActive (e.g. a retry whose backoff outran the grace window).
+			// Re-assert the turn so the rest of it streams again; the hub sees
+			// isBusy=true on its next poll, re-attaches, and replays the buffer.
+			// (A genuine new prompt sets ourTurnActive=true via its input event
+			// before agent_start, so this only catches orphaned continuations.)
+			ourTurnActive = true;
+			serverLog("agent_start: re-asserting ourTurnActive (orphaned continuation)");
+		}
 		turnEventBuffer = [];
 		writeTurnEvent({ type: "agent_start" });
 	});
@@ -353,44 +375,31 @@ export default function (pi: ExtensionAPI) {
 		const willRetry = event?.willRetry === true;
 		serverLog(`agent_end fired: ourTurnActive=${ourTurnActive} hasSse=${!!sse} hasPending=${!!pending} foreign=${foreign} willRetry=${willRetry} sid=${ctx?.sessionManager?.getSessionId?.()} persisted=${ctx?.sessionManager?.isPersisted?.()}`);
 		if (foreign) return;
-		// willRetry=true is a definite "another loop is coming" (pi will auto-retry
-		// a retryable error like "Stream ended without finish_reason"). Keep the
-		// turn fully alive — no finalize scheduled.
+		// willRetry=true is a definite "another loop is coming" — keep the turn
+		// fully alive, no finalize scheduled.
 		if (willRetry) return;
-		// willRetry=false does NOT mean this was the last loop: pi may still run
-		// another loop for the same prompt via a retry (willRetry can be false yet
-		// a retry follows), auto-compaction, or a queued message. Each of those
-		// emits a prompt signal (auto_retry_start / compaction_start / the next
-		// agent_start) that cancels the finalize below, all BEFORE any backoff or
-		// summarization delay. So defer the finalize by a short grace window rather
-		// than running it inline; if no continuation signal arrives, this really
-		// was the last loop → finalize. Deferring avoids sending a premature done /
-		// closing the SSE mid-turn and orphaning the rest (斷更 / stuck busy).
+		// willRetry=false is NOT a reliable "last loop" signal. pi may still run
+		// another loop for this same prompt via an auto-retry (observed: willRetry
+		// reported false yet a retry followed), auto-compaction, or a queued
+		// message. Extensions can't observe auto_retry_start / compaction_start, so
+		// the only continuation signal is the next agent_start — which for a retry
+		// arrives only AFTER pi's exponential backoff. So defer the finalize by a
+		// grace window sized to cover that backoff when the loop ended on a
+		// retryable error, and a short window otherwise. If a continuation still
+		// outruns the window, agent_start re-asserts the turn. This is what keeps a
+		// multi-loop turn from being orphaned (斷更 / stuck busy).
+		const msgs: any[] = event?.messages ?? [];
+		let endedOnError = false;
+		for (let i = msgs.length - 1; i >= 0; i--) {
+			if (msgs[i]?.role === "assistant") {
+				endedOnError = msgs[i]?.stopReason === "error";
+				break;
+			}
+		}
+		const grace = endedOnError ? TURN_FINALIZE_ERROR_GRACE_MS : TURN_FINALIZE_GRACE_MS;
+		serverLog(`agent_end: scheduling finalize in ${grace}ms (endedOnError=${endedOnError})`);
 		cancelPendingFinalize();
-		finalizeTimer = setTimeout(() => finalizeTurn(event), TURN_FINALIZE_GRACE_MS);
-	});
-
-	// A retryable error (e.g. "Stream ended without finish_reason") makes pi run
-	// ANOTHER loop for the same prompt. This SHOULD be flagged by agent_end's
-	// willRetry, but observed sessions show agent_end arriving with
-	// willRetry=false immediately followed by a retry continuation (pi's
-	// _willRetryAfterAgentEnd and _prepareRetry can disagree). So don't trust
-	// willRetry alone: pi emits auto_retry_start the moment it commits to a retry
-	// — crucially BEFORE its exponential-backoff sleep, so it lands well inside
-	// the finalize grace window even though the retry's agent_start is seconds
-	// away. Cancel the pending finalize here so the turn isn't orphaned (斷更).
-	pi.on("auto_retry_start", (event: any) => {
-		serverLog(`auto_retry_start fired: attempt=${event?.attempt}/${event?.maxAttempts} ourTurnActive=${ourTurnActive} hasPendingFinalize=${!!finalizeTimer}`);
-		cancelPendingFinalize();
-	});
-
-	// Auto-compaction likewise runs BETWEEN agent loops of one prompt: agent_end
-	// fires, then compaction_start, then (seconds later, after the summarization
-	// call) the continuation agent_start. compaction_start lands inside the grace
-	// window, so cancel the finalize the moment compaction begins.
-	pi.on("compaction_start", (event: any) => {
-		serverLog(`compaction_start fired: reason=${event?.reason} ourTurnActive=${ourTurnActive} hasPendingFinalize=${!!finalizeTimer}`);
-		cancelPendingFinalize();
+		finalizeTimer = setTimeout(() => finalizeTurn(event), grace);
 	});
 
 	pi.on("input", (event: any) => {
