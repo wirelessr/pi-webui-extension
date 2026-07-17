@@ -238,6 +238,19 @@ export async function sendPromptStream(message, onEvent, fetchFn = fetch) {
   }
 
   await clientLog("info", "SSE: response received, starting reader loop", undefined, fetchFn);
+  await readSseEvents(res, onEvent, "SSE", fetchFn);
+}
+
+/**
+ * Shared SSE reader loop: read the response body, parse events, dispatch each
+ * to onEvent. Logs completion/errors under the given label; rethrows errors
+ * (callers decide whether to swallow).
+ * @param {Response} res
+ * @param {(event: object) => void} onEvent
+ * @param {string} label — log prefix ("SSE" for prompt streams, "attach")
+ * @param {typeof fetch} fetchFn
+ */
+async function readSseEvents(res, onEvent, label, fetchFn) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -247,7 +260,7 @@ export async function sendPromptStream(message, onEvent, fetchFn = fetch) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
-        await clientLog("info", "SSE: reader done", { eventCount }, fetchFn);
+        await clientLog("info", `${label}: reader done`, { eventCount }, fetchFn);
         break;
       }
 
@@ -261,7 +274,7 @@ export async function sendPromptStream(message, onEvent, fetchFn = fetch) {
       }
     }
   } catch (err) {
-    await clientLog("error", "SSE: reader loop error", { error: err.message, eventCount }, fetchFn);
+    await clientLog("error", `${label}: reader loop error`, { error: err.message, eventCount }, fetchFn);
     throw err;
   }
 }
@@ -289,28 +302,11 @@ export async function attachStream(onEvent, fetchFn = fetch) {
   }
 
   await clientLog("info", "attach: response received, starting reader loop", undefined, fetchFn);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let eventCount = 0;
-
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        await clientLog("info", "attach: reader done", { eventCount }, fetchFn);
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const { events, rest } = parseSseBuffer(buffer);
-      buffer = rest;
-      for (const event of events) {
-        eventCount++;
-        onEvent(event);
-      }
-    }
-  } catch (err) {
-    await clientLog("error", "attach: reader loop error", { error: err.message, eventCount }, fetchFn);
+    await readSseEvents(res, onEvent, "attach", fetchFn);
+  } catch {
+    // Reader errors on an attach stream are non-fatal (already logged) — the
+    // caller reconciles via the polled busy state.
   }
   return true;
 }

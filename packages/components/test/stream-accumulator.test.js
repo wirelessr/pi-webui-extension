@@ -142,6 +142,15 @@ describe("stream accumulator — tools", () => {
     assert.equal(state.tools[0].resultText, null);
   });
 
+  test("getTool returns the tracked tool by id, undefined for unknown", () => {
+    const acc = createStreamAccumulator();
+    acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });
+    acc.handleEvent({ type: "tool_execution_update", toolCallId: "tc1", partialResult: { content: [{ type: "text", text: "partial" }] } });
+    assert.equal(acc.getTool("tc1").resultText, "partial");
+    assert.equal(acc.getTool("tc1").isPartial, true);
+    assert.equal(acc.getTool("nope"), undefined);
+  });
+
   test("multiple tools tracked independently", () => {
     const acc = createStreamAccumulator();
     acc.handleEvent({ type: "tool_execution_start", toolCallId: "tc1", toolName: "bash", args: {} });

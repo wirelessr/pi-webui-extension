@@ -860,11 +860,11 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
           const details = state.subagentDetails[event.toolCallId];
           if (details) updateSubagentViews(event.toolCallId, details);
         }
-        updateToolResult(event.toolCallId, state.tools.find((t) => t.toolCallId === event.toolCallId)?.resultText, true);
+        updateToolResult(event.toolCallId, accumulator.getTool(event.toolCallId)?.resultText, true);
         break;
       }
       case "tool_execution_end": {
-        const tool = state.tools.find((t) => t.toolCallId === event.toolCallId);
+        const tool = accumulator.getTool(event.toolCallId);
         if (event.toolName === "subagent" || state.subagentDetails[event.toolCallId]) {
           const details = state.subagentDetails[event.toolCallId];
           if (details) updateSubagentViews(event.toolCallId, details);

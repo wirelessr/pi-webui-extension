@@ -28,7 +28,7 @@
 
 /**
  * Create a new stream accumulator.
- * @returns {{handleEvent: (e: object) => void, getState: () => object}}
+ * @returns {{handleEvent: (e: object) => void, getState: () => object, getTool: (toolCallId: string) => ToolBlock|undefined}}
  */
 export function createStreamAccumulator() {
   let committedText = "";
@@ -156,7 +156,14 @@ export function createStreamAccumulator() {
     };
   }
 
-  return { handleEvent, getState };
+  // O(1) lookup for event handlers that need one tool by id — getState().tools
+  // is a fresh array each call, so a find() over it per event is O(n²) across
+  // a tool-heavy turn.
+  function getTool(toolCallId) {
+    return tools.get(toolCallId);
+  }
+
+  return { handleEvent, getState, getTool };
 }
 
 /**
