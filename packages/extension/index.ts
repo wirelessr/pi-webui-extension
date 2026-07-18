@@ -61,6 +61,12 @@ export default function (pi: ExtensionAPI) {
 
 	let idleWaiters: IdleWaiter[] = [];
 	let pendingDone: any = null;
+	// Compaction runs OUTSIDE the agent lifecycle (no agent_start/agent_end),
+	// but it must still count as busy: the hub's stuck-stream self-heal kills
+	// any stream whose session polls as idle, which used to abort the /compact
+	// SSE ~5s in while the compaction kept running for a minute (its done then
+	// died on a closed stream — silent, no feedback).
+	let compacting = false;
 	// The web-initiated prompt text, captured at the input event and recorded
 	// into the replay buffer at the next agent_start — so a viewer that attaches
 	// later (queued dispatch, another tab) renders the user bubble too, not just
@@ -101,7 +107,7 @@ export default function (pi: ExtensionAPI) {
 		getPid: () => process.pid,
 		getStartedAt: () => sessionStartTime,
 	getCwd: () => sessionCtx?.cwd ?? process.cwd(),
-		getIsBusy: () => lifecycle.isBusy(),
+		getIsBusy: () => lifecycle.isBusy() || compacting,
 		getSessionFile: () => sessionFile,
 		getSessionId: () => sessionId,
 		getSessionName: () => sessionName,
@@ -838,15 +844,23 @@ export default function (pi: ExtensionAPI) {
 			try { res.write(": heartbeat\n\n"); } catch {}
 		}, 15000);
 
+		// Diagnostic only — the compaction keeps running server-side; its done
+		// will be lost if the client is gone by then.
+		res.onClose = () => serverLog("compactAndStream: client disconnected mid-compact");
+
 		// Send a system message so the browser shows immediate feedback
 		try {
 			res.write(`data: ${JSON.stringify({ type: "compact_start" })}\n\n`);
 		} catch {}
 
+		compacting = true;
+		serverLog("compactAndStream: compaction started");
 		try {
 			sessionCtx.compact({
 				customInstructions: customInstructions || undefined,
 				onComplete: (result: any) => {
+					compacting = false;
+					serverLog("compactAndStream: compaction complete", { tokensBefore: result?.tokensBefore ?? null });
 					clearInterval(heartbeat);
 					const tokensBefore = result?.tokensBefore ?? null;
 					const summary = result?.summary ?? "";
@@ -867,6 +881,8 @@ export default function (pi: ExtensionAPI) {
 					}
 				},
 				onError: (err: Error) => {
+					compacting = false;
+					serverLog("compactAndStream: compaction failed", { error: err.message });
 					clearInterval(heartbeat);
 					// Send as done (not error) so browser doesn't trigger history reload
 					const doneEvent = {
@@ -885,6 +901,7 @@ export default function (pi: ExtensionAPI) {
 				},
 			});
 		} catch (err: any) {
+			compacting = false;
 			clearInterval(heartbeat);
 			try {
 				res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
@@ -1057,6 +1074,7 @@ export default function (pi: ExtensionAPI) {
 		waitingForExtensionInput = false;
 		lifecycle.shutdown();
 		pendingUserText = null;
+		compacting = false;
 		if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 
 		const waiters = idleWaiters;
