@@ -10,7 +10,7 @@ import { diffLines } from "./diff.js";
 import { renderMarkdown } from "./markdown.js";
 import { extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
-import { doCopy } from "./ui-behaviors.js";
+import { classifyScrollEvent, doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
 export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null }) {
@@ -55,13 +55,33 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   $fileView.style.display = "none";
   $chat.appendChild($fileView);
 
-  // ── Scroll ──
+  // ── Scroll (auto-follow / sticky scroll) ──
+  //
+  // The engagement decision lives in classifyScrollEvent (ui-behaviors.js);
+  // this block only collects its inputs. No "programmatic scroll" flag: a
+  // scrollTop assignment isn't guaranteed to produce exactly one scroll
+  // event, so flag-and-swallow desyncs (button never hiding, follow randomly
+  // stopping on long transcripts).
 
   let userAtBottom = true;
-  let programmaticScroll = false;
+  let lastAutoScrollAt = 0; // performance.now() of the last programmatic assignment
+  let touchActive = false; // a touch gesture is in progress
+  let dragActive = false; // mouse held down over the pane (scrollbar drag)
+
+  function setAtBottom(v) {
+    userAtBottom = v;
+    // The button mirrors the ENGAGEMENT state, not instantaneous geometry —
+    // while following, the gap is transiently non-zero between content growth
+    // and the next frame's scroll, and the button must not flicker.
+    $scrollBottom.classList.toggle("hidden", v);
+  }
 
   function doScroll() {
-    programmaticScroll = true;
+    // Re-check at fire time: a wheel-up may have disengaged between this
+    // frame being scheduled (scrollToBottom) and it running — scrolling then
+    // would yank the user back down and re-engage off our own event.
+    if (!userAtBottom) return;
+    lastAutoScrollAt = performance.now();
     $chat.scrollTop = $chat.scrollHeight;
   }
 
@@ -70,19 +90,30 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   }
 
   function forceScrollToBottom() {
-    userAtBottom = true;
+    setAtBottom(true);
     requestAnimationFrame(doScroll);
   }
 
   $chat.addEventListener("scroll", () => {
-    if (programmaticScroll) {
-      programmaticScroll = false;
-      return;
-    }
-    const atBottom = $chat.scrollHeight - $chat.scrollTop - $chat.clientHeight < 60;
-    userAtBottom = atBottom;
-    $scrollBottom.classList.toggle("hidden", atBottom);
+    const action = classifyScrollEvent({
+      gap: $chat.scrollHeight - $chat.scrollTop - $chat.clientHeight,
+      sinceAutoScrollMs: performance.now() - lastAutoScrollAt,
+      touchActive,
+      dragActive,
+    });
+    if (action === "engage") setAtBottom(true);
+    else if (action === "disengage") setAtBottom(false);
   });
+
+  // Unambiguous user gestures. Wheel-up disengages immediately (its scroll
+  // event alone can't be told apart from ours mid-stream); touch/mouse state
+  // feeds the classifier so drags disengage even during active following.
+  $chat.addEventListener("wheel", (e) => { if (e.deltaY < 0) setAtBottom(false); }, { passive: true });
+  $chat.addEventListener("touchstart", () => { touchActive = true; }, { passive: true });
+  $chat.addEventListener("touchend", () => { touchActive = false; }, { passive: true });
+  $chat.addEventListener("touchcancel", () => { touchActive = false; }, { passive: true });
+  $chat.addEventListener("mousedown", () => { dragActive = true; });
+  window.addEventListener("mouseup", () => { dragActive = false; });
 
   $scrollBottom.addEventListener("click", forceScrollToBottom);
 
