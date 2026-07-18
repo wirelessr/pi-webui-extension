@@ -172,7 +172,14 @@ import { formatStats } from "/utils.js";
     // Commands are per-session — load them from the active session's bridge.
     getCommandsFn: () => (activeSessionId ? getCommands(scopedFetch(activeSessionId)) : Promise.resolve({ commands: [] })),
   });
-  const input = createInput({ $input, $sendBtn, commandsView, mobileNav, onSend: handleSend, onSelectCommand: () => {}, onStop: handleStop, allowQueueWhileStreaming: true });
+  const input = createInput({
+    $input, $sendBtn, commandsView, mobileNav,
+    onSend: handleSend, onSelectCommand: () => {}, onStop: handleStop,
+    allowQueueWhileStreaming: true,
+    // Resolve the active session at paste time — the input is created once,
+    // but the upload must land on whichever session is being viewed.
+    fetchFn: (url, init) => scopedFetch(activeSessionId)(url, init),
+  });
 
   // ── Session-scoped addressing ──
 

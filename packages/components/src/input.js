@@ -40,6 +40,11 @@ export function createInput({
   onSelectCommand,
   onStop,
   allowQueueWhileStreaming = false,
+  // Session-scoped fetch for the paste-image upload. The default (global
+  // fetch) is only correct for the standalone per-session UI, where the page
+  // origin IS the bridge; the hub passes a wrapper that rewrites /api/* to
+  // the active session's /s/<id>/api/* (the hub itself has no /api/upload).
+  fetchFn = fetch,
 }) {
   let isStreaming = false;
 
@@ -110,7 +115,7 @@ export function createInput({
         $input.setSelectionRange(start + placeholder.length, start + placeholder.length);
         autoResize();
         try {
-          const { path } = await uploadImage(blob);
+          const { path } = await uploadImage(blob, fetchFn);
           $input.value = $input.value.replace(placeholder, path);
         } catch (err) {
           $input.value = $input.value.replace(placeholder, `[image upload failed: ${err.message}]`);
