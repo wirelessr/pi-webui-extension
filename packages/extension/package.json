@@ -1,13 +1,13 @@
 {
   "name": "pi-webui-extension",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "description": "In-process pi coding-agent HTTP bridge (per-session WebUI + SSE)",
   "dependencies": {
     "@hono/swagger-ui": "0.6.1",
     "@hono/zod-openapi": "1.4.0",
-    "@wirelessr/pi-webui-components": "^0.6.0",
+    "@wirelessr/pi-webui-components": "^0.6.1",
     "hono": "4.12.29",
     "zod": "4.4.3"
   },
