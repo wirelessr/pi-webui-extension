@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./helpers.js";
-import { generateSessionName } from "./name-generator.js";
+import { generateSessionName, resolveAutoNameConfig } from "./name-generator.js";
 import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 import { createSseBroadcast } from "./sse-broadcast.js";
 import { createTurnLifecycle, lastAssistantEndedOnError } from "./turn-lifecycle.js";
@@ -399,20 +399,24 @@ export default function (pi: ExtensionAPI) {
 		// Auto-name session on first user prompt (fire-and-forget)
 		if (!autoNameAttempted && !sessionName && typeof event.text === "string" && event.text.trim().length > 0) {
 			autoNameAttempted = true;
-			const apiKey = process.env.FIREWORKS_API_KEY;
-			serverLog(`auto-name: attempting (apiKey=${apiKey ? "yes" : "no"}, textLen=${event.text.length})`);
-			generateSessionName(event.text, apiKey).then((name) => {
-				if (!name) {
-					name = event.text.slice(0, 120).replace(/\n/g, " ").trim();
-					serverLog(`auto-name: skipped, using prompt prefix fallback`);
-				}
-				sessionName = name;
-				pi.setSessionName(name);
-				serverLog(`auto-named session: ${name}`);
-				try { writeDiscovery(); } catch { /* best effort */ }
-			}).catch((err) => {
-				serverLog(`auto-name error: ${err.message}`);
-			});
+			const nameCfg = resolveAutoNameConfig();
+			if (!nameCfg.enabled) {
+				serverLog(`auto-name: disabled via PI_AUTO_NAME=0`);
+			} else {
+				serverLog(`auto-name: attempting (apiKey=${nameCfg.apiKey ? "yes" : "no"}, model=${nameCfg.model}, textLen=${event.text.length})`);
+				generateSessionName(event.text, nameCfg.apiKey, { apiUrl: nameCfg.apiUrl, model: nameCfg.model }).then((name) => {
+					if (!name) {
+						name = event.text.slice(0, 120).replace(/\n/g, " ").trim();
+						serverLog(`auto-name: skipped, using prompt prefix fallback`);
+					}
+					sessionName = name;
+					pi.setSessionName(name);
+					serverLog(`auto-named session: ${name}`);
+					try { writeDiscovery(); } catch { /* best effort */ }
+				}).catch((err) => {
+					serverLog(`auto-name error: ${err.message}`);
+				});
+			}
 		}
 	});
 

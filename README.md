@@ -20,23 +20,41 @@ proxy + aggregator in front of them, not a replacement.
 
 ## Install
 
-**Extension (per-session)** — installs the prebuilt, self-contained extension
-(components vendored, no registry):
+Two pieces, in order: the **extension** first (it gives each pi session its
+own HTTP bridge), then the **hub** (a reverse proxy + aggregator in front of
+them). The hub can't drive agents on its own — it discovers sessions via the
+extension, so the extension must be installed and running first.
+
+### 1. Extension (per-session bridge)
+
+Installs the prebuilt, self-contained extension (components vendored, no
+registry):
 
 ```bash
 pi install git:github.com/wirelessr/pi-webui-extension@release
 pi update      # later, to pull the latest release
 ```
 
-pi auto-loads it; each session prints its URL on startup
-(`HTTP bridge: http://<host>:7331 (session: …)`). Open it, or curl it:
+pi auto-loads it on session startup; each session prints its URL:
+
+```
+HTTP bridge: http://<host>:7331 (session: …)
+```
+
+Open it in a browser, or curl it:
 
 ```bash
 curl -X POST http://localhost:7331/api/prompt -d 'Run the tests'
 ```
 
-**Hub** — runs from a clone of this repo (it's not part of the extension
-package):
+That's the minimum — per-session mode works with just the extension.
+
+### 2. Hub (single-pane, cross-session)
+
+Runs from a clone of this repo (it's not part of the extension package). It
+reads the extension's discovery dir to find sessions, so make sure the
+extension is installed first and at least one session has run (so the
+discovery dir exists).
 
 ```bash
 git clone https://github.com/wirelessr/pi-webui-extension && cd pi-webui-extension
@@ -44,8 +62,14 @@ npm install
 pm2 start packages/hub/ecosystem.config.cjs   # or: node packages/hub/src/server.js
 ```
 
-Open `http://<host>:8730/`. The hub reads the extension's discovery dir
-(`PI_BRIDGE_DIR`); `pm2 save` persists it across daemon restarts. See
+Open `http://<host>:8730/`.
+
+The hub finds sessions by reading `PI_BRIDGE_DIR` (default:
+`~/.pi/agent/extensions/pi-webui-extension/data` — exactly where `pi install`
+puts the extension). They match out of the box; only override `PI_BRIDGE_DIR`
+in both the extension and the hub if you moved the extension's data dir.
+
+`pm2 save` persists the hub across daemon restarts. See
 [packages/hub/README.md](packages/hub/README.md) for the cross-session design.
 
 ## API
@@ -71,6 +95,10 @@ data: {"type":"done","text":"...","messages":[...]}
 | `PI_BRIDGE_DIR` | `<ext-dir>/data` | extension + hub | discovery-file directory |
 | `PI_HUB_PORT` | `8730` | hub | hub listen port |
 | `PI_HUB_HOST` | `0.0.0.0` | hub | hub bind address |
+| `PI_AUTO_NAME` | `1` | extension | set `0` to disable auto session naming |
+| `PI_AUTO_NAME_API_KEY` | `$FIREWORKS_API_KEY` | extension | API key for the title model |
+| `PI_AUTO_NAME_API_URL` | Fireworks chat-completions URL | extension | OpenAI-compatible chat-completions endpoint |
+| `PI_AUTO_NAME_MODEL` | `accounts/fireworks/models/qwen3p7-plus` | extension | model id for title generation |
 
 ## Security
 
