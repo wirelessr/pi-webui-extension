@@ -31,6 +31,6 @@ run("npm test");
 
 run("git add -A");
 run(`git commit -q -m "chore: release ${version}"`);
-run(`git tag "v${version}"`);
+run(`git tag -a "v${version}" -m "release ${version}"`);
 
 console.log(`\nreleased v${version} locally. Now push to trigger publish:\n  git push origin main --follow-tags`);
