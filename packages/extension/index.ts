@@ -114,6 +114,32 @@ export default function (pi: ExtensionAPI) {
 		getSessionCtx: () => sessionCtx,
 		getCommands: () => pi.getCommands(),
 		setSessionName: (name: string) => pi.setSessionName(name),
+		listModels: () => {
+			const current = sessionCtx?.model
+				? { provider: sessionCtx.model.provider, id: sessionCtx.model.id, name: sessionCtx.model.name, contextWindow: sessionCtx.model.contextWindow }
+				: null;
+			const registry = sessionCtx?.modelRegistry;
+			// getAvailable() is the full catalog — keep only providers with auth
+			const models = (registry?.getAvailable() ?? [])
+				.filter((m: any) => registry.hasConfiguredAuth(m))
+				.map((m: any) => ({
+					provider: m.provider,
+					id: m.id,
+					name: m.name,
+					contextWindow: m.contextWindow,
+				}));
+			return { current, models };
+		},
+		setModel: async (provider: string, id: string) => {
+			const registry = sessionCtx?.modelRegistry;
+			if (!registry) return { ok: false, error: "Session not ready" };
+			const model = registry.find(provider, id);
+			if (!model) return { ok: false, error: `Unknown model: ${provider}/${id}` };
+			const ok = await pi.setModel(model);
+			if (!ok) return { ok: false, error: `No API key available for provider "${provider}"` };
+			serverLog("model switched", { provider: model.provider, id: model.id });
+			return { ok: true, model: { provider: model.provider, id: model.id, name: model.name, contextWindow: model.contextWindow } };
+		},
 		builtinCommands,
 		listAllSessions,
 		spawnNewSession,

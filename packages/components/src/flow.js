@@ -124,6 +124,113 @@ export async function doSendPrompt(opts) {
 }
 
 /**
+ * Parse a "/model" command typed in the input.
+ *
+ * @param {string} text — raw input text
+ * @returns {{arg: string}|null} — null if not a /model command; arg is "" for bare /model
+ */
+export function parseModelCommand(text) {
+  const trimmed = (text || "").trim();
+  if (trimmed !== "/model" && !trimmed.startsWith("/model ")) return null;
+  return { arg: trimmed.slice("/model".length).trim() };
+}
+
+/**
+ * Resolve a /model argument against the available model list.
+ * Match precedence: exact "provider/id" → exact id → exact last path
+ * segment of id → case-insensitive substring of "provider/id".
+ *
+ * @param {Array<{provider: string, id: string}>} models
+ * @param {string} arg
+ * @returns {Array<{provider: string, id: string}>} matches (may be empty or ambiguous)
+ */
+export function resolveModelArg(models, arg) {
+  const exact = models.filter((m) => `${m.provider}/${m.id}` === arg);
+  if (exact.length) return exact;
+  const byId = models.filter((m) => m.id === arg);
+  if (byId.length) return byId;
+  const bySegment = models.filter((m) => m.id.endsWith(`/${arg}`));
+  if (bySegment.length) return bySegment;
+  const lower = arg.toLowerCase();
+  return models.filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(lower));
+}
+
+/**
+ * Handle the /model command.
+ *
+ * Behavioral spec:
+ * 1. User message shown immediately (the command echo)
+ * 2. Bare /model → system message listing available models, current marked
+ * 3. /model <arg> → resolve via resolveModelArg; no match / ambiguous → showError
+ * 4. Unique match → setModelFn; success → system message + status refresh
+ * 5. Any API failure → showError
+ *
+ * @param {object} opts
+ * @param {string} opts.text — raw input text (echoed as the user message)
+ * @param {string} opts.arg — parsed argument ("" to list)
+ * @param {object} opts.chat — { addMessage, showError }
+ * @param {function} opts.getModelsFn — () => Promise<{current, models}>
+ * @param {function} opts.setModelFn — (provider, id) => Promise
+ * @param {function} [opts.getStatusFn] — () => Promise<object>
+ * @param {function} [opts.onStatusUpdateFn] — (status) => void
+ * @returns {Promise<{action: string, reason?: string, count?: number, model?: object}>}
+ */
+export async function doModelCommand(opts) {
+  const { text, arg, chat, getModelsFn, setModelFn, getStatusFn, onStatusUpdateFn } = opts;
+  chat.addMessage("user", text);
+
+  let data;
+  try {
+    data = await getModelsFn();
+  } catch (err) {
+    chat.showError(err.message || "Failed to load models");
+    return { action: "error", reason: "getModels failed" };
+  }
+  const models = data.models || [];
+  const current = data.current;
+
+  if (!arg) {
+    const lines = models.map((m) => {
+      const isCurrent = current && m.provider === current.provider && m.id === current.id;
+      return `${isCurrent ? "*" : " "} ${m.provider}/${m.id}`;
+    });
+    // Fenced code block: keeps the "*" marker from rendering as a markdown bullet
+    const msg = lines.length
+      ? `Available models (* = current):\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nSwitch with /model <provider/model>`
+      : "No models with configured auth found.";
+    chat.addMessage("system", msg);
+    return { action: "listed", count: models.length };
+  }
+
+  const matches = resolveModelArg(models, arg);
+  if (matches.length === 0) {
+    chat.showError(`No model matching "${arg}". Use /model to list available models.`);
+    return { action: "error", reason: "no match" };
+  }
+  if (matches.length > 1) {
+    chat.showError(`Ambiguous model "${arg}": ${matches.map((m) => `${m.provider}/${m.id}`).join(", ")}`);
+    return { action: "error", reason: "ambiguous" };
+  }
+
+  const target = matches[0];
+  try {
+    await setModelFn(target.provider, target.id);
+  } catch (err) {
+    chat.showError(err.message || "Failed to switch model");
+    return { action: "error", reason: "setModel failed" };
+  }
+  chat.addMessage("system", `Model switched to ${target.provider}/${target.id}`);
+  if (getStatusFn && onStatusUpdateFn) {
+    try {
+      onStatusUpdateFn(await getStatusFn());
+    } catch {
+      // Best effort — header refresh only
+    }
+  }
+  return { action: "switched", model: { provider: target.provider, id: target.id } };
+}
+
+/**
  * Handle command selection from the sidebar.
  *
  * Behavioral spec:

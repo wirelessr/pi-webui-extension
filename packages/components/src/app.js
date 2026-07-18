@@ -11,10 +11,10 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getStatus, navUrl, newSession, openSession, sendPromptStream, statFiles } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, navUrl, newSession, openSession, sendPromptStream, setModel, statFiles } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
-import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "./flow.js";
+import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, syncExpandButtonState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { initResize } from "./resize.js";
@@ -169,6 +169,19 @@ import { formatStats } from "./utils.js";
   let sending = false;
 
   async function handleSend(text) {
+    const modelCmd = parseModelCommand(text);
+    if (modelCmd) {
+      await doModelCommand({
+        text,
+        arg: modelCmd.arg,
+        chat,
+        getModelsFn: getModels,
+        setModelFn: setModel,
+        getStatusFn: getStatus,
+        onStatusUpdateFn: (status) => updateStats(status),
+      });
+      return;
+    }
     sending = true;
     let result;
     try {

@@ -11,10 +11,10 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getCommands, getFile, getHistory, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream, statFiles } from "/api.js";
+import { abortAgent, attachStream, getCommands, getFile, getHistory, getModels, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
-import { doInit, doSendPrompt, doStop } from "/flow.js";
+import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand } from "/flow.js";
 import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
@@ -413,6 +413,23 @@ import { formatStats } from "/utils.js";
   async function handleSend(text) {
     if (!activeSessionId) return;
     const id = activeSessionId;
+    // /model executes immediately (never queued — it targets the next turn,
+    // and a queued copy would dispatch to the agent as a plain message).
+    const modelCmd = parseModelCommand(text);
+    if (modelCmd) {
+      const f = scopedFetch(id);
+      const guard = guardedFor(id);
+      await doModelCommand({
+        text,
+        arg: modelCmd.arg,
+        chat: guard.chat,
+        getModelsFn: () => getModels(f),
+        setModelFn: (provider, modelId) => setModel(provider, modelId, f),
+        getStatusFn: () => getStatus(f),
+        onStatusUpdateFn: (status) => { if (id === activeSessionId) updateHeader(status); },
+      });
+      return;
+    }
     // Busy (or something already queued) → queue on the hub so it dispatches in
     // order and keeps going after we switch away. Idle → send live as usual.
     const active = sessions.find((s) => s.sessionId === id);

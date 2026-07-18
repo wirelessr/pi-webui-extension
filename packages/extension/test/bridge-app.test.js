@@ -25,6 +25,7 @@ function createMockDeps(overrides = {}) {
 		clientLog: [],
 		compact: [],
 		abort: [],
+		setModel: [],
 	};
 
 	return {
@@ -49,6 +50,7 @@ function createMockDeps(overrides = {}) {
 		setSessionName: (name) => { calls.setSessionName.push(name); },
 		builtinCommands: [
 			{ name: "compact", description: "Compact conversation" },
+			{ name: "model", description: "Select model" },
 			{ name: "clear", description: "Clear screen (TUI only)" },
 		],
 		listAllSessions: () => [],
@@ -78,6 +80,20 @@ function createMockDeps(overrides = {}) {
 		},
 		attachStream: () => false,
 		isPendingOrSse: () => false,
+		listModels: () => ({
+			current: { provider: "fireworks", id: "test-model", name: "Test Model", contextWindow: 128000 },
+			models: [
+				{ provider: "fireworks", id: "test-model", name: "Test Model", contextWindow: 128000 },
+				{ provider: "anthropic", id: "other-model", name: "Other Model", contextWindow: 200000 },
+			],
+		}),
+		setModel: async (provider, id) => {
+			calls.setModel.push({ provider, id });
+			if (provider === "fireworks" || provider === "anthropic") {
+				return { ok: true, model: { provider, id, name: "X", contextWindow: 1000 } };
+			}
+			return { ok: false, error: `Unknown model: ${provider}/${id}` };
+		},
 		reload: () => { calls.reload.push(true); },
 		clientLog: (level, message, data) => { calls.clientLog.push({ level, message, data }); },
 		...overrides,
@@ -155,6 +171,48 @@ test("GET /api/commands returns skills + builtins, filters TUI-only", async () =
 	assert.ok(names.includes("prompt:tpl"));
 	assert.ok(names.includes("compact"));
 	assert.ok(!names.includes("clear"));
+	const model = body.commands.find((c) => c.name === "model");
+	assert.ok(model);
+	assert.strictEqual(model.executable, false);
+	assert.match(model.description, /switch/);
+	const compact = body.commands.find((c) => c.name === "compact");
+	assert.strictEqual(compact.executable, true);
+});
+
+test("GET /api/models returns current + available models", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/models"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.current.id, "test-model");
+	assert.strictEqual(body.models.length, 2);
+	assert.strictEqual(body.models[1].provider, "anthropic");
+});
+
+test("POST /api/model switches the model", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/model", { provider: "anthropic", id: "other-model" }));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.ok, true);
+	assert.strictEqual(body.model.id, "other-model");
+	assert.deepEqual(deps.calls.setModel, [{ provider: "anthropic", id: "other-model" }]);
+});
+
+test("POST /api/model rejects unknown model with the deps error", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/model", { provider: "nope", id: "missing" }));
+	assert.strictEqual(res.status, 400);
+	assert.match((await res.json()).error, /Unknown model/);
+});
+
+test("POST /api/model rejects missing fields and bad JSON", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res1 = await app.fetch(postJson("/api/model", { provider: "fireworks" }));
+	assert.strictEqual(res1.status, 400);
+	const res2 = await app.fetch(req("/api/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: "not json" }));
+	assert.strictEqual(res2.status, 400);
 });
 
 test("GET /api/history returns paginated history", async () => {

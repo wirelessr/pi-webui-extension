@@ -37,6 +37,13 @@ const MIME_TYPES = {
 
 const WEBUI_EXECUTABLE = new Set(["compact"]);
 
+// Builtins listed in /api/commands as insert-only (selecting them types
+// "/name " into the input instead of executing — they take arguments).
+// Values override pi's TUI-oriented descriptions where they'd mislead.
+const WEBUI_INSERTABLE = new Map([
+	["model", "List models (/model) or switch (/model <provider/model>)"],
+]);
+
 /**
  * Execute a WebUI-executable builtin command.
  * Returns true if handled, false if no handler.
@@ -185,6 +192,28 @@ const OkResponse = z.object({
 	ok: z.boolean(),
 }).openapi("OkResponse");
 
+const ModelInfo = z.object({
+	provider: z.string(),
+	id: z.string(),
+	name: z.string().optional(),
+	contextWindow: z.number().optional(),
+}).openapi("ModelInfo");
+
+const ModelsResponse = z.object({
+	current: ModelInfo.nullable(),
+	models: z.array(ModelInfo),
+}).openapi("ModelsResponse");
+
+const SetModelBody = z.object({
+	provider: z.string(),
+	id: z.string(),
+}).openapi("SetModelBody");
+
+const SetModelResponse = z.object({
+	ok: z.boolean(),
+	model: ModelInfo,
+}).openapi("SetModelResponse");
+
 // ── Route definitions ────────────────────────────────────────────
 
 const statusRoute = createRoute({
@@ -238,6 +267,28 @@ const commandRoute = createRoute({
 	},
 	responses: {
 		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const modelsRoute = createRoute({
+	method: "get",
+	path: "/api/models",
+	summary: "Available models (with configured auth) and the current model",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: ModelsResponse } } },
+	},
+});
+
+const setModelRoute = createRoute({
+	method: "post",
+	path: "/api/model",
+	summary: "Switch the session's model",
+	request: {
+		body: { content: { "application/json": { schema: SetModelBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: SetModelResponse } } },
 		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
 	},
 });
@@ -592,12 +643,12 @@ export function createBridgeApp(deps) {
 				source: cmd.source,
 			}));
 		const builtins = deps.builtinCommands
-			.filter((cmd) => WEBUI_EXECUTABLE.has(cmd.name))
+			.filter((cmd) => WEBUI_EXECUTABLE.has(cmd.name) || WEBUI_INSERTABLE.has(cmd.name))
 			.map((cmd) => ({
 				name: cmd.name,
-				description: cmd.description,
+				description: WEBUI_INSERTABLE.get(cmd.name) ?? cmd.description,
 				source: "builtin",
-				executable: true,
+				executable: WEBUI_EXECUTABLE.has(cmd.name),
 			}));
 		return c.json({ commands: [...commands, ...builtins] });
 	});
@@ -620,6 +671,27 @@ export function createBridgeApp(deps) {
 		} catch (err) {
 			return c.json({ error: err.message }, 500);
 		}
+	});
+
+	app.openapi(modelsRoute, (c) => {
+		return c.json(deps.listModels());
+	});
+
+	app.openapi(setModelRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (typeof body?.provider !== "string" || typeof body?.id !== "string") {
+			return c.json({ error: "provider and id are required" }, 400);
+		}
+		const result = await deps.setModel(body.provider, body.id);
+		if (!result.ok) {
+			return c.json({ error: result.error }, 400);
+		}
+		return c.json({ ok: true, model: result.model });
 	});
 
 	app.openapi(promptRoute, async (c) => {

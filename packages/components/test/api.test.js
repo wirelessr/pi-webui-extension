@@ -8,6 +8,7 @@ import {
   getCommands,
   getFile,
   getHistory,
+  getModels,
   getSessions,
   getStatus,
   killSession,
@@ -19,6 +20,7 @@ import {
   renameSession,
   sendPromptStream,
   sessionUrl,
+  setModel,
   statFiles,
   uploadImage,
 } from "../src/api.js";
@@ -262,6 +264,37 @@ describe("executeCommand", () => {
   test("throws with HTTP status when no error field", async () => {
     const fetchFn = mockFetch({ status: 500, jsonData: {} });
     await assert.rejects(executeCommand("x", fetchFn), /HTTP 500/);
+  });
+});
+
+describe("getModels", () => {
+  test("GETs /api/models and returns the payload", async () => {
+    const payload = { current: { provider: "p", id: "m" }, models: [{ provider: "p", id: "m" }] };
+    const fetchFn = mockFetch({ jsonData: payload });
+    const result = await getModels(fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/models");
+    assert.deepEqual(result, payload);
+  });
+
+  test("throws on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 500, jsonData: { error: "boom" } });
+    await assert.rejects(getModels(fetchFn), /boom/);
+  });
+});
+
+describe("setModel", () => {
+  test("POSTs provider + id as JSON", async () => {
+    const fetchFn = mockFetch({ jsonData: { ok: true, model: { provider: "p", id: "m" } } });
+    const result = await setModel("p", "m", fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/model");
+    assert.equal(fetchFn.calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { provider: "p", id: "m" });
+    assert.equal(result.ok, true);
+  });
+
+  test("throws the server error on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 400, jsonData: { error: "Unknown model: p/m" } });
+    await assert.rejects(setModel("p", "m", fetchFn), /Unknown model/);
   });
 });
 

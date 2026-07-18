@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { doInit, doReattach, doSelectCommand, doSendPrompt, doStop, syncExpandButtonState } from "../src/flow.js";
+import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, resolveModelArg, syncExpandButtonState } from "../src/flow.js";
 
 // ── Mock helpers ──────────────────────────────────────
 
@@ -691,5 +691,217 @@ describe("doReattach", () => {
     });
     assert.equal(statusFetched, false);
     assert.equal(result.attached, true);
+  });
+});
+
+describe("parseModelCommand", () => {
+  const cases = [
+    { name: "bare /model", text: "/model", expected: { arg: "" } },
+    { name: "with arg", text: "/model fireworks/glm-5p2", expected: { arg: "fireworks/glm-5p2" } },
+    { name: "extra whitespace", text: "  /model   foo  ", expected: { arg: "foo" } },
+    { name: "not a model command", text: "hello", expected: null },
+    { name: "prefix but different command", text: "/models", expected: null },
+    { name: "mid-sentence /model", text: "use /model please", expected: null },
+    { name: "empty string", text: "", expected: null },
+    { name: "undefined", text: undefined, expected: null },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.deepEqual(parseModelCommand(c.text), c.expected));
+  }
+});
+
+describe("resolveModelArg", () => {
+  const models = [
+    { provider: "fireworks", id: "accounts/fireworks/models/glm-5p2" },
+    { provider: "anthropic", id: "claude-opus-4-8" },
+    { provider: "anthropic", id: "claude-haiku-4-5" },
+    { provider: "other", id: "claude-opus-4-8" },
+  ];
+  const cases = [
+    { name: "exact provider/id wins", arg: "anthropic/claude-opus-4-8", expected: [models[1]] },
+    { name: "exact id (unique)", arg: "accounts/fireworks/models/glm-5p2", expected: [models[0]] },
+    { name: "exact id (duplicated across providers)", arg: "claude-opus-4-8", expected: [models[1], models[3]] },
+    { name: "exact last path segment beats substring", arg: "glm-5p2", expected: [models[0]] },
+    { name: "substring unique", arg: "glm", expected: [models[0]] },
+    { name: "substring case-insensitive", arg: "HAIKU", expected: [models[2]] },
+    { name: "substring ambiguous", arg: "claude", expected: [models[1], models[2], models[3]] },
+    { name: "no match", arg: "nope", expected: [] },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.deepEqual(resolveModelArg(models, c.arg), c.expected));
+  }
+
+  test("last-segment match is not fooled by a longer variant", () => {
+    const withVariant = [
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p2" },
+      { provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" },
+    ];
+    assert.deepEqual(resolveModelArg(withVariant, "glm-5p2"), [withVariant[0]]);
+  });
+});
+
+describe("doModelCommand", () => {
+  function mockChat() {
+    const messages = [];
+    const errors = [];
+    return {
+      messages,
+      errors,
+      addMessage: (role, text) => messages.push({ role, text }),
+      showError: (msg) => errors.push(msg),
+    };
+  }
+
+  const MODELS = {
+    current: { provider: "fireworks", id: "glm-5p2" },
+    models: [
+      { provider: "fireworks", id: "glm-5p2" },
+      { provider: "anthropic", id: "claude-opus-4-8" },
+    ],
+  };
+
+  test("bare /model lists models with current marked", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model", arg: "", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => { throw new Error("should not be called"); },
+    });
+    assert.equal(result.action, "listed");
+    assert.equal(result.count, 2);
+    assert.equal(chat.messages[0].role, "user");
+    assert.equal(chat.messages[1].role, "system");
+    assert.match(chat.messages[1].text, /\* fireworks\/glm-5p2/);
+    assert.match(chat.messages[1].text, /^ {2}anthropic\/claude-opus-4-8$/m);
+  });
+
+  test("empty model list shows a no-models message", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model", arg: "", chat,
+      getModelsFn: async () => ({ current: null, models: [] }),
+      setModelFn: async () => {},
+    });
+    assert.equal(result.action, "listed");
+    assert.equal(result.count, 0);
+    assert.match(chat.messages[1].text, /No models/);
+  });
+
+  test("tolerates a payload without a models field", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model", arg: "", chat,
+      getModelsFn: async () => ({ current: null }),
+      setModelFn: async () => {},
+    });
+    assert.equal(result.count, 0);
+  });
+
+  test("switch: unique match calls setModelFn and refreshes status", async () => {
+    const chat = mockChat();
+    const setCalls = [];
+    const statusUpdates = [];
+    const result = await doModelCommand({
+      text: "/model opus", arg: "opus", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async (provider, id) => { setCalls.push({ provider, id }); },
+      getStatusFn: async () => ({ model: "claude-opus-4-8" }),
+      onStatusUpdateFn: (s) => statusUpdates.push(s),
+    });
+    assert.equal(result.action, "switched");
+    assert.deepEqual(setCalls, [{ provider: "anthropic", id: "claude-opus-4-8" }]);
+    assert.match(chat.messages[1].text, /Model switched to anthropic\/claude-opus-4-8/);
+    assert.deepEqual(statusUpdates, [{ model: "claude-opus-4-8" }]);
+  });
+
+  test("switch works without status hooks", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model opus", arg: "opus", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => {},
+    });
+    assert.equal(result.action, "switched");
+  });
+
+  test("status refresh failure is swallowed", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model opus", arg: "opus", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => {},
+      getStatusFn: async () => { throw new Error("status down"); },
+      onStatusUpdateFn: () => {},
+    });
+    assert.equal(result.action, "switched");
+    assert.equal(chat.errors.length, 0);
+  });
+
+  test("no match shows an error", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model nope", arg: "nope", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => { throw new Error("should not be called"); },
+    });
+    assert.equal(result.action, "error");
+    assert.equal(result.reason, "no match");
+    assert.match(chat.errors[0], /No model matching "nope"/);
+  });
+
+  test("ambiguous match lists candidates", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model l", arg: "l", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => { throw new Error("should not be called"); },
+    });
+    assert.equal(result.action, "error");
+    assert.equal(result.reason, "ambiguous");
+    assert.match(chat.errors[0], /fireworks\/glm-5p2, anthropic\/claude-opus-4-8/);
+  });
+
+  test("getModels failure shows an error", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model", arg: "", chat,
+      getModelsFn: async () => { throw new Error("bridge down"); },
+      setModelFn: async () => {},
+    });
+    assert.equal(result.action, "error");
+    assert.equal(result.reason, "getModels failed");
+    assert.equal(chat.errors[0], "bridge down");
+  });
+
+  test("getModels failure without a message uses the fallback", async () => {
+    const chat = mockChat();
+    await doModelCommand({
+      text: "/model", arg: "", chat,
+      getModelsFn: async () => { throw new Error(""); },
+      setModelFn: async () => {},
+    });
+    assert.equal(chat.errors[0], "Failed to load models");
+  });
+
+  test("setModel failure shows the server error", async () => {
+    const chat = mockChat();
+    const result = await doModelCommand({
+      text: "/model opus", arg: "opus", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => { throw new Error("No API key"); },
+    });
+    assert.equal(result.action, "error");
+    assert.equal(result.reason, "setModel failed");
+    assert.equal(chat.errors[0], "No API key");
+  });
+
+  test("setModel failure without a message uses the fallback", async () => {
+    const chat = mockChat();
+    await doModelCommand({
+      text: "/model opus", arg: "opus", chat,
+      getModelsFn: async () => MODELS,
+      setModelFn: async () => { throw new Error(""); },
+    });
+    assert.equal(chat.errors[0], "Failed to switch model");
   });
 });

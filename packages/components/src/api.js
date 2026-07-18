@@ -119,6 +119,22 @@ export async function statFiles(paths, fetchFn = fetch) {
   return (await res.json()).stats || {};
 }
 
+export async function getModels(fetchFn = fetch) {
+  const res = await fetchFn("/api/models");
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
+export async function setModel(provider, id, fetchFn = fetch) {
+  const res = await fetchFn("/api/model", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, id }),
+  });
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
 export async function abortAgent(fetchFn = fetch) {
   const res = await fetchFn("/api/abort", { method: "POST" });
   return res.json();
