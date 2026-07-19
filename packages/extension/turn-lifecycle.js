@@ -63,6 +63,7 @@ export function createTurnLifecycle(opts = {}) {
   let busy = false;
   let finalizeTimer = null;
   let buffer = [];
+  let abortRequested = false;
 
   function cancelPendingFinalize() {
     if (finalizeTimer) {
@@ -107,9 +108,21 @@ export function createTurnLifecycle(opts = {}) {
      *   that re-claims it — a genuine new prompt claims the turn via
      *   beginTurn() before its agent_start.
      */
+    /**
+     * The user explicitly aborted (/api/abort). The next agent_end finalizes
+     * immediately instead of waiting out the grace window — no retry or
+     * continuation follows a manual abort, and the lingering busy=true was
+     * letting clients reattach mid-grace and replay the whole stopped turn.
+     * One-shot: cleared by the next agent_start (covers abort-while-idle).
+     */
+    noteAbortRequested() {
+      abortRequested = true;
+    },
+
     agentStart() {
       cancelPendingFinalize();
       busy = true;
+      abortRequested = false;
       let reasserted = false;
       if (!turnActive) {
         turnActive = true;
@@ -126,6 +139,14 @@ export function createTurnLifecycle(opts = {}) {
      * @returns {{scheduled: boolean, graceMs: number}}
      */
     agentEnd(event, { willRetry = false, endedOnError = false } = {}) {
+      if (abortRequested) {
+        // Manual abort ends the turn for good — finalize synchronously so
+        // busy drops before any client can reattach and trigger a replay.
+        abortRequested = false;
+        cancelPendingFinalize();
+        finalize(event);
+        return { scheduled: true, graceMs: 0 };
+      }
       if (willRetry) return { scheduled: false, graceMs: 0 };
       const grace = endedOnError ? errorGraceMs : graceMs;
       cancelPendingFinalize();
@@ -139,6 +160,7 @@ export function createTurnLifecycle(opts = {}) {
     shutdown() {
       turnActive = false;
       busy = false;
+      abortRequested = false;
       cancelPendingFinalize();
       buffer = [];
     },

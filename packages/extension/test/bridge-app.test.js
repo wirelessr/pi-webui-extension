@@ -26,6 +26,7 @@ function createMockDeps(overrides = {}) {
 		compact: [],
 		abort: [],
 		setModel: [],
+		noteAbortRequested: [],
 	};
 
 	return {
@@ -80,6 +81,7 @@ function createMockDeps(overrides = {}) {
 		},
 		attachStream: () => false,
 		isPendingOrSse: () => false,
+		noteAbortRequested: () => { calls.noteAbortRequested.push(true); },
 		listModels: () => ({
 			current: { provider: "fireworks", id: "test-model", name: "Test Model", contextWindow: 128000 },
 			models: [
@@ -477,6 +479,7 @@ test("POST /api/abort calls sessionCtx.abort", async () => {
 	const body = await res.json();
 	assert.strictEqual(body.ok, true);
 	assert.strictEqual(deps.calls.abort.length, 1);
+	assert.strictEqual(deps.calls.noteAbortRequested.length, 1);
 });
 
 test("POST /api/abort without session context returns 500", async () => {

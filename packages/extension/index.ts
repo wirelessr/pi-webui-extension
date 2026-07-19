@@ -158,6 +158,7 @@ export default function (pi: ExtensionAPI) {
 		attachStream,
 		saveUpload,
 		isPendingOrSse: () => !!(pending || viewers.size() > 0),
+		noteAbortRequested: () => lifecycle.noteAbortRequested(),
 		reload: doReload,
 		clientLog,
 	};

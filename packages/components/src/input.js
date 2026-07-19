@@ -86,8 +86,14 @@ export function createInput({
 
   $sendBtn.addEventListener("click", () => {
     const action = decideSendClick(isStreaming);
-    if (action === "stop") onStop();
-    else sendMessage();
+    if (action === "stop") {
+      onStop();
+      // The click leaves focus on the button/body — hand it back to the
+      // input, since stopping is almost always followed by typing.
+      $input.focus();
+    } else {
+      sendMessage();
+    }
   });
 
   $input.addEventListener("input", () => {

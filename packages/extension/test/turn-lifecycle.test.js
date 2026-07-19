@@ -342,3 +342,72 @@ describe("replay buffer", () => {
     assert.equal(lc.bufferedCount(), 1);
   });
 });
+
+describe("noteAbortRequested — immediate finalize on manual abort", () => {
+  test("agent_end after an abort finalizes synchronously, no grace timer", () => {
+    const { lc, timers, finalized } = makeLifecycle();
+    lc.beginTurn();
+    lc.agentStart();
+    lc.noteAbortRequested();
+    const result = lc.agentEnd({ id: "e" }, { endedOnError: false });
+    assert.deepEqual(result, { scheduled: true, graceMs: 0 });
+    assert.equal(finalized.length, 1);
+    assert.equal(finalized[0].wasActive, true);
+    assert.equal(lc.isBusy(), false);
+    assert.equal(lc.hasPendingFinalize(), false);
+    assert.equal(timers.count(), 0);
+  });
+
+  test("abort wins over willRetry and endedOnError", () => {
+    const { lc, finalized } = makeLifecycle();
+    lc.beginTurn();
+    lc.agentStart();
+    lc.noteAbortRequested();
+    lc.agentEnd({}, { willRetry: true, endedOnError: true });
+    assert.equal(finalized.length, 1);
+    assert.equal(lc.isBusy(), false);
+  });
+
+  test("flag is one-shot: the next agent_end schedules normally", () => {
+    const { lc, timers, finalized } = makeLifecycle();
+    lc.beginTurn();
+    lc.agentStart();
+    lc.noteAbortRequested();
+    lc.agentEnd({}, {});
+    assert.equal(finalized.length, 1);
+    lc.beginTurn();
+    lc.agentStart();
+    const result = lc.agentEnd({}, {});
+    assert.deepEqual(result, { scheduled: true, graceMs: 1000 });
+    assert.equal(finalized.length, 1);
+    timers.fireAll();
+    assert.equal(finalized.length, 2);
+  });
+
+  test("abort-while-idle does not poison the next turn (agentStart clears it)", () => {
+    const { lc, timers, finalized } = makeLifecycle();
+    lc.noteAbortRequested(); // abort clicked with no turn running
+    lc.beginTurn();
+    lc.agentStart();
+    const result = lc.agentEnd({}, {});
+    assert.deepEqual(result, { scheduled: true, graceMs: 1000 });
+    assert.equal(finalized.length, 0);
+    timers.fireAll();
+    assert.equal(finalized.length, 1);
+  });
+
+  test("shutdown clears a pending abort flag", () => {
+    const { lc, timers, finalized } = makeLifecycle();
+    lc.beginTurn();
+    lc.agentStart();
+    lc.noteAbortRequested();
+    lc.shutdown();
+    lc.beginTurn();
+    lc.agentStart();
+    const result = lc.agentEnd({}, {});
+    assert.deepEqual(result, { scheduled: true, graceMs: 1000 });
+    assert.equal(finalized.length, 0);
+    timers.fireAll();
+    assert.equal(finalized.length, 1);
+  });
+});

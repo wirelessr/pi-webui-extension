@@ -782,6 +782,9 @@ export function createBridgeApp(deps) {
 		try {
 			const ctx = deps.getSessionCtx();
 			if (ctx) {
+				// Flag before abort: the agent_end it triggers must finalize
+				// immediately (no grace) so busy drops and no client replays.
+				deps.noteAbortRequested?.();
 				ctx.abort();
 				return c.json({ ok: true });
 			}
