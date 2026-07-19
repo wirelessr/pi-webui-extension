@@ -755,12 +755,12 @@ describe("doModelCommand", () => {
   const MODELS = {
     current: { provider: "fireworks", id: "glm-5p2" },
     models: [
-      { provider: "fireworks", id: "glm-5p2" },
-      { provider: "anthropic", id: "claude-opus-4-8" },
+      { provider: "fireworks", id: "glm-5p2", contextWindow: 1048575, reasoning: true, costInput: 1.4, costOutput: 4.4 },
+      { provider: "anthropic", id: "claude-opus-4-8", vision: true },
     ],
   };
 
-  test("bare /model lists models with current marked", async () => {
+  test("bare /model lists models as a markdown table with current marked", async () => {
     const chat = mockChat();
     const result = await doModelCommand({
       text: "/model", arg: "", chat,
@@ -771,8 +771,9 @@ describe("doModelCommand", () => {
     assert.equal(result.count, 2);
     assert.equal(chat.messages[0].role, "user");
     assert.equal(chat.messages[1].role, "system");
-    assert.match(chat.messages[1].text, /\* fireworks\/glm-5p2/);
-    assert.match(chat.messages[1].text, /^ {2}anthropic\/claude-opus-4-8$/m);
+    assert.match(chat.messages[1].text, /\| Model \| Context \| Vision \| Reasoning \|/);
+    assert.match(chat.messages[1].text, /\| \* \| fireworks\/glm-5p2 \| 1\.0M \| {2}\| yes \| 1\.4 \/ 4\.4 \|/);
+    assert.match(chat.messages[1].text, /\| {2}\| anthropic\/claude-opus-4-8 \| {2}\| yes \| {2}\| {2}\|/);
   });
 
   test("empty model list shows a no-models message", async () => {

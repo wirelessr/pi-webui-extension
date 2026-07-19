@@ -115,19 +115,22 @@ export default function (pi: ExtensionAPI) {
 		getCommands: () => pi.getCommands(),
 		setSessionName: (name: string) => pi.setSessionName(name),
 		listModels: () => {
-			const current = sessionCtx?.model
-				? { provider: sessionCtx.model.provider, id: sessionCtx.model.id, name: sessionCtx.model.name, contextWindow: sessionCtx.model.contextWindow }
-				: null;
+			const toInfo = (m: any) => ({
+				provider: m.provider,
+				id: m.id,
+				name: m.name,
+				contextWindow: m.contextWindow,
+				vision: Array.isArray(m.input) && m.input.includes("image"),
+				reasoning: !!m.reasoning,
+				costInput: m.cost?.input,
+				costOutput: m.cost?.output,
+			});
+			const current = sessionCtx?.model ? toInfo(sessionCtx.model) : null;
 			const registry = sessionCtx?.modelRegistry;
 			// getAvailable() is the full catalog — keep only providers with auth
 			const models = (registry?.getAvailable() ?? [])
 				.filter((m: any) => registry.hasConfiguredAuth(m))
-				.map((m: any) => ({
-					provider: m.provider,
-					id: m.id,
-					name: m.name,
-					contextWindow: m.contextWindow,
-				}));
+				.map(toInfo);
 			return { current, models };
 		},
 		setModel: async (provider: string, id: string) => {

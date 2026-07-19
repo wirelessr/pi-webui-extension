@@ -8,6 +8,8 @@
  * the orchestration logic fully testable without a browser.
  */
 
+import { formatTokens } from "./utils.js";
+
 /**
  * Send a prompt and handle the SSE streaming response.
  *
@@ -190,13 +192,14 @@ export async function doModelCommand(opts) {
   const current = data.current;
 
   if (!arg) {
-    const lines = models.map((m) => {
+    const rows = models.map((m) => {
       const isCurrent = current && m.provider === current.provider && m.id === current.id;
-      return `${isCurrent ? "*" : " "} ${m.provider}/${m.id}`;
+      const ctx = m.contextWindow ? formatTokens(m.contextWindow) : "";
+      const cost = m.costInput != null && m.costOutput != null ? `${m.costInput} / ${m.costOutput}` : "";
+      return `| ${isCurrent ? "*" : ""} | ${m.provider}/${m.id} | ${ctx} | ${m.vision ? "yes" : ""} | ${m.reasoning ? "yes" : ""} | ${cost} |`;
     });
-    // Fenced code block: keeps the "*" marker from rendering as a markdown bullet
-    const msg = lines.length
-      ? `Available models (* = current):\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nSwitch with /model <provider/model>`
+    const msg = rows.length
+      ? `Available models (* = current):\n\n| | Model | Context | Vision | Reasoning | $/M in / out |\n|---|---|---|---|---|---|\n${rows.join("\n")}\n\nSwitch with /model <provider/model>`
       : "No models with configured auth found.";
     chat.addMessage("system", msg);
     return { action: "listed", count: models.length };

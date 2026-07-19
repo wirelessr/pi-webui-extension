@@ -30,6 +30,19 @@ describe("renderMarkdown - tables", () => {
     const result = renderMarkdown("---\n---");
     assert.ok(!result.includes("<table>"));
   });
+
+  test("empty cells keep their column position", () => {
+    const result = renderMarkdown("| | Model | Vision |\n|---|---|---|\n| * | m1 | |\n| | m2 | yes |");
+    assert.ok(result.includes("<th></th><th>Model</th><th>Vision</th>"));
+    assert.ok(result.includes("<td>*</td><td>m1</td><td></td>"));
+    assert.ok(result.includes("<td></td><td>m2</td><td>yes</td>"));
+  });
+
+  test("cells without outer pipes still split correctly", () => {
+    const result = renderMarkdown("Name | Value\n---|---\na | 1");
+    assert.ok(result.includes("<th>Name</th><th>Value</th>"));
+    assert.ok(result.includes("<td>a</td><td>1</td>"));
+  });
 });
 
 describe("renderMarkdown - fenced code blocks", () => {

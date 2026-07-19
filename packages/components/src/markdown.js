@@ -97,11 +97,19 @@ export function renderMarkdown(md) {
 
     // Table
     if (line.includes("|") && i + 1 < lines.length && lines[i + 1].match(/^[\s|:-]+$/)) {
-      const headerCells = line.split("|").map((c) => c.trim()).filter((c) => c !== "");
+      // Strip only the empties from the outer pipes — interior empty cells
+      // are real cells and must keep their column position.
+      const splitRow = (l) => {
+        const cells = l.split("|").map((c) => c.trim());
+        if (cells.length && cells[0] === "") cells.shift();
+        if (cells.length && cells[cells.length - 1] === "") cells.pop();
+        return cells;
+      };
+      const headerCells = splitRow(line);
       i += 2;
       const rows = [];
       while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
-        rows.push(lines[i].split("|").map((c) => c.trim()).filter((c) => c !== ""));
+        rows.push(splitRow(lines[i]));
         i++;
       }
       let table = "<table><thead><tr>";

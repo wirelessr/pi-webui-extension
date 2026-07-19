@@ -197,6 +197,10 @@ const ModelInfo = z.object({
 	id: z.string(),
 	name: z.string().optional(),
 	contextWindow: z.number().optional(),
+	vision: z.boolean().optional(),
+	reasoning: z.boolean().optional(),
+	costInput: z.number().optional(),
+	costOutput: z.number().optional(),
 }).openapi("ModelInfo");
 
 const ModelsResponse = z.object({
