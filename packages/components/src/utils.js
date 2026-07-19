@@ -26,7 +26,7 @@ export function formatTokens(n) {
 
 /**
  * Build stats display string from status API response.
- * @param {{usage?: object, context?: object}} data
+ * @param {{usage?: object, context?: object, model?: string}} data
  * @returns {string}
  */
 export function formatStats(data) {
@@ -34,6 +34,8 @@ export function formatStats(data) {
   const u = data.usage;
   const ctx = data.context;
   const parts = [];
+  // Model short name (last path segment \u2014 bedrock/fireworks ids are paths)
+  if (data.model) parts.push(data.model.split("/").pop());
   if (u.inputTokens) parts.push(`\u2191${formatTokens(u.inputTokens)}`);
   if (u.outputTokens) parts.push(`\u2193${formatTokens(u.outputTokens)}`);
   if (u.cacheReadTokens) parts.push(`R${formatTokens(u.cacheReadTokens)}`);

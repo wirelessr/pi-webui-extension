@@ -62,4 +62,22 @@ describe("formatStats", () => {
     });
     assert.equal(result, "↑1.0k · ?/200k");
   });
+
+  it("leads with the model short name when model is set", () => {
+    const result = formatStats({
+      model: "accounts/fireworks/models/glm-5p2",
+      usage: { inputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitRate: null, totalCost: 0 },
+      context: { tokens: null, contextWindow: 200000, percent: null },
+    });
+    assert.equal(result, "glm-5p2 · ↑1.0k · ?/200k");
+  });
+
+  it("uses a plain model id as-is", () => {
+    const result = formatStats({
+      model: "claude-opus-4-8",
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitRate: null, totalCost: 0 },
+      context: { tokens: 0, contextWindow: 200000, percent: 0 },
+    });
+    assert.equal(result, "claude-opus-4-8 · 0.0%/200k");
+  });
 });
