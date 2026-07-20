@@ -110,7 +110,13 @@ import { formatStats } from "/utils.js";
           const s = await getStatus(scopedFetch(id));
           return s.startedAt > treeNavStartedAt ? s : false;
         }, 1000, 20);
-        loadSessions();
+        // The reload gap can trip the poll self-heal (session vanishes from
+        // the list → active cleared → re-selected via switchTo). Wait for the
+        // selection to settle back on this session, then let switchTo's own
+        // in-flight history load land before rendering over it.
+        await pollUntil(async () => activeSessionId === id, 500, 30);
+        if (activeSessionId !== id) return;
+        await new Promise((r) => setTimeout(r, 1500));
       }
       if (id !== activeSessionId) return;
       try {
