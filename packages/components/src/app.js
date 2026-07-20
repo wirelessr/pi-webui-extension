@@ -17,8 +17,9 @@ import { createCommandsView } from "./commands.js";
 import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, syncExpandButtonState } from "./flow.js";
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
-import { initResize } from "./resize.js";
 import { createModelView } from "./model-view.js";
+import { createOverlayManager } from "./overlay-manager.js";
+import { initResize } from "./resize.js";
 import { createSessionsView } from "./sessions.js";
 import { createTreeView } from "./tree-view.js";
 import { formatStats } from "./utils.js";
@@ -59,12 +60,14 @@ import { formatStats } from "./utils.js";
 
   // ── Module instances ──────────────────────────────
 
-  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog, getFileContentFn: (path) => getFile(path), statFilesFn: (paths) => statFiles(paths) });
+  const overlays = createOverlayManager({ $chat, $messages });
+
+  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog, getFileContentFn: (path) => getFile(path), statFilesFn: (paths) => statFiles(paths), overlays });
 
   let treeNavStartedAt = 0;
   const treeView = createTreeView({
     $chat,
-    $messages,
+    overlays,
     getTreeFn: getTree,
     navigateFn: (targetId) => {
       treeNavStartedAt = Date.now();
@@ -90,14 +93,11 @@ import { formatStats } from "./utils.js";
       }
     },
   });
-  document.getElementById("tree-btn")?.addEventListener("click", () => {
-    modelView.close();
-    treeView.toggle();
-  });
+  document.getElementById("tree-btn")?.addEventListener("click", () => treeView.toggle());
 
   const modelView = createModelView({
     $chat,
-    $messages,
+    overlays,
     getModelsFn: getModels,
     setModelFn: setModel,
     onSwitched: async (m) => {
@@ -221,13 +221,11 @@ import { formatStats } from "./utils.js";
 
   async function handleSend(text) {
     if (text.trim() === "/tree") {
-      modelView.close();
       treeView.open();
       return;
     }
     const modelCmd = parseModelCommand(text);
     if (modelCmd && modelCmd.arg === "") {
-      treeView.close();
       modelView.open();
       return;
     }

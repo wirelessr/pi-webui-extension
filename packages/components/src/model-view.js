@@ -1,41 +1,41 @@
 /**
  * Model picker overlay — click a model to switch to it.
  *
- * Same overlay pattern as the tree/subagent views: a sibling of #messages
- * inside #chat; opening hides #messages (never rebuilds it). Bare /model and
- * the commands sidebar open this; "/model <arg>" still switches directly.
+ * A sibling of #messages inside #chat; hiding/restoring the transcript and
+ * overlay exclusivity are the overlay manager's job (overlay-manager.js).
+ * Bare /model and the commands sidebar open this; "/model <arg>" still
+ * switches directly.
  */
 
 /**
  * @param {object} opts
  * @param {HTMLElement} opts.$chat — scroll container (overlay parent)
- * @param {HTMLElement} opts.$messages — main transcript element (hidden while open)
+ * @param {object} opts.overlays — overlay manager (createOverlayManager)
  * @param {function} opts.getModelsFn — () => Promise<{current, models}>
  * @param {function} opts.setModelFn — (provider, id) => Promise
  * @param {function} opts.onSwitched — (model) => void, after a successful switch
  */
-export function createModelView({ $chat, $messages, getModelsFn, setModelFn, onSwitched }) {
+export function createModelView({ $chat, overlays, getModelsFn, setModelFn, onSwitched }) {
   const $view = document.createElement("div");
   $view.className = "model-view";
   $view.style.display = "none";
   $chat.appendChild($view);
 
   let isOpen = false;
-  let parentScrollTop = 0;
+  const handle = { close };
 
   function close() {
     if (!isOpen) return;
     isOpen = false;
     $view.style.display = "none";
     $view.innerHTML = "";
-    $messages.style.display = "";
-    $chat.scrollTop = parentScrollTop;
+    overlays.closed(handle);
   }
 
   async function open() {
     if (isOpen) return;
+    overlays.open(handle);
     isOpen = true;
-    parentScrollTop = $chat.scrollTop;
     $view.innerHTML = "";
 
     const header = document.createElement("div");
@@ -61,7 +61,6 @@ export function createModelView({ $chat, $messages, getModelsFn, setModelFn, onS
     list.className = "tree-view-list";
     $view.appendChild(list);
 
-    $messages.style.display = "none";
     $view.style.display = "";
     $chat.scrollTop = 0;
 

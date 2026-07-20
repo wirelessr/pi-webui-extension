@@ -8,12 +8,17 @@
 import { extractFilePaths, fileName, isMarkdownPath } from "./artifacts.js";
 import { diffLines } from "./diff.js";
 import { renderMarkdown } from "./markdown.js";
+import { createOverlayManager } from "./overlay-manager.js";
 import { extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { classifyScrollEvent, doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
-export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null, overlays = null }) {
+  // Overlay exclusivity + transcript hide/restore live in the manager. Apps
+  // pass the shared instance (so tree/model panels join the same exclusivity
+  // group); standalone use gets a private one.
+  const overlayMgr = overlays || createOverlayManager({ $chat, $messages });
   // Whether a node (tool by name, or "thinking") should start expanded. Per-type
   // preference when isNodeExpanded is provided; else the old global flag.
   const nodeOpen = (type) => (isNodeExpanded ? !!isNodeExpanded(type) : !!isToolsExpanded?.());
@@ -29,7 +34,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   // ── Subagent view state ──
   const subagentViews = new Map();
   let activeSubagentId = null;
-  let parentScrollTop = 0;
   // The subagent view is a sibling that overlays the chat: opening it hides
   // $messages (never destroys/re-serializes it), so the main chat's DOM and the
   // live incremental-render pointers into it survive open/close intact.
@@ -37,6 +41,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   $subagentView.className = "subagent-view";
   $subagentView.style.display = "none";
   $chat.appendChild($subagentView);
+  const subagentHandle = { close: () => closeSubagentView() };
 
   // ── File view state ──
   // Chips list the files a message wrote/edited (paths come from the
@@ -54,6 +59,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   $fileView.className = "file-view";
   $fileView.style.display = "none";
   $chat.appendChild($fileView);
+  const fileHandle = { close: () => closeFileView() };
 
   // ── Scroll (auto-follow / sticky scroll) ──
   //
@@ -270,9 +276,8 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   function openSubagentView(id) {
     const view = subagentViews.get(id);
     if (!view) return;
+    overlayMgr.open(subagentHandle);
     activeSubagentId = id;
-    parentScrollTop = $chat.scrollTop;
-    $messages.style.display = "none";
     $subagentView.style.display = "";
     renderSubagentView(view);
     forceScrollToBottom();
@@ -353,10 +358,9 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     activeSubagentId = null;
     $subagentView.style.display = "none";
     $subagentView.innerHTML = "";
-    $messages.style.display = "";
-    $chat.scrollTop = parentScrollTop;
     // $messages was only hidden, never rebuilt — its open-button listeners and
     // the live incremental-render pointers are still intact. No re-bind needed.
+    overlayMgr.closed(subagentHandle);
   }
 
   // ── Agent-authored file chips + read-only file view ──
@@ -420,9 +424,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   }
 
   async function openFileView(path) {
-    parentScrollTop = $chat.scrollTop;
-    $messages.style.display = "none";
-    $subagentView.style.display = "none";
+    overlayMgr.open(fileHandle);
     $fileView.style.display = "";
     $fileView.innerHTML = "";
 
@@ -468,8 +470,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     openFileView._token = null;
     $fileView.style.display = "none";
     $fileView.innerHTML = "";
-    $messages.style.display = "";
-    $chat.scrollTop = parentScrollTop;
+    overlayMgr.closed(fileHandle);
   }
 
   function updateSubagentViews(toolCallId, details) {
@@ -1015,7 +1016,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   }
 
   function loadHistory(history) {
-    closeFileView();
+    overlayMgr.closeAll(); // transcript is being replaced — no overlay may outlive it
     $messages.innerHTML = "";
     // Group each turn's assistant messages + tool results into ONE bubble, so
     // reload matches the live view (one bubble per turn, blocks interleaved).

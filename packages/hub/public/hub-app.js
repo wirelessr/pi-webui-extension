@@ -18,8 +18,9 @@ import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand } from 
 import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
-import { isTranscriptInterrupted } from "/parsers.js";
 import { createModelView } from "/model-view.js";
+import { createOverlayManager } from "/overlay-manager.js";
+import { isTranscriptInterrupted } from "/parsers.js";
 import { createStore } from "/store.js";
 import { createTreeView } from "/tree-view.js";
 import { formatStats } from "/utils.js";
@@ -76,6 +77,8 @@ import { formatStats } from "/utils.js";
     return { edit: true };
   }
   let nodePrefs = loadNodePrefs();
+  const overlays = createOverlayManager({ $chat, $messages });
+
   const chat = createChat({
     $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded,
     // Per-type pref wins when set; otherwise fall back to the global
@@ -83,11 +86,12 @@ import { formatStats } from "/utils.js";
     isNodeExpanded: (type) => (type in nodePrefs ? !!nodePrefs[type] : toolsExpanded),
     getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
     statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
+    overlays,
   });
   let treeNavStartedAt = 0;
   const treeView = createTreeView({
     $chat,
-    $messages,
+    overlays,
     getTreeFn: () => getTree(scopedFetch(activeSessionId)),
     navigateFn: (targetId) => {
       treeNavStartedAt = Date.now();
@@ -121,14 +125,12 @@ import { formatStats } from "/utils.js";
     },
   });
   document.getElementById("tree-btn")?.addEventListener("click", () => {
-    if (!activeSessionId) return;
-    modelView.close();
-    treeView.toggle();
+    if (activeSessionId) treeView.toggle();
   });
 
   const modelView = createModelView({
     $chat,
-    $messages,
+    overlays,
     getModelsFn: () => getModels(scopedFetch(activeSessionId)),
     setModelFn: (provider, modelId) => setModel(provider, modelId, scopedFetch(activeSessionId)),
     onSwitched: async (m) => {
@@ -377,8 +379,7 @@ import { formatStats } from "/utils.js";
     activeStreaming = false;
     streamStuckTicks = 0;
     activeInterrupted = false; // recomputed once this session's history loads
-    treeView.close(); // overlays are per-session; never show the old session's
-    modelView.close();
+    overlays.closeAll(); // overlays are per-session; never show the old session's
     chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
     try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
@@ -477,7 +478,6 @@ import { formatStats } from "/utils.js";
     if (!activeSessionId) return;
     const id = activeSessionId;
     if (text.trim() === "/tree") {
-      modelView.close();
       treeView.open();
       return;
     }
@@ -485,7 +485,6 @@ import { formatStats } from "/utils.js";
     // and a queued copy would dispatch to the agent as a plain message).
     const modelCmd = parseModelCommand(text);
     if (modelCmd && modelCmd.arg === "") {
-      treeView.close();
       modelView.open();
       return;
     }

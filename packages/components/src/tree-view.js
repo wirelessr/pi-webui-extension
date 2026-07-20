@@ -1,9 +1,8 @@
 /**
  * Session tree overlay — shows the user-message tree and switches branches.
  *
- * Same overlay pattern as the subagent/file views in chat.js: a sibling of
- * #messages inside #chat; opening hides #messages (never rebuilds it), so the
- * live incremental-render pointers survive open/close.
+ * A sibling of #messages inside #chat; hiding/restoring the transcript and
+ * overlay exclusivity are the overlay manager's job (overlay-manager.js).
  */
 
 import { flattenUserTree } from "./tree-render.js";
@@ -11,34 +10,33 @@ import { flattenUserTree } from "./tree-render.js";
 /**
  * @param {object} opts
  * @param {HTMLElement} opts.$chat — scroll container (overlay parent)
- * @param {HTMLElement} opts.$messages — main transcript element (hidden while open)
+ * @param {object} opts.overlays — overlay manager (createOverlayManager)
  * @param {function} opts.getTreeFn — () => Promise<{nodes, leafId}>
  * @param {function} opts.navigateFn — (targetId) => Promise
  * @param {function} opts.onNavigated — () => void, reload transcript after a switch
  * @param {function} [opts.isBusyFn] — () => boolean, disables navigation while busy
  */
-export function createTreeView({ $chat, $messages, getTreeFn, navigateFn, onNavigated, isBusyFn = () => false }) {
+export function createTreeView({ $chat, overlays, getTreeFn, navigateFn, onNavigated, isBusyFn = () => false }) {
   const $view = document.createElement("div");
   $view.className = "tree-view";
   $view.style.display = "none";
   $chat.appendChild($view);
 
   let isOpen = false;
-  let parentScrollTop = 0;
+  const handle = { close };
 
   function close() {
     if (!isOpen) return;
     isOpen = false;
     $view.style.display = "none";
     $view.innerHTML = "";
-    $messages.style.display = "";
-    $chat.scrollTop = parentScrollTop;
+    overlays.closed(handle);
   }
 
   async function open() {
     if (isOpen) return;
+    overlays.open(handle);
     isOpen = true;
-    parentScrollTop = $chat.scrollTop;
     $view.innerHTML = "";
 
     const header = document.createElement("div");
@@ -58,7 +56,6 @@ export function createTreeView({ $chat, $messages, getTreeFn, navigateFn, onNavi
     list.className = "tree-view-list";
     $view.appendChild(list);
 
-    $messages.style.display = "none";
     $view.style.display = "";
     $chat.scrollTop = 0;
 

@@ -24,7 +24,7 @@ jobs:
         run: |
           node --test test/*.test.js
           node --experimental-test-coverage --test test/*.test.js 2>&1 | tee /tmp/cov-components.txt
-          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser session-spawn artifacts diff tree-render; do
+          for mod in stream-accumulator selection-state flow ui-behaviors api utils sse-parser session-spawn artifacts diff tree-render overlay-manager; do
             line=$(grep " $mod.js " /tmp/cov-components.txt || true)
             if [ -z "$line" ]; then echo "ERROR: $mod.js not found in coverage"; exit 1; fi
             pct=$(echo "$line" | awk -F'|' '{print $2}' | awk '{print $1}' | tr -d '.')
