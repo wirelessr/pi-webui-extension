@@ -24,6 +24,7 @@ import * as helpers from "./helpers.js";
 import { generateSessionName, resolveAutoNameConfig } from "./name-generator.js";
 import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 import { createSseBroadcast } from "./sse-broadcast.js";
+import { buildUserTree } from "./tree-logic.js";
 import { createTurnLifecycle, lastAssistantEndedOnError } from "./turn-lifecycle.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -159,6 +160,12 @@ export default function (pi: ExtensionAPI) {
 		saveUpload,
 		isPendingOrSse: () => !!(pending || viewers.size() > 0),
 		noteAbortRequested: () => lifecycle.noteAbortRequested(),
+		getSessionTree: () =>
+			buildUserTree(
+				sessionCtx?.sessionManager?.getTree?.() ?? [],
+				sessionCtx?.sessionManager?.getLeafId?.() ?? null,
+			),
+		navigateTree: async (targetId: string) => runTreeNavigation(targetId),
 		reload: doReload,
 		clientLog,
 	};
@@ -192,6 +199,41 @@ export default function (pi: ExtensionAPI) {
 			// Best effort — fall back to stderr if file write fails
 			console.error(line);
 		}
+	}
+
+	// ── Tree navigation ──────────────────────────────────────────────
+	// The clean API (ctx.navigateTree) only exists on the COMMAND context,
+	// which event handlers never receive — and pi.sendUserMessage explicitly
+	// skips command dispatch (expandPromptTemplates: false), so there is no
+	// in-process path to it. Instead: move the leaf on the (raw) session
+	// manager, append a custom marker entry so the new leaf survives resume
+	// (on load, leaf = last file entry), and reload the session — the
+	// respawned process rebuilds the agent context from the new branch. This
+	// reuses the exact ⟳ reload flow, same port, same session id.
+
+	function runTreeNavigation(targetId: string): { ok: boolean; reload?: boolean; error?: string } {
+		const sm = sessionCtx?.sessionManager;
+		if (!sm?.getEntry || !sm.branch || !sm.appendCustomEntry) {
+			return { ok: false, error: "Session not ready" };
+		}
+		if (!sm.getEntry(targetId)) {
+			return { ok: false, error: `Entry ${targetId} not found` };
+		}
+		const oldLeafId = sm.getLeafId?.() ?? null;
+		if (oldLeafId === targetId) {
+			return { ok: true, reload: false };
+		}
+		try {
+			sm.branch(targetId);
+			sm.appendCustomEntry("webui-tree-nav", { from: oldLeafId, to: targetId });
+		} catch (err: any) {
+			serverLog("tree-nav: branch failed", { error: err?.message });
+			return { ok: false, error: err?.message || "branch failed" };
+		}
+		serverLog("tree-nav: leaf moved, reloading session", { targetId, oldLeafId });
+		// Let the HTTP response flush before the reload tears the bridge down.
+		setTimeout(() => doReload(), 150);
+		return { ok: true, reload: true };
 	}
 
 	function spawnNewSession(cwd?: string): { pid: number } {
@@ -760,6 +802,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function readSessionHistory(filePath: string | undefined, limit: number = 0, offset: number = 0): Promise<{ history: any[]; total: number }> {
+		// Prefer the active branch: sessions are trees (fork / tree navigation),
+		// and a linear file read would interleave entries from every branch.
+		try {
+			const branch = sessionCtx?.sessionManager?.getBranch?.();
+			if (Array.isArray(branch)) {
+				return helpers.paginateHistory(helpers.parseHistoryEntries(branch), limit, offset);
+			}
+		} catch {
+			// Fall through to the file read
+		}
 		if (!filePath || !existsSync(filePath)) return { history: [], total: 0 };
 		const data = await readFile(filePath, "utf-8");
 		const allHistory = helpers.parseHistoryData(data);
@@ -985,6 +1037,10 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// ── HTTP server ───────────────────────────────────────────────────
+
+	pi.on("session_tree", (event: any) => {
+		serverLog("session_tree: leaf moved", { oldLeafId: event.oldLeafId, newLeafId: event.newLeafId });
+	});
 
 	pi.on("session_start", async (event: any, ctx: any) => {
 		// Subagent sessions (--no-session) are ephemeral in-memory sessions.

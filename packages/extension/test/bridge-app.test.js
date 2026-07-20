@@ -27,6 +27,7 @@ function createMockDeps(overrides = {}) {
 		abort: [],
 		setModel: [],
 		noteAbortRequested: [],
+		navigateTree: [],
 	};
 
 	return {
@@ -82,6 +83,15 @@ function createMockDeps(overrides = {}) {
 		attachStream: () => false,
 		isPendingOrSse: () => false,
 		noteAbortRequested: () => { calls.noteAbortRequested.push(true); },
+		getSessionTree: () => ({
+			nodes: [{ id: "u1", navTargetId: "a1", text: "first", active: true, current: true, children: [] }],
+			leafId: "a1",
+		}),
+		navigateTree: async (targetId) => {
+			calls.navigateTree.push(targetId);
+			if (targetId === "bad") return { ok: false, error: "Navigation cancelled" };
+			return { ok: true };
+		},
 		listModels: () => ({
 			current: { provider: "fireworks", id: "test-model", name: "Test Model", contextWindow: 128000 },
 			models: [
@@ -676,4 +686,44 @@ test("GET path traversal is blocked by URL normalization", async () => {
 	// so the path never reaches route handlers as traversal.
 	const res = await app.fetch(req("/../../etc/passwd"));
 	assert.ok(res.status === 403 || res.status === 404);
+});
+
+test("GET /api/tree returns the compacted user tree", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/tree"));
+	assert.strictEqual(res.status, 200);
+	const body = await res.json();
+	assert.strictEqual(body.leafId, "a1");
+	assert.strictEqual(body.nodes[0].id, "u1");
+	assert.strictEqual(body.nodes[0].current, true);
+});
+
+test("POST /api/tree/navigate moves the leaf", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/tree/navigate", { targetId: "a1" }));
+	assert.strictEqual(res.status, 200);
+	assert.deepEqual(await res.json(), { ok: true, reload: true });
+	assert.deepEqual(deps.calls.navigateTree, ["a1"]);
+});
+
+test("POST /api/tree/navigate surfaces navigation failure as 400", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/tree/navigate", { targetId: "bad" }));
+	assert.strictEqual(res.status, 400);
+	assert.match((await res.json()).error, /cancelled/i);
+});
+
+test("POST /api/tree/navigate rejects while busy with 409", async () => {
+	const deps = createMockDeps({ getIsBusy: () => true });
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/tree/navigate", { targetId: "a1" }));
+	assert.strictEqual(res.status, 409);
+	assert.deepEqual(deps.calls.navigateTree, []);
+});
+
+test("POST /api/tree/navigate rejects a missing targetId", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(postJson("/api/tree/navigate", {}));
+	assert.strictEqual(res.status, 400);
 });

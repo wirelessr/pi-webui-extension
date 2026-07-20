@@ -42,6 +42,7 @@ const WEBUI_EXECUTABLE = new Set(["compact"]);
 // Values override pi's TUI-oriented descriptions where they'd mislead.
 const WEBUI_INSERTABLE = new Map([
 	["model", "List models (/model) or switch (/model <provider/model>)"],
+	["tree", "Show the session tree (switch branches)"],
 ]);
 
 /**
@@ -218,6 +219,31 @@ const SetModelResponse = z.object({
 	model: ModelInfo,
 }).openapi("SetModelResponse");
 
+const TreeNodeInfo = z.object({
+	id: z.string(),
+	navTargetId: z.string(),
+	text: z.string(),
+	active: z.boolean(),
+	current: z.boolean(),
+	children: z.array(z.any()),
+}).openapi("TreeNodeInfo");
+
+const TreeResponse = z.object({
+	nodes: z.array(TreeNodeInfo),
+	leafId: z.string().nullable(),
+}).openapi("TreeResponse");
+
+const TreeNavigateBody = z.object({
+	targetId: z.string(),
+}).openapi("TreeNavigateBody");
+
+const TreeNavigateResponse = z.object({
+	ok: z.boolean(),
+	// True when the leaf moved and the session is reloading (client must wait
+	// for the respawned bridge before fetching history); false for a no-op.
+	reload: z.boolean(),
+}).openapi("TreeNavigateResponse");
+
 // ── Route definitions ────────────────────────────────────────────
 
 const statusRoute = createRoute({
@@ -294,6 +320,29 @@ const setModelRoute = createRoute({
 	responses: {
 		200: { description: "OK", content: { "application/json": { schema: SetModelResponse } } },
 		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const treeRoute = createRoute({
+	method: "get",
+	path: "/api/tree",
+	summary: "Session tree compacted to user-message nodes (active path + current leaf marked)",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: TreeResponse } } },
+	},
+});
+
+const treeNavigateRoute = createRoute({
+	method: "post",
+	path: "/api/tree/navigate",
+	summary: "Move the session leaf to a different tree entry (switch branch, no summary)",
+	request: {
+		body: { content: { "application/json": { schema: TreeNavigateBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: TreeNavigateResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		409: { description: "Agent busy", content: { "application/json": { schema: ErrorResponse } } },
 	},
 });
 
@@ -696,6 +745,30 @@ export function createBridgeApp(deps) {
 			return c.json({ error: result.error }, 400);
 		}
 		return c.json({ ok: true, model: result.model });
+	});
+
+	app.openapi(treeRoute, (c) => {
+		return c.json(deps.getSessionTree());
+	});
+
+	app.openapi(treeNavigateRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (typeof body?.targetId !== "string" || !body.targetId) {
+			return c.json({ error: "targetId is required" }, 400);
+		}
+		if (deps.getIsBusy()) {
+			return c.json({ error: "Agent is busy — cannot switch branches mid-turn" }, 409);
+		}
+		const result = await deps.navigateTree(body.targetId);
+		if (!result.ok) {
+			return c.json({ error: result.error || "Navigation failed" }, 400);
+		}
+		return c.json({ ok: true, reload: result.reload !== false });
 	});
 
 	app.openapi(promptRoute, async (c) => {

@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getCommands, getFile, getHistory, getModels, getStatus, killSession, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
+import { abortAgent, attachStream, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand } from "/flow.js";
@@ -20,6 +20,7 @@ import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { isTranscriptInterrupted } from "/parsers.js";
 import { createStore } from "/store.js";
+import { createTreeView } from "/tree-view.js";
 import { formatStats } from "/utils.js";
 
 (function () {
@@ -82,6 +83,44 @@ import { formatStats } from "/utils.js";
     getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
     statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
   });
+  let treeNavStartedAt = 0;
+  const treeView = createTreeView({
+    $chat,
+    $messages,
+    getTreeFn: () => getTree(scopedFetch(activeSessionId)),
+    navigateFn: (targetId) => {
+      treeNavStartedAt = Date.now();
+      return navigateTree(targetId, scopedFetch(activeSessionId));
+    },
+    isBusyFn: () => {
+      const active = sessions.find((s) => s.sessionId === activeSessionId);
+      return activeStreaming || !!active?.busy;
+    },
+    onNavigated: async (result) => {
+      const id = activeSessionId;
+      // A real switch reloads the session (new process, same port + session
+      // id) — wait for the respawned bridge before fetching the new branch.
+      if (result?.reload) {
+        await pollUntil(async () => {
+          const s = await getStatus(scopedFetch(id));
+          return s.startedAt > treeNavStartedAt ? s : false;
+        }, 1000, 20);
+        loadSessions();
+      }
+      if (id !== activeSessionId) return;
+      try {
+        const data = await getHistory(scopedFetch(id));
+        if (id !== activeSessionId) return;
+        chat.loadHistory(data.history || []);
+        chat.addMessage("system", "Switched branch");
+        updateHeader(await getStatus(scopedFetch(id)));
+      } catch {
+        // Best effort — the next poll refreshes
+      }
+    },
+  });
+  document.getElementById("tree-btn")?.addEventListener("click", () => { if (activeSessionId) treeView.toggle(); });
+
   const mobileNav = createMobileNav({ $app });
 
   // Expand/collapse all tool + thinking blocks (persisted).
@@ -316,6 +355,7 @@ import { formatStats } from "/utils.js";
     activeStreaming = false;
     streamStuckTicks = 0;
     activeInterrupted = false; // recomputed once this session's history loads
+    treeView.close(); // tree overlay is per-session; never show the old session's tree
     chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
     try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
@@ -413,6 +453,10 @@ import { formatStats } from "/utils.js";
   async function handleSend(text) {
     if (!activeSessionId) return;
     const id = activeSessionId;
+    if (text.trim() === "/tree") {
+      treeView.open();
+      return;
+    }
     // /model executes immediately (never queued — it targets the next turn,
     // and a queued copy would dispatch to the agent as a plain message).
     const modelCmd = parseModelCommand(text);

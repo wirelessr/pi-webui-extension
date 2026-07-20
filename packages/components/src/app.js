@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, navUrl, newSession, openSession, sendPromptStream, setModel, statFiles } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, navigateTree, navUrl, newSession, openSession, pollUntil, sendPromptStream, setModel, statFiles } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, syncExpandButtonState } from "./flow.js";
@@ -19,6 +19,7 @@ import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { initResize } from "./resize.js";
 import { createSessionsView } from "./sessions.js";
+import { createTreeView } from "./tree-view.js";
 import { formatStats } from "./utils.js";
 
 (function () {
@@ -58,6 +59,37 @@ import { formatStats } from "./utils.js";
   // ── Module instances ──────────────────────────────
 
   const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog, getFileContentFn: (path) => getFile(path), statFilesFn: (paths) => statFiles(paths) });
+
+  let treeNavStartedAt = 0;
+  const treeView = createTreeView({
+    $chat,
+    $messages,
+    getTreeFn: getTree,
+    navigateFn: (targetId) => {
+      treeNavStartedAt = Date.now();
+      return navigateTree(targetId);
+    },
+    isBusyFn: () => $busyIndicator.classList.contains("busy"),
+    onNavigated: async (result) => {
+      // A real switch reloads the session (new process, same port) — wait for
+      // the respawned bridge before fetching the new branch's history.
+      if (result?.reload) {
+        await pollUntil(async () => {
+          const s = await getStatus();
+          return s.startedAt > treeNavStartedAt ? s : false;
+        }, 1000, 20);
+      }
+      try {
+        const data = await getHistory();
+        chat.loadHistory(data.history || []);
+        chat.addMessage("system", "Switched branch");
+        updateStats(await getStatus());
+      } catch {
+        // Best effort — the next poll/interaction refreshes
+      }
+    },
+  });
+  document.getElementById("tree-btn")?.addEventListener("click", () => treeView.toggle());
 
   const mobileNav = createMobileNav({ $app });
 
@@ -169,6 +201,10 @@ import { formatStats } from "./utils.js";
   let sending = false;
 
   async function handleSend(text) {
+    if (text.trim() === "/tree") {
+      treeView.open();
+      return;
+    }
     const modelCmd = parseModelCommand(text);
     if (modelCmd) {
       await doModelCommand({

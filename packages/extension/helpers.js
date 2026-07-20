@@ -72,6 +72,16 @@ export function parseHistoryLine(line) {
   } catch {
     return null;
   }
+  return parseHistoryEntry(obj);
+}
+
+/**
+ * Transform one already-parsed session entry (a JSONL line object, or a
+ * SessionEntry from sessionManager.getBranch()) into a history entry.
+ * @param {object} obj — session entry object
+ * @returns {object|null} history entry or null
+ */
+export function parseHistoryEntry(obj) {
   if (obj.type !== "message") {
     // Compaction entries: show as a system message marker
     if (obj.type === "compaction" && obj.summary) {
@@ -138,6 +148,21 @@ export function parseHistoryLine(line) {
   if (!entry.text && !entry.toolCalls && !entry.thinking) return null;
 
   return entry;
+}
+
+/**
+ * Transform an array of session entries (e.g. the active branch from
+ * sessionManager.getBranch()) into history entries.
+ * @param {Array<object>} entries — session entry objects
+ * @returns {Array} parsed history entries
+ */
+export function parseHistoryEntries(entries) {
+  const history = [];
+  for (const obj of entries) {
+    const entry = parseHistoryEntry(obj);
+    if (entry) history.push(entry);
+  }
+  return history;
 }
 
 /**

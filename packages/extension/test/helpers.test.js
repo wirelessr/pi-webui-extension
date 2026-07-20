@@ -7,6 +7,7 @@ import {
   isPathSafe,
   paginateHistory,
   parseHistoryData,
+  parseHistoryEntries,
   parseHistoryLine,
   parsePromptBody,
   parsePromptTemplate,
@@ -503,3 +504,23 @@ describe("parsePromptTemplate", () => {
   }
 });
 
+
+describe("parseHistoryEntries", () => {
+  test("transforms already-parsed entries (active branch) like the line parser", () => {
+    const entries = [
+      { type: "message", id: "1", timestamp: "t1", message: { role: "user", content: "hi" } },
+      { type: "label", id: "x" },
+      { type: "message", id: "2", timestamp: "t2", message: { role: "assistant", content: [{ type: "text", text: "hello" }] } },
+      { type: "compaction", id: "3", summary: "sum", tokensBefore: 100 },
+    ];
+    const history = parseHistoryEntries(entries);
+    assert.equal(history.length, 3);
+    assert.deepEqual(history[0], { id: "1", timestamp: "t1", role: "user", text: "hi" });
+    assert.equal(history[1].text, "hello");
+    assert.match(history[2].text, /Compacted \(100 tokens before\)/);
+  });
+
+  test("empty input gives empty history", () => {
+    assert.deepEqual(parseHistoryEntries([]), []);
+  });
+});

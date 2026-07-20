@@ -135,6 +135,22 @@ export async function setModel(provider, id, fetchFn = fetch) {
   return res.json();
 }
 
+export async function getTree(fetchFn = fetch) {
+  const res = await fetchFn("/api/tree");
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
+export async function navigateTree(targetId, fetchFn = fetch) {
+  const res = await fetchFn("/api/tree/navigate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId }),
+  });
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
 export async function abortAgent(fetchFn = fetch) {
   const res = await fetchFn("/api/abort", { method: "POST" });
   return res.json();

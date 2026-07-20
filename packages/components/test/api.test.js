@@ -11,7 +11,9 @@ import {
   getModels,
   getSessions,
   getStatus,
+  getTree,
   killSession,
+  navigateTree,
   navUrl,
   newSession,
   openSession,
@@ -264,6 +266,37 @@ describe("executeCommand", () => {
   test("throws with HTTP status when no error field", async () => {
     const fetchFn = mockFetch({ status: 500, jsonData: {} });
     await assert.rejects(executeCommand("x", fetchFn), /HTTP 500/);
+  });
+});
+
+describe("getTree", () => {
+  test("GETs /api/tree and returns the payload", async () => {
+    const payload = { nodes: [{ id: "u1" }], leafId: "a1" };
+    const fetchFn = mockFetch({ jsonData: payload });
+    const result = await getTree(fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/tree");
+    assert.deepEqual(result, payload);
+  });
+
+  test("throws on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 500, jsonData: { error: "boom" } });
+    await assert.rejects(getTree(fetchFn), /boom/);
+  });
+});
+
+describe("navigateTree", () => {
+  test("POSTs the targetId as JSON", async () => {
+    const fetchFn = mockFetch({ jsonData: { ok: true } });
+    const result = await navigateTree("a1", fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/tree/navigate");
+    assert.equal(fetchFn.calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { targetId: "a1" });
+    assert.equal(result.ok, true);
+  });
+
+  test("throws the server error on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 409, jsonData: { error: "Agent is busy" } });
+    await assert.rejects(navigateTree("a1", fetchFn), /busy/);
   });
 });
 
