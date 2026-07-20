@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, navigateTree, navUrl, newSession, openSession, pollUntil, sendPromptStream, setModel, statFiles } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, navigateTree, navUrl, pollUntil, sendPromptStream, setModel, statFiles } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, syncExpandButtonState } from "./flow.js";
@@ -362,6 +362,27 @@ import { formatStats } from "./utils.js";
     $statsDisplay.textContent = formatStats(data);
   }
 
+  // Single owner for the header fields (port/pid/cwd/name) + stats. Both the
+  // initial status callback and the periodic poll route through here, and it
+  // reloads the sessions list only when the name actually changed.
+  function updateHeader(data) {
+    currentPort = data.port;
+    $portDisplay.textContent = `:${data.port}`;
+    if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
+    if (data.cwd) {
+      const parts = data.cwd.split("/");
+      $cwdDisplay.textContent = parts[parts.length - 1] || data.cwd;
+      $cwdDisplay.title = data.cwd;
+    }
+    if (data.sessionName) $sessionName.textContent = data.sessionName;
+    else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
+    if (data.sessionName && data.sessionName !== lastKnownSessionName) {
+      lastKnownSessionName = data.sessionName;
+      sessionsView.load();
+    }
+    updateStats(data);
+  }
+
   // ── Init ──────────────────────────────────────────
 
   function onStreamEvent(event) {
@@ -413,24 +434,7 @@ import { formatStats } from "./utils.js";
       onStreamEventFn: onStreamEvent,
       setBusyFn: setBusy,
       setStreamingFn: (streaming) => input.setStreaming(streaming),
-      onStatusFn: (data) => {
-        currentPort = data.port;
-        $portDisplay.textContent = `:${data.port}`;
-        if (data.pid) $pidDisplay.textContent = `pid:${data.pid}`;
-        if (data.cwd) {
-          const parts = data.cwd.split("/");
-          $cwdDisplay.textContent = parts[parts.length - 1] || data.cwd;
-          $cwdDisplay.title = data.cwd;
-        }
-        const prevName = lastKnownSessionName;
-        if (data.sessionName) $sessionName.textContent = data.sessionName;
-        else if (data.sessionId) $sessionName.textContent = data.sessionId.slice(0, 8);
-        if (data.sessionName && data.sessionName !== prevName) {
-          lastKnownSessionName = data.sessionName;
-          sessionsView.load();
-        }
-        updateStats(data);
-      },
+      onStatusFn: updateHeader,
     });
   }
 
@@ -439,22 +443,7 @@ import { formatStats } from "./utils.js";
   // Periodic status poll — detects auto-name changes and other updates
   setInterval(async () => {
     try {
-      const status = await getStatus();
-      currentPort = status.port;
-      $portDisplay.textContent = `:${status.port}`;
-      if (status.pid) $pidDisplay.textContent = `pid:${status.pid}`;
-      if (status.cwd) {
-        const parts = status.cwd.split("/");
-        $cwdDisplay.textContent = parts[parts.length - 1] || status.cwd;
-        $cwdDisplay.title = status.cwd;
-      }
-      if (status.sessionName) $sessionName.textContent = status.sessionName;
-      else if (status.sessionId) $sessionName.textContent = status.sessionId.slice(0, 8);
-      if (status.sessionName && status.sessionName !== lastKnownSessionName) {
-        lastKnownSessionName = status.sessionName;
-        sessionsView.load();
-      }
-      updateStats(status);
+      updateHeader(await getStatus());
     } catch {
       // Server might be temporarily unavailable
     }
