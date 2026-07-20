@@ -14,7 +14,7 @@
 import { abortAgent, attachStream, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
-import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand } from "/flow.js";
+import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
 import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
@@ -238,8 +238,14 @@ import { formatStats } from "/utils.js";
   const commandsView = createCommandsView({
     $list: $commandsList, $count: $commandsCount, $title: $commandsTitle,
     onSelect: (cmd) => input.selectCommand(cmd),
-    // Commands are per-session — load them from the active session's bridge.
-    getCommandsFn: () => (activeSessionId ? getCommands(scopedFetch(activeSessionId)) : Promise.resolve({ commands: [] })),
+    // Commands are per-session — load them from the active session's bridge,
+    // then prepend hub-only commands the bridge can't know about (/resume
+    // targets a different session; a single bridge only knows its own).
+    getCommandsFn: async () => {
+      const base = activeSessionId ? await getCommands(scopedFetch(activeSessionId)) : { commands: [] };
+      const hubCommands = [{ name: "resume", description: "Switch to or resume a session by id (/resume <id>)", source: "builtin" }];
+      return { commands: [...hubCommands, ...(base.commands || [])] };
+    },
   });
   const input = createInput({
     $input, $sendBtn, commandsView, mobileNav,
@@ -485,6 +491,14 @@ import { formatStats } from "/utils.js";
     const id = activeSessionId;
     if (text.trim() === "/tree") {
       treeView.open();
+      return;
+    }
+    // /resume <id> — switch to (or resume a stopped) session by id. Hub-only:
+    // reuses handleNew, which switches if already open or spawns --session <id>
+    // otherwise. The current session's streams are torn down by switchTo.
+    const resumeCmd = parseResumeCommand(text);
+    if (resumeCmd) {
+      handleNew(resumeCmd.id);
       return;
     }
     // /model executes immediately (never queued — it targets the next turn,

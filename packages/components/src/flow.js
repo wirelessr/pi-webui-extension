@@ -138,6 +138,21 @@ export function parseModelCommand(text) {
 }
 
 /**
+ * Parse a "/resume" command typed in the input. Hub-only: switches the viewed
+ * session to (or resumes a stopped) session by id. The id is typically pasted
+ * from the pi-find-session skill.
+ *
+ * @param {string} text — raw input text
+ * @returns {{id: string}|null} — null if not a /resume command or no id given
+ */
+export function parseResumeCommand(text) {
+  const trimmed = (text || "").trim();
+  if (trimmed !== "/resume" && !trimmed.startsWith("/resume ")) return null;
+  const id = trimmed.slice("/resume".length).trim();
+  return id ? { id } : null;
+}
+
+/**
  * Resolve a /model argument against the available model list.
  * Match precedence: exact "provider/id" → exact id → exact last path
  * segment of id → case-insensitive substring of "provider/id".

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, resolveModelArg, syncExpandButtonState } from "../src/flow.js";
+import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand, resolveModelArg, syncExpandButtonState } from "../src/flow.js";
 
 // ── Mock helpers ──────────────────────────────────────
 
@@ -707,6 +707,24 @@ describe("parseModelCommand", () => {
   ];
   for (const c of cases) {
     test(c.name, () => assert.deepEqual(parseModelCommand(c.text), c.expected));
+  }
+});
+
+describe("parseResumeCommand", () => {
+  const cases = [
+    { name: "with id", text: "/resume 019f5f1a-aca9-73c3-8675-9fdc4cbc3582", expected: { id: "019f5f1a-aca9-73c3-8675-9fdc4cbc3582" } },
+    { name: "short prefix id", text: "/resume 019f5f1a", expected: { id: "019f5f1a" } },
+    { name: "extra whitespace", text: "  /resume   abc123  ", expected: { id: "abc123" } },
+    { name: "bare /resume (no id) → null", text: "/resume", expected: null },
+    { name: "/resume with only spaces → null", text: "/resume   ", expected: null },
+    { name: "not a resume command", text: "hello", expected: null },
+    { name: "prefix but different command", text: "/resumes", expected: null },
+    { name: "mid-sentence /resume", text: "please /resume x", expected: null },
+    { name: "empty string", text: "", expected: null },
+    { name: "undefined", text: undefined, expected: null },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.deepEqual(parseResumeCommand(c.text), c.expected));
   }
 });
 
