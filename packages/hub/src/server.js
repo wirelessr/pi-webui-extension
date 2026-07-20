@@ -110,6 +110,32 @@ function broadcast(obj) {
   }
 }
 
+// POST JSON over node:http and hold the connection until the response
+// completes, with NO client-side timeout. The queue dispatch holds its
+// request open for the WHOLE dispatched turn (sendAndWait) — global fetch
+// (undici) kills such requests at its 300s default headersTimeout, which
+// re-queued + paused messages whose turn ran past 5 minutes even though the
+// turn itself was fine.
+function postJsonNoTimeout(port, path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = httpRequest(
+      { host: "localhost", port, path, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) } },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve(data);
+          else reject(new Error(`bridge HTTP ${res.statusCode}`));
+        });
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.end(payload);
+  });
+}
+
 async function fetchBusy(session) {
   try {
     const res = await fetch(`http://localhost:${session.port}/api/status`, { signal: AbortSignal.timeout(1500) });
@@ -187,13 +213,9 @@ async function dispatchQueue(sessionId) {
       broadcastQueue(sessionId);
       broadcast({ type: "session_busy", sessionId });
       try {
-        const res = await fetch(`http://localhost:${session.port}/api/prompt`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: item.message, timeout: 86_400_000 }),
-        });
-        if (!res.ok) throw new Error(`bridge HTTP ${res.status}`);
-        await res.json(); // resolves when the turn completes (session idle again)
+        // Resolves when the turn completes (session idle again). node:http,
+        // not fetch — see postJsonNoTimeout for why.
+        await postJsonNoTimeout(session.port, "/api/prompt", { message: item.message, timeout: 86_400_000 });
       } catch (err) {
         q.unshift(item);
         pausedSessions.add(sessionId);
