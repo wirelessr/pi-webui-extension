@@ -557,7 +557,8 @@ body {
 #messages,
 .subagent-view,
 .file-view,
-.tree-view {
+.tree-view,
+.model-view {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -634,6 +635,28 @@ body {
   font-weight: 400;
   font-size: 12px;
   flex-shrink: 0;
+}
+
+.model-view-filter {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 12px;
+  outline: none;
+}
+
+.model-view-filter:focus {
+  border-color: var(--border-light);
+}
+
+.model-row-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 12px;
 }
 
 .message {

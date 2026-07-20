@@ -19,6 +19,7 @@ import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, rebuildIte
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { isTranscriptInterrupted } from "/parsers.js";
+import { createModelView } from "/model-view.js";
 import { createStore } from "/store.js";
 import { createTreeView } from "/tree-view.js";
 import { formatStats } from "/utils.js";
@@ -119,7 +120,28 @@ import { formatStats } from "/utils.js";
       }
     },
   });
-  document.getElementById("tree-btn")?.addEventListener("click", () => { if (activeSessionId) treeView.toggle(); });
+  document.getElementById("tree-btn")?.addEventListener("click", () => {
+    if (!activeSessionId) return;
+    modelView.close();
+    treeView.toggle();
+  });
+
+  const modelView = createModelView({
+    $chat,
+    $messages,
+    getModelsFn: () => getModels(scopedFetch(activeSessionId)),
+    setModelFn: (provider, modelId) => setModel(provider, modelId, scopedFetch(activeSessionId)),
+    onSwitched: async (m) => {
+      const id = activeSessionId;
+      chat.addMessage("system", `Model switched to ${m.provider}/${m.id}`);
+      try {
+        const status = await getStatus(scopedFetch(id));
+        if (id === activeSessionId) updateHeader(status);
+      } catch {
+        // Best effort
+      }
+    },
+  });
 
   const mobileNav = createMobileNav({ $app });
 
@@ -355,7 +377,8 @@ import { formatStats } from "/utils.js";
     activeStreaming = false;
     streamStuckTicks = 0;
     activeInterrupted = false; // recomputed once this session's history loads
-    treeView.close(); // tree overlay is per-session; never show the old session's tree
+    treeView.close(); // overlays are per-session; never show the old session's
+    modelView.close();
     chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
     try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
@@ -454,12 +477,18 @@ import { formatStats } from "/utils.js";
     if (!activeSessionId) return;
     const id = activeSessionId;
     if (text.trim() === "/tree") {
+      modelView.close();
       treeView.open();
       return;
     }
     // /model executes immediately (never queued — it targets the next turn,
     // and a queued copy would dispatch to the agent as a plain message).
     const modelCmd = parseModelCommand(text);
+    if (modelCmd && modelCmd.arg === "") {
+      treeView.close();
+      modelView.open();
+      return;
+    }
     if (modelCmd) {
       const f = scopedFetch(id);
       const guard = guardedFor(id);

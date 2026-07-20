@@ -18,6 +18,7 @@ import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doSt
 import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { initResize } from "./resize.js";
+import { createModelView } from "./model-view.js";
 import { createSessionsView } from "./sessions.js";
 import { createTreeView } from "./tree-view.js";
 import { formatStats } from "./utils.js";
@@ -89,7 +90,25 @@ import { formatStats } from "./utils.js";
       }
     },
   });
-  document.getElementById("tree-btn")?.addEventListener("click", () => treeView.toggle());
+  document.getElementById("tree-btn")?.addEventListener("click", () => {
+    modelView.close();
+    treeView.toggle();
+  });
+
+  const modelView = createModelView({
+    $chat,
+    $messages,
+    getModelsFn: getModels,
+    setModelFn: setModel,
+    onSwitched: async (m) => {
+      chat.addMessage("system", `Model switched to ${m.provider}/${m.id}`);
+      try {
+        updateStats(await getStatus());
+      } catch {
+        // Best effort
+      }
+    },
+  });
 
   const mobileNav = createMobileNav({ $app });
 
@@ -202,10 +221,16 @@ import { formatStats } from "./utils.js";
 
   async function handleSend(text) {
     if (text.trim() === "/tree") {
+      modelView.close();
       treeView.open();
       return;
     }
     const modelCmd = parseModelCommand(text);
+    if (modelCmd && modelCmd.arg === "") {
+      treeView.close();
+      modelView.open();
+      return;
+    }
     if (modelCmd) {
       await doModelCommand({
         text,
