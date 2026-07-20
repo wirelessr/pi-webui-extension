@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { clampMenuPosition, classifyScrollEvent, decideSessionClick, doCopy } from "../src/ui-behaviors.js";
+import { clampMenuPosition, decideSessionClick, doCopy } from "../src/ui-behaviors.js";
 
 // ── doCopy ────────────────────────────────────────────
 
@@ -153,29 +153,4 @@ describe("clampMenuPosition", () => {
     assert.equal(pos.left, 0);
     assert.equal(pos.top, 0);
   });
-});
-
-// ── classifyScrollEvent ───────────────────────────────
-
-describe("classifyScrollEvent", () => {
-  const base = { gap: 500, sinceAutoScrollMs: 10, touchActive: false, dragActive: false };
-
-  const cases = [
-    { desc: "at the bottom always engages", opts: { ...base, gap: 0 }, expected: "engage" },
-    { desc: "within threshold engages even during auto-scroll", opts: { ...base, gap: 59 }, expected: "engage" },
-    { desc: "away from bottom during active following is ignored (our own scroll racing growth)", opts: base, expected: "ignore" },
-    { desc: "away from bottom with no recent auto-scroll disengages (idle pane can't scroll itself)", opts: { ...base, sinceAutoScrollMs: 151 }, expected: "disengage" },
-    { desc: "touch drag disengages even mid-follow", opts: { ...base, touchActive: true }, expected: "disengage" },
-    { desc: "scrollbar drag disengages even mid-follow", opts: { ...base, dragActive: true }, expected: "disengage" },
-    { desc: "touch drag that reaches the bottom re-engages", opts: { ...base, gap: 10, touchActive: true }, expected: "engage" },
-    { desc: "exactly at threshold is not at bottom", opts: { ...base, gap: 60, sinceAutoScrollMs: 200 }, expected: "disengage" },
-    { desc: "custom threshold widens the at-bottom band", opts: { ...base, gap: 90, threshold: 100 }, expected: "engage" },
-    { desc: "custom auto-scroll window", opts: { ...base, sinceAutoScrollMs: 200, autoScrollWindowMs: 300 }, expected: "ignore" },
-    { desc: "defaults apply when flags omitted", opts: { gap: 500, sinceAutoScrollMs: 500 }, expected: "disengage" },
-  ];
-  for (const c of cases) {
-    test(c.desc, () => {
-      assert.equal(classifyScrollEvent(c.opts), c.expected);
-    });
-  }
 });

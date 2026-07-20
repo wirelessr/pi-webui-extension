@@ -10,8 +10,9 @@ import { diffLines } from "./diff.js";
 import { renderMarkdown } from "./markdown.js";
 import { createOverlayManager } from "./overlay-manager.js";
 import { extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
+import { createScrollFollow } from "./scroll-follow.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
-import { classifyScrollEvent, doCopy } from "./ui-behaviors.js";
+import { doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
 export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null, overlays = null }) {
@@ -63,63 +64,23 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
 
   // ── Scroll (auto-follow / sticky scroll) ──
   //
-  // The engagement decision lives in classifyScrollEvent (ui-behaviors.js);
-  // this block only collects its inputs. No "programmatic scroll" flag: a
-  // scrollTop assignment isn't guaranteed to produce exactly one scroll
-  // event, so flag-and-swallow desyncs (button never hiding, follow randomly
-  // stopping on long transcripts).
+  // Owned entirely by scroll-follow.js (observer-driven): a MutationObserver on
+  // $messages tracks content growth from ANY render path, so render code never
+  // calls "scroll to bottom" — forgetting to, on a new path, can't break
+  // follow (this was the queued-turn bug). This module only feeds it raw
+  // scroll/gesture events and issues jumpToBottom() at genuine user-initiated
+  // jumps: a fresh send/user bubble, opening a view, the button, a full
+  // transcript reload.
+  const scroll = createScrollFollow({ $chat, $messages, $button: $scrollBottom });
+  function forceScrollToBottom() { scroll.jumpToBottom(); }
 
-  let userAtBottom = true;
-  let lastAutoScrollAt = 0; // performance.now() of the last programmatic assignment
-  let touchActive = false; // a touch gesture is in progress
-  let dragActive = false; // mouse held down over the pane (scrollbar drag)
-
-  function setAtBottom(v) {
-    userAtBottom = v;
-    // The button mirrors the ENGAGEMENT state, not instantaneous geometry —
-    // while following, the gap is transiently non-zero between content growth
-    // and the next frame's scroll, and the button must not flicker.
-    $scrollBottom.classList.toggle("hidden", v);
-  }
-
-  function doScroll() {
-    // Re-check at fire time: a wheel-up may have disengaged between this
-    // frame being scheduled (scrollToBottom) and it running — scrolling then
-    // would yank the user back down and re-engage off our own event.
-    if (!userAtBottom) return;
-    lastAutoScrollAt = performance.now();
-    $chat.scrollTop = $chat.scrollHeight;
-  }
-
-  function scrollToBottom() {
-    if (userAtBottom) requestAnimationFrame(doScroll);
-  }
-
-  function forceScrollToBottom() {
-    setAtBottom(true);
-    requestAnimationFrame(doScroll);
-  }
-
-  $chat.addEventListener("scroll", () => {
-    const action = classifyScrollEvent({
-      gap: $chat.scrollHeight - $chat.scrollTop - $chat.clientHeight,
-      sinceAutoScrollMs: performance.now() - lastAutoScrollAt,
-      touchActive,
-      dragActive,
-    });
-    if (action === "engage") setAtBottom(true);
-    else if (action === "disengage") setAtBottom(false);
-  });
-
-  // Unambiguous user gestures. Wheel-up disengages immediately (its scroll
-  // event alone can't be told apart from ours mid-stream); touch/mouse state
-  // feeds the classifier so drags disengage even during active following.
-  $chat.addEventListener("wheel", (e) => { if (e.deltaY < 0) setAtBottom(false); }, { passive: true });
-  $chat.addEventListener("touchstart", () => { touchActive = true; }, { passive: true });
-  $chat.addEventListener("touchend", () => { touchActive = false; }, { passive: true });
-  $chat.addEventListener("touchcancel", () => { touchActive = false; }, { passive: true });
-  $chat.addEventListener("mousedown", () => { dragActive = true; });
-  window.addEventListener("mouseup", () => { dragActive = false; });
+  $chat.addEventListener("scroll", () => scroll.handleScroll());
+  $chat.addEventListener("wheel", (e) => scroll.noteWheel(e.deltaY), { passive: true });
+  $chat.addEventListener("touchstart", () => scroll.setTouch(true), { passive: true });
+  $chat.addEventListener("touchend", () => scroll.setTouch(false), { passive: true });
+  $chat.addEventListener("touchcancel", () => scroll.setTouch(false), { passive: true });
+  $chat.addEventListener("mousedown", () => scroll.setDrag(true));
+  window.addEventListener("mouseup", () => scroll.setDrag(false));
 
   $scrollBottom.addEventListener("click", forceScrollToBottom);
 
@@ -207,11 +168,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     el.className = `message ${role}`;
     el.innerHTML = renderContent(role, text);
     $messages.appendChild(el);
-    if (role === "user") {
-      forceScrollToBottom();
-    } else {
-      scrollToBottom();
-    }
+    // A user message is a fresh send: jump to it (re-engage follow even if the
+    // user had scrolled up). Assistant/system content is followed by the
+    // observer if engaged — no explicit scroll here.
+    if (role === "user") forceScrollToBottom();
   }
 
   function formatUsage(usage) {
@@ -593,10 +553,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     if (raw) {
       currentTextEl.innerHTML = renderContent("assistant", raw);
       attachCopyButtons(currentTextEl);
-      // The markdown render can be much taller than the streamed plain text
-      // (lists, paragraph spacing) — keep following, or the viewport is left
-      // stranded mid-bubble.
-      scrollToBottom();
     } else {
       currentTextEl.remove();
     }
@@ -614,7 +570,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       const fresh = turnFilePaths.filter((p) => !shown.has(p));
       if (fresh.length > 0) {
         currentAssistantEl.appendChild(buildFileChips(fresh));
-        scrollToBottom();
       }
     }
     turnFilePaths = [];
@@ -715,7 +670,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       block.appendChild(saBlock);
       currentAssistantEl.appendChild(block);
       if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan: null, resultEl: null });
-      scrollToBottom();
       return;
     }
 
@@ -757,7 +711,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       if (!turnFilePaths.includes(p)) turnFilePaths.push(p);
     }
     if (toolCallId) currentToolMap.set(toolCallId, { block, statusSpan, resultEl });
-    scrollToBottom();
   }
 
   function updateToolBlock(toolCallId, isError) {
@@ -781,14 +734,12 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
         const skillBlock = createCollapsibleBlock("skill", skill.name, skill.content);
         entry.block.parentElement.replaceChild(skillBlock, entry.block);
         currentToolMap.delete(toolCallId);
-        scrollToBottom();
         return;
       }
     }
 
     entry.resultEl.textContent = resultText;
     entry.resultEl.classList.toggle("partial", isPartial);
-    scrollToBottom();
   }
 
   function formatArgs(args) {
@@ -853,7 +804,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     el.textContent = message;
     if (currentAssistantEl) currentAssistantEl.appendChild(el);
     else $messages.appendChild(el);
-    scrollToBottom();
   }
 
   // ── Event dispatch ──
@@ -898,7 +848,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
         statusEl.textContent = "Compacting...";
         if (currentAssistantEl) currentAssistantEl.appendChild(statusEl);
         else $messages.appendChild(statusEl);
-        scrollToBottom();
         break;
       }
       case "text_start": break;
@@ -941,7 +890,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     currentTextEl.innerHTML = renderContent("assistant", state.pendingText);
     attachCopyButtons(currentTextEl);
     addStreamingCursor();
-    scrollToBottom();
   }
 
   function appendTextDelta(state) {
@@ -951,7 +899,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     // text_start), so each segment renders its own text. Markdown on text_end.
     currentTextEl.textContent = state.pendingText;
     addStreamingCursor();
-    scrollToBottom();
   }
 
   function renderTextCommitted() {
@@ -964,10 +911,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     if (!currentThinkingContent) return;
     // pendingThinking is the current thinking segment (reset on thinking_start).
     currentThinkingContent.textContent = state.pendingThinking;
-    // An EXPANDED thinking block grows the page as it streams — follow along
-    // like text deltas do (no-op while collapsed: height doesn't change, and
-    // scrollToBottom is gated on userAtBottom anyway).
-    scrollToBottom();
   }
 
   function renderThinkingCommitted() {
@@ -1108,7 +1051,9 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       }
     }
     closeTurn();
-    scrollToBottom();
+    // The transcript was fully rebuilt — land at the bottom and re-engage
+    // follow regardless of any prior scroll position.
+    forceScrollToBottom();
     surfaceWatchedChanges(); // fire-and-forget: re-flag any watched file changed since last view
   }
 
@@ -1148,7 +1093,6 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     hasActiveMessage: () => accumulator !== null,
     handleEvent,
     showError,
-    scrollToBottom,
     expandAllTools,
     collapseAllTools,
     getPresentNodeTypes,
