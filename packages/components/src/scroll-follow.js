@@ -32,6 +32,10 @@
  * @param {number} [opts.threshold=60] — "at bottom" tolerance in px
  * @param {number} [opts.autoScrollWindowMs=150] — how recent our auto-scroll must be to own an event
  * @param {number} [opts.logSize=200] — ring-buffer capacity for the diagnostic log
+ * @param {(level: string, message: string, data?: object) => void} [opts.logFn] —
+ *   sink for state-TRANSITION events (engage/disengage/skip/activate), forwarded
+ *   to the app's server log (bridge.log). High-frequency auto-scrolls are NOT
+ *   sent here — only the ring buffer keeps those (getLog()).
  * @param {() => number} [opts.now] — injected clock (default performance.now)
  * @param {(cb: Function) => any} [opts.raf] — injected frame scheduler (default requestAnimationFrame)
  * @param {(el: HTMLElement, cb: Function) => {disconnect: Function}} [opts.observe] — injected DOM-mutation observer
@@ -43,6 +47,7 @@ export function createScrollFollow({
   threshold = 60,
   autoScrollWindowMs = 150,
   logSize = 200,
+  logFn = () => {},
   now = () => performance.now(),
   raf = (cb) => requestAnimationFrame(cb),
   observe = defaultObserve,
@@ -54,13 +59,17 @@ export function createScrollFollow({
   let active = true; // false while an overlay covers the transcript
   let scrollPending = false; // a scroll is already scheduled for the next frame
 
-  // Ring-buffer diagnostic log. Every state transition and follow decision is
-  // recorded with the geometry that drove it — dump via getLog() when an
-  // auto-scroll anomaly needs explaining, instead of guessing.
+  // Every auto-scroll and follow decision goes into the ring buffer (dump via
+  // getLog() for a full local timeline). State TRANSITIONS additionally go to
+  // logFn → the app's server log (bridge.log), so an auto-scroll anomaly can be
+  // diagnosed from the server without asking the user to dump anything. The
+  // high-frequency per-frame "auto-scroll" record stays ring-buffer-only.
+  const TRANSITION_EVENTS = new Set(["engage", "disengage", "skip-scroll", "activate", "deactivate"]);
   const logBuf = [];
   function record(event, extra) {
     logBuf.push({ t: Math.round(now()), event, engaged, ...extra });
     if (logBuf.length > logSize) logBuf.shift();
+    if (TRANSITION_EVENTS.has(event)) logFn("info", `scroll: ${event}`, { engaged, ...extra });
   }
 
   function gap() {

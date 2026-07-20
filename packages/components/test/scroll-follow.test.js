@@ -233,6 +233,23 @@ describe("getLog — diagnostics", () => {
     assert.ok(h.sf.getLog().length <= 200);
   });
 
+  test("logFn receives state TRANSITIONS but not per-frame auto-scrolls", () => {
+    const sent = [];
+    const $chat = { scrollTop: 500, scrollHeight: 1000, clientHeight: 500 };
+    const sf = createScrollFollow({
+      $chat, $messages: {},
+      logFn: (level, message, data) => sent.push({ level, message, data }),
+      now: () => 0, raf: (cb) => cb(), observe: () => ({ disconnect() {} }),
+    });
+    $chat.scrollHeight = 1400; sf.follow("mutation"); // an auto-scroll (high-frequency)
+    sf.noteWheel(-120); // disengage — a transition
+    sf.setActive(false); // deactivate — a transition
+    const messages = sent.map((s) => s.message);
+    assert.ok(messages.includes("scroll: disengage"), "transition forwarded");
+    assert.ok(messages.includes("scroll: deactivate"), "transition forwarded");
+    assert.ok(!messages.includes("scroll: auto-scroll"), "per-frame auto-scroll NOT forwarded");
+  });
+
   test("skip-scroll is recorded when a scheduled scroll fires while disengaged", () => {
     // raf here is deferred so we can disengage between schedule and fire.
     const $chat = { scrollTop: 500, scrollHeight: 1000, clientHeight: 500 };

@@ -71,7 +71,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
   // scroll/gesture events and issues jumpToBottom() at genuine user-initiated
   // jumps: a fresh send/user bubble, opening a view, the button, a full
   // transcript reload.
-  const scroll = createScrollFollow({ $chat, $messages, $button: $scrollBottom });
+  const scroll = createScrollFollow({ $chat, $messages, $button: $scrollBottom, logFn });
   function forceScrollToBottom() { scroll.jumpToBottom(); }
 
   $chat.addEventListener("scroll", () => scroll.handleScroll());

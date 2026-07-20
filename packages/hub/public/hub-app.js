@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
+import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
@@ -86,6 +86,9 @@ import { formatStats } from "/utils.js";
     isNodeExpanded: (type) => (type in nodePrefs ? !!nodePrefs[type] : toolsExpanded),
     getFileContentFn: (path) => getFile(path, scopedFetch(activeSessionId)),
     statFilesFn: (paths) => statFiles(paths, scopedFetch(activeSessionId)),
+    // Route client diagnostics (render errors, scroll-follow transitions) to
+    // the active session's bridge.log — the hub proxies /api/* per session.
+    logFn: (level, message, data) => clientLog(level, message, data, scopedFetch(activeSessionId)),
     overlays,
   });
   let treeNavStartedAt = 0;
