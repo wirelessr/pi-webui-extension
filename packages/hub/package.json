@@ -1,11 +1,11 @@
 {
   "name": "pi-webui-hub",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Central hub: single web entry that reverse-proxies and aggregates all pi WebUI sessions",
   "dependencies": {
-    "@wirelessr/pi-webui-components": "^0.6.3"
+    "@wirelessr/pi-webui-components": "^0.7.0"
   },
   "scripts": {
     "start": "node src/server.js",
