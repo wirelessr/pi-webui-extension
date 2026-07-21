@@ -226,14 +226,19 @@ export async function reloadSession(baseUrl, fetchFn = fetch) {
  * @param {typeof fetch} [fetchFn]
  */
 export async function clientLog(level, message, data, fetchFn = fetch) {
-  // Also write to DevTools console for live debugging
+  // Tag every client log with the frontend build the tab is running (injected
+  // into index.html as window.__HUB_BUILD). The bridge writes the message
+  // verbatim, so this [ver] prefix surfaces in bridge.log with no bridge change
+  // — a long-open stale-cached tab shows the old build it was loaded with.
+  const ver = typeof window !== "undefined" ? window.__HUB_BUILD : undefined;
+  const tagged = ver ? `[ver:${ver}] ${message}` : message;
   const consoleFn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-  consoleFn(`[client] [${level}] ${message}`, data ?? "");
+  consoleFn(`[client] [${level}] ${tagged}`, data ?? "");
   try {
     await fetchFn("/api/client-log", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ level, message, data }),
+      body: JSON.stringify({ level, message: tagged, data }),
     });
   } catch {
     // Best effort — don't let logging cause issues

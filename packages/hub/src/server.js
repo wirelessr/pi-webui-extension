@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
@@ -326,6 +326,27 @@ function readJsonBody(req) {
 
 // ── Static serving (hub shell first, then shared components) ──
 
+// Build token = newest mtime across the served frontend JS. Reflects the code a
+// freshly-loaded page would run (dev repo or deployed); works without git and
+// changes whenever any served .js is saved. Injected into index.html as
+// window.__HUB_BUILD so every client log can carry a [ver] prefix — a long-open
+// (stale-cached) tab keeps reporting the build it was loaded with.
+function buildToken() {
+  let newest = 0;
+  for (const base of [PUBLIC_DIR, COMPONENTS_DIR]) {
+    try {
+      for (const f of readdirSync(base)) {
+        if (!f.endsWith(".js")) continue;
+        const m = statSync(join(base, f)).mtimeMs;
+        if (m > newest) newest = m;
+      }
+    } catch {
+      // dir missing — skip
+    }
+  }
+  return String(Math.round(newest));
+}
+
 async function serveStatic(reqPath, res) {
   const rel = normalize(reqPath === "/" ? "/index.html" : reqPath).replace(/^(\.\.[/\\])+/, "").replace(/^\//, "");
   for (const base of [PUBLIC_DIR, COMPONENTS_DIR]) {
@@ -334,6 +355,12 @@ async function serveStatic(reqPath, res) {
     if (existsSync(filePath)) {
       try {
         const data = await readFile(filePath);
+        if (rel === "index.html") {
+          const html = data.toString().replace("</head>", `<script>window.__HUB_BUILD=${JSON.stringify(buildToken())}</script></head>`);
+          res.writeHead(200, { "Content-Type": MIME[".html"], "Cache-Control": "no-cache" });
+          res.end(html);
+          return;
+        }
         res.writeHead(200, { "Content-Type": MIME[extname(filePath).toLowerCase()] || "application/octet-stream", "Cache-Control": "no-cache" });
         res.end(data);
         return;
