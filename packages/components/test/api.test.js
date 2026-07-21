@@ -547,4 +547,28 @@ describe("clientLog", () => {
     // Should not throw
     await clientLog("info", "msg", undefined, fetchFn);
   });
+
+  test("prefixes the message with the frontend build when window.__HUB_BUILD is set", async () => {
+    let capturedBody;
+    const fetchFn = async (_url, init) => { capturedBody = JSON.parse(init.body); return { ok: true, json: async () => ({ ok: true }) }; };
+    globalThis.window = { __HUB_BUILD: "1700000000000" };
+    try {
+      await clientLog("info", "hello", undefined, fetchFn);
+    } finally {
+      delete globalThis.window;
+    }
+    assert.equal(capturedBody.message, "[ver:1700000000000] hello");
+  });
+
+  test("leaves the message untagged when no build token is present", async () => {
+    let capturedBody;
+    const fetchFn = async (_url, init) => { capturedBody = JSON.parse(init.body); return { ok: true, json: async () => ({ ok: true }) }; };
+    globalThis.window = {}; // window exists but no __HUB_BUILD
+    try {
+      await clientLog("info", "plain", undefined, fetchFn);
+    } finally {
+      delete globalThis.window;
+    }
+    assert.equal(capturedBody.message, "plain");
+  });
 });
