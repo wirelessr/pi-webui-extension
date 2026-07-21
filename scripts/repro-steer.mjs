@@ -43,7 +43,15 @@ function cleanup() {
   for (const p of procs) { try { p.kill("SIGKILL"); } catch {} }
   try {
     for (const f of readdirSync(iso).filter((f) => f.endsWith(".json"))) {
-      try { const pid = JSON.parse(readFileSync(join(iso, f), "utf8")).pid; if (pid) process.kill(pid, "SIGKILL"); } catch {}
+      // Discovery records BOTH pids: `pid` is the `sh -c` pipeline wrapper,
+      // `piPid` is the real `pi` child (own pid, different from the shell).
+      // SIGKILLing the shell does NOT cascade to the pipeline's pi child, so
+      // kill piPid too — otherwise the throwaway pi survives as a PPID=1 orphan
+      // holding its port, and repeated runs pile up (they filled 7331-7435 once).
+      try {
+        const d = JSON.parse(readFileSync(join(iso, f), "utf8"));
+        for (const pid of [d.pid, d.piPid]) { if (pid) process.kill(pid, "SIGKILL"); }
+      } catch {}
     }
   } catch {}
   for (const d of [iso, build, work]) { try { if (d) rmSync(d, { recursive: true, force: true }); } catch {} }
@@ -497,5 +505,9 @@ async function main() {
   }
   process.exitCode = anyFail ? 1 : 0;
 }
+
+// Ctrl-C / kill must also clean up — otherwise the throwaway pi survives as an
+// orphan holding its port. .then/.catch below only cover normal exit.
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { cleanup(); process.exit(130); });
 
 main().then(() => { cleanup(); process.exit(process.exitCode ?? 0); }).catch((e) => { console.error("[repro-steer] ERROR", e); cleanup(); process.exit(2); });
