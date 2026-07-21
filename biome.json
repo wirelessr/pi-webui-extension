@@ -1,0 +1,48 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
+	"files": {
+		"includes": ["**", "!**/qrcode-lib.js", "!**/highlight-lib.js", "!**/data/", "!**/node_modules/"]
+	},
+	"formatter": {
+		"enabled": false
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"style": {
+				"useTemplate": "off",
+				"noNonNullAssertion": "off",
+				"useConst": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noAssignInExpressions": "off",
+				"noControlCharactersInRegex": "off",
+				"noDuplicateProperties": "off",
+				"useIterableCallbackReturn": "off",
+				"noRedundantUseStrict": "off"
+			},
+			"a11y": {
+				"useButtonType": "off",
+				"noAutofocus": "off"
+			},
+			"complexity": {
+				"useArrowFunction": "off",
+				"noUselessEscapeInRegex": "off",
+				"useLiteralKeys": "off"
+			},
+			"correctness": {
+				"useParseIntRadix": "off"
+			}
+		}
+	}
+}

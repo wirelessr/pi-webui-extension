@@ -1,0 +1,1028 @@
+/**
+ * Hono app factory — extracted from index.ts for HTTP integration testing.
+ *
+ * All route handlers read state and side effects through the `deps` object,
+ * making them testable without a real pi session or HTTP server.
+ * Tests call `app.fetch(new Request(...))` directly.
+ */
+
+import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, extname, join, normalize } from "node:path";
+import { collectWrittenPaths } from "@wirelessr/pi-webui-components/artifacts.js";
+import * as helpers from "./helpers.js";
+
+// Resolve hono from the extension's own node_modules
+const extRequire = createRequire(import.meta.url);
+const { OpenAPIHono, createRoute, z } = extRequire("@hono/zod-openapi");
+const { swaggerUI } = extRequire("@hono/swagger-ui");
+
+// The browser assets live in the shared components package. Resolve its
+// location so standalone (per-session) mode can serve the WebUI from there.
+const COMPONENTS_PKG = extRequire.resolve("@wirelessr/pi-webui-components/package.json");
+const WEB_DIR = join(dirname(COMPONENTS_PKG), "src");
+
+const MIME_TYPES = {
+	".html": "text/html; charset=utf-8",
+	".js": "application/javascript; charset=utf-8",
+	".mjs": "application/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".ico": "image/x-icon",
+	".woff2": "font/woff2",
+};
+
+const WEBUI_EXECUTABLE = new Set(["compact"]);
+
+// Builtins listed in /api/commands as insert-only (selecting them types
+// "/name " into the input instead of executing — they take arguments).
+// Values override pi's TUI-oriented descriptions where they'd mislead.
+const WEBUI_INSERTABLE = new Map([
+	["model", "List models (/model) or switch (/model <provider/model>)"],
+	["tree", "Show the session tree (switch branches)"],
+]);
+
+/**
+ * Execute a WebUI-executable builtin command.
+ * Returns true if handled, false if no handler.
+ */
+function executeBuiltin(cmdName, ctx) {
+	if (cmdName === "compact" && ctx) {
+		ctx.compact();
+		return true;
+	}
+	return false;
+}
+
+// ── Zod schemas ───────────────────────────────────────────────────
+
+const UsageStats = z.object({
+	inputTokens: z.number(),
+	outputTokens: z.number(),
+	cacheReadTokens: z.number(),
+	cacheWriteTokens: z.number(),
+	cacheHitRate: z.number().nullable(),
+	totalCost: z.number(),
+}).openapi("UsageStats");
+
+const ContextUsageInfo = z.object({
+	tokens: z.number().nullable(),
+	contextWindow: z.number(),
+	percent: z.number().nullable(),
+}).openapi("ContextUsageInfo");
+
+const StatusResponse = z.object({
+	status: z.string(),
+	busy: z.boolean(),
+	sessionFile: z.string().nullable(),
+	sessionId: z.string().nullable(),
+	sessionName: z.string().nullable(),
+	port: z.number(),
+	pid: z.number(),
+	startedAt: z.number(),
+	model: z.string().nullable(),
+	cwd: z.string(),
+	usage: UsageStats,
+	context: ContextUsageInfo,
+}).openapi("Status");
+
+const SessionInfo = z.object({
+	port: z.number(),
+	host: z.string(),
+	lanIp: z.string().nullable(),
+	url: z.string(),
+	sessionFile: z.string().nullable(),
+	sessionId: z.string().nullable(),
+	sessionName: z.string().nullable(),
+	pid: z.number(),
+	startedAt: z.number(),
+}).openapi("SessionInfo");
+
+const SessionsResponse = z.object({
+	sessions: z.array(SessionInfo),
+}).openapi("SessionsResponse");
+
+const CommandInfo = z.object({
+	name: z.string(),
+	description: z.string().optional(),
+	source: z.string(),
+	executable: z.boolean().optional(),
+}).openapi("CommandInfo");
+
+const CommandsResponse = z.object({
+	commands: z.array(CommandInfo),
+}).openapi("CommandsResponse");
+
+const HistoryEntry = z.object({
+	id: z.string().optional(),
+	timestamp: z.any().optional(),
+	role: z.string(),
+	text: z.string().optional(),
+	thinking: z.string().optional(),
+	toolCalls: z.array(z.any()).optional(),
+	toolCallId: z.string().optional(),
+	toolName: z.string().optional(),
+	isError: z.boolean().optional(),
+}).openapi("HistoryEntry");
+
+const HistoryResponse = z.object({
+	history: z.array(HistoryEntry),
+	total: z.number(),
+}).openapi("HistoryResponse");
+
+const PromptBody = z.object({
+	message: z.string(),
+	timeout: z.number().optional(),
+	full: z.boolean().optional(),
+	stream: z.boolean().optional(),
+}).openapi("PromptBody");
+
+const PromptResponse = z.object({
+	text: z.string(),
+	toolCalls: z.array(z.string()),
+	thinking: z.string(),
+	messageCount: z.number(),
+	messages: z.array(z.any()).optional(),
+}).openapi("PromptResponse");
+
+const SteerBody = z.object({
+	message: z.string(),
+}).openapi("SteerBody");
+
+const ErrorResponse = z.object({
+	error: z.string(),
+}).openapi("ErrorResponse");
+
+const CommandBody = z.object({
+	command: z.string(),
+}).openapi("CommandBody");
+
+const NewSessionBody = z.object({
+	cwd: z.string().optional(),
+}).openapi("NewSessionBody");
+
+const NewSessionResponse = z.object({
+	ok: z.boolean(),
+	pid: z.number(),
+}).openapi("NewSessionResponse");
+
+const OpenSessionBody = z.object({
+	sessionId: z.string(),
+	name: z.string().optional(),
+	cwd: z.string().optional(),
+}).openapi("OpenSessionBody");
+
+const KillSessionBody = z.object({
+	pid: z.number(),
+}).openapi("KillSessionBody");
+
+const KillSessionResponse = z.object({
+	ok: z.boolean(),
+	pid: z.number(),
+}).openapi("KillSessionResponse");
+
+const RenameSessionBody = z.object({
+	name: z.string(),
+}).openapi("RenameSessionBody");
+
+const RenameSessionResponse = z.object({
+	ok: z.boolean(),
+	name: z.string(),
+}).openapi("RenameSessionResponse");
+
+const OkResponse = z.object({
+	ok: z.boolean(),
+}).openapi("OkResponse");
+
+const ModelInfo = z.object({
+	provider: z.string(),
+	id: z.string(),
+	name: z.string().optional(),
+	contextWindow: z.number().optional(),
+	vision: z.boolean().optional(),
+	reasoning: z.boolean().optional(),
+	costInput: z.number().optional(),
+	costOutput: z.number().optional(),
+}).openapi("ModelInfo");
+
+const ModelsResponse = z.object({
+	current: ModelInfo.nullable(),
+	models: z.array(ModelInfo),
+}).openapi("ModelsResponse");
+
+const SetModelBody = z.object({
+	provider: z.string(),
+	id: z.string(),
+}).openapi("SetModelBody");
+
+const SetModelResponse = z.object({
+	ok: z.boolean(),
+	model: ModelInfo,
+}).openapi("SetModelResponse");
+
+const TreeNodeInfo = z.object({
+	id: z.string(),
+	navTargetId: z.string(),
+	text: z.string(),
+	active: z.boolean(),
+	current: z.boolean(),
+	children: z.array(z.any()),
+}).openapi("TreeNodeInfo");
+
+const TreeResponse = z.object({
+	nodes: z.array(TreeNodeInfo),
+	leafId: z.string().nullable(),
+}).openapi("TreeResponse");
+
+const TreeNavigateBody = z.object({
+	targetId: z.string(),
+}).openapi("TreeNavigateBody");
+
+const TreeNavigateResponse = z.object({
+	ok: z.boolean(),
+	// True when the leaf moved and the session is reloading (client must wait
+	// for the respawned bridge before fetching history); false for a no-op.
+	reload: z.boolean(),
+}).openapi("TreeNavigateResponse");
+
+// ── Route definitions ────────────────────────────────────────────
+
+const statusRoute = createRoute({
+	method: "get",
+	path: "/api/status",
+	summary: "This session's status",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: StatusResponse } } },
+	},
+});
+
+const sessionsRoute = createRoute({
+	method: "get",
+	path: "/api/sessions",
+	summary: "All active sessions on this machine",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: SessionsResponse } } },
+	},
+});
+
+const historyRoute = createRoute({
+	method: "get",
+	path: "/api/history",
+	summary: "Conversation history from session JSONL (paginated)",
+	request: {
+		query: z.object({
+			limit: z.string().optional().openapi({ description: "Max entries (0 = all)" }),
+			offset: z.string().optional().openapi({ description: "Skip from end (0 = most recent)" }),
+		}),
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: HistoryResponse } } },
+	},
+});
+
+const commandsRoute = createRoute({
+	method: "get",
+	path: "/api/commands",
+	summary: "Available skills, prompt templates, and executable built-in commands",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: CommandsResponse } } },
+	},
+});
+
+const commandRoute = createRoute({
+	method: "post",
+	path: "/api/command",
+	summary: "Execute a built-in command (compact)",
+	request: {
+		body: { content: { "application/json": { schema: CommandBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const modelsRoute = createRoute({
+	method: "get",
+	path: "/api/models",
+	summary: "Available models (with configured auth) and the current model",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: ModelsResponse } } },
+	},
+});
+
+const setModelRoute = createRoute({
+	method: "post",
+	path: "/api/model",
+	summary: "Switch the session's model",
+	request: {
+		body: { content: { "application/json": { schema: SetModelBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: SetModelResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const treeRoute = createRoute({
+	method: "get",
+	path: "/api/tree",
+	summary: "Session tree compacted to user-message nodes (active path + current leaf marked)",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: TreeResponse } } },
+	},
+});
+
+const treeNavigateRoute = createRoute({
+	method: "post",
+	path: "/api/tree/navigate",
+	summary: "Move the session leaf to a different tree entry (switch branch, no summary)",
+	request: {
+		body: { content: { "application/json": { schema: TreeNavigateBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: TreeNavigateResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		409: { description: "Agent busy", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const promptRoute = createRoute({
+	method: "post",
+	path: "/api/prompt",
+	summary: "Send message to agent (JSON or plain text, supports SSE streaming)",
+	request: {
+		body: {
+			content: {
+				"application/json": { schema: PromptBody },
+				"text/plain": { schema: z.string() },
+			},
+		},
+	},
+	responses: {
+		200: {
+			description: "OK (JSON or SSE stream)",
+			content: {
+				"application/json": { schema: PromptResponse },
+				"text/event-stream": { schema: z.string() },
+			},
+		},
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		409: { description: "Conflict", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const abortRoute = createRoute({
+	method: "post",
+	path: "/api/abort",
+	summary: "Abort the current agent operation",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const steerRoute = createRoute({
+	method: "post",
+	path: "/api/steer",
+	summary: "Inject a user message into the running turn (mid-turn steer)",
+	request: {
+		body: { content: { "application/json": { schema: SteerBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const newSessionRoute = createRoute({
+	method: "post",
+	path: "/api/new-session",
+	summary: "Spawn a new pi session in RPC mode",
+	request: {
+		body: { content: { "application/json": { schema: NewSessionBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: NewSessionResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const openSessionRoute = createRoute({
+	method: "post",
+	path: "/api/open-session",
+	summary: "Open an existing session by ID",
+	request: {
+		body: { content: { "application/json": { schema: OpenSessionBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: NewSessionResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const killSessionRoute = createRoute({
+	method: "post",
+	path: "/api/kill-session",
+	summary: "Terminate a session by PID (SIGTERM)",
+	request: {
+		body: { content: { "application/json": { schema: KillSessionBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: KillSessionResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const renameSessionRoute = createRoute({
+	method: "post",
+	path: "/api/rename-session",
+	summary: "Rename the current session",
+	request: {
+		body: { content: { "application/json": { schema: RenameSessionBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: RenameSessionResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const reloadRoute = createRoute({
+	method: "post",
+	path: "/api/reload",
+	summary: "Self-respawn (resume same session with fresh code)",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const ClientLogBody = z.object({
+	level: z.string(),
+	message: z.string(),
+	data: z.any().optional(),
+}).openapi("ClientLogBody");
+
+const clientLogRoute = createRoute({
+	method: "post",
+	path: "/api/client-log",
+	summary: "Log a client-side message to bridge.log",
+	request: {
+		body: { content: { "application/json": { schema: ClientLogBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+	},
+});
+
+const streamAttachRoute = createRoute({
+	method: "get",
+	path: "/api/stream/attach",
+	summary: "Attach to an in-progress SSE stream (reconnect after page reload)",
+	responses: {
+		200: { description: "SSE stream", content: { "text/event-stream": { schema: z.string() } } },
+		409: { description: "No active stream to attach", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const UploadResponse = z.object({
+	path: z.string(),
+}).openapi("UploadResponse");
+
+const uploadRoute = createRoute({
+	method: "post",
+	path: "/api/upload",
+	summary: "Upload an image file and get a local file path",
+	request: {
+		body: { content: { "application/octet-stream": { schema: z.any() } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: UploadResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const FileResponse = z.object({
+	path: z.string(),
+	content: z.string(),
+	mtime: z.number(),
+}).openapi("FileResponse");
+
+const fileRoute = createRoute({
+	method: "get",
+	path: "/api/file",
+	summary: "Read a file the agent wrote/edited this session (read-only, allowlisted)",
+	request: {
+		query: z.object({ path: z.string() }),
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: FileResponse } } },
+		403: { description: "Path not produced by this session", content: { "application/json": { schema: ErrorResponse } } },
+		404: { description: "File not found on disk", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const FileStatResponse = z.object({
+	stats: z.record(z.string(), z.number().nullable()),
+}).openapi("FileStatResponse");
+
+const fileStatRoute = createRoute({
+	method: "post",
+	path: "/api/file/stat",
+	summary: "Current mtimes for allowlisted files (watch for out-of-band changes)",
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: FileStatResponse } } },
+	},
+});
+
+// ── Static file serving ───────────────────────────────────────────
+
+async function serveStatic(path, c) {
+	const check = helpers.isPathSafe(path, WEB_DIR);
+	if (!check.safe) {
+		return c.text(check.reason || "Forbidden", 403);
+	}
+
+	const safePath = normalize(path).replace(/^(\.\.[/\\])+/, "");
+	const filePath = join(WEB_DIR, safePath);
+
+	if (!existsSync(filePath)) {
+		return c.text("Not found", 404);
+	}
+
+	try {
+		const data = await readFile(filePath);
+		const ext = extname(filePath).toLowerCase();
+		const mime = MIME_TYPES[ext] || "application/octet-stream";
+		return new Response(data, {
+			headers: { "Content-Type": mime, "Cache-Control": "no-cache" },
+		});
+	} catch {
+		return c.text("Internal server error", 500);
+	}
+}
+
+// ── SSE response wrapper ──────────────────────────────────────────
+
+/**
+ * Create a Node-res-like wrapper over a TransformStream for SSE routes.
+ *
+ * When the HTTP client disconnects, index.ts cancels the readable side,
+ * which errors the writer — that fires `res.onClose` so the owner can
+ * clean up state tied to THIS stream (and only this one).
+ *
+ * @returns {{readable: ReadableStream, res: object}}
+ */
+function createSseRes() {
+	const { readable, writable } = new TransformStream();
+	const writer = writable.getWriter();
+	const encoder = new TextEncoder();
+	const res = {
+		write: (chunk) => { writer.write(encoder.encode(chunk)).catch(() => {}); },
+		writeHead: () => {},
+		flushHeaders: () => {},
+		end: () => { writer.close().catch(() => {}); },
+		on: () => {},
+		onClose: null,
+	};
+	writer.closed.catch(() => { res.onClose?.(); });
+	return { readable, res };
+}
+
+// ── App factory ───────────────────────────────────────────────────
+
+/**
+ * Create the Hono app with all routes registered.
+ *
+ * @param {object} deps — injectable dependencies
+ * @returns {OpenAPIHono} the Hono app (call app.fetch(request) to test)
+ */
+export function createBridgeApp(deps) {
+	const app = new OpenAPIHono();
+
+	// CORS middleware
+	app.use("*", async (c, next) => {
+		await next();
+		c.header("Access-Control-Allow-Origin", "*");
+		c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		c.header("Access-Control-Allow-Headers", "Content-Type");
+	});
+	app.options("*", (c) => {
+		c.header("Access-Control-Allow-Origin", "*");
+		c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		c.header("Access-Control-Allow-Headers", "Content-Type");
+		return c.body(null, 204);
+	});
+
+	// Swagger UI
+	app.doc("/api/openapi.json", {
+		openapi: "3.0.0",
+		info: {
+			title: "pi HTTP Bridge",
+			version: "1.0.0",
+			description: "HTTP bridge for pi coding agent sessions",
+		},
+	});
+	app.get("/api/docs", swaggerUI({ url: "/api/openapi.json" }));
+
+	// ── Route handlers ────────────────────────────────────────────
+
+	app.openapi(statusRoute, (c) => {
+		return c.json({
+			status: "ok",
+			busy: deps.getIsBusy(),
+			sessionFile: deps.getSessionFile() ?? null,
+			sessionId: deps.getSessionId() ?? null,
+			sessionName: deps.getSessionName() ?? null,
+			port: deps.getActualPort(),
+			pid: deps.getPid(),
+			startedAt: deps.getStartedAt(),
+			model: deps.getSessionCtx()?.model?.id ?? null,
+			cwd: deps.getCwd(),
+			usage: deps.computeUsageStats(),
+			context: deps.computeContextUsage(),
+		});
+	});
+
+	app.openapi(sessionsRoute, (c) => {
+		return c.json({ sessions: deps.listAllSessions() });
+	});
+
+	app.openapi(historyRoute, async (c) => {
+		const limit = Number.parseInt(c.req.query("limit") || "0", 10);
+		const offset = Number.parseInt(c.req.query("offset") || "0", 10);
+		try {
+			const { history, total } = await deps.readSessionHistory(deps.getSessionFile(), limit, offset);
+			return c.json({ history, total });
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(fileRoute, async (c) => {
+		const requested = c.req.query("path");
+		try {
+			// Allowlist = exactly the paths this session's agent wrote/edited via
+			// the write/edit tools. Reading is confined to files the agent itself
+			// authored — never an arbitrary path.
+			const { history } = await deps.readSessionHistory(deps.getSessionFile(), 0, 0);
+			if (!collectWrittenPaths(history).has(requested)) {
+				return c.json({ error: "Path not produced by this session" }, 403);
+			}
+			if (!existsSync(requested)) {
+				return c.json({ error: "File not found on disk" }, 404);
+			}
+			const [content, st] = await Promise.all([readFile(requested, "utf8"), stat(requested)]);
+			return c.json({ path: requested, content, mtime: st.mtimeMs });
+		} catch (err) {
+			return c.json({ error: err.message }, 404);
+		}
+	});
+
+	app.openapi(fileStatRoute, async (c) => {
+		let paths = [];
+		try {
+			paths = (await c.req.json()).paths || [];
+		} catch {
+			return c.json({ stats: {} });
+		}
+		const { history } = await deps.readSessionHistory(deps.getSessionFile(), 0, 0);
+		const allowed = collectWrittenPaths(history);
+		const stats = {};
+		for (const p of paths) {
+			if (!allowed.has(p)) continue; // never stat outside the allowlist
+			try {
+				stats[p] = (await stat(p)).mtimeMs;
+			} catch {
+				stats[p] = null; // gone/unreadable
+			}
+		}
+		return c.json({ stats });
+	});
+
+	app.openapi(commandsRoute, (c) => {
+		const commands = deps
+			.getCommands()
+			.filter((cmd) => cmd.source === "skill" || cmd.source === "prompt")
+			.map((cmd) => ({
+				name: cmd.name,
+				description: cmd.description,
+				source: cmd.source,
+			}));
+		const builtins = deps.builtinCommands
+			.filter((cmd) => WEBUI_EXECUTABLE.has(cmd.name) || WEBUI_INSERTABLE.has(cmd.name))
+			.map((cmd) => ({
+				name: cmd.name,
+				description: WEBUI_INSERTABLE.get(cmd.name) ?? cmd.description,
+				source: "builtin",
+				executable: WEBUI_EXECUTABLE.has(cmd.name),
+			}));
+		return c.json({ commands: [...commands, ...builtins] });
+	});
+
+	app.openapi(commandRoute, async (c) => {
+		let cmdName;
+		try {
+			cmdName = (await c.req.json()).command;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (!WEBUI_EXECUTABLE.has(cmdName)) {
+			return c.json({ error: `Command "${cmdName}" is not executable from WebUI` }, 400);
+		}
+		try {
+			if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
+				return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+			}
+			return c.json({ ok: true });
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(modelsRoute, (c) => {
+		return c.json(deps.listModels());
+	});
+
+	app.openapi(setModelRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (typeof body?.provider !== "string" || typeof body?.id !== "string") {
+			return c.json({ error: "provider and id are required" }, 400);
+		}
+		const result = await deps.setModel(body.provider, body.id);
+		if (!result.ok) {
+			return c.json({ error: result.error }, 400);
+		}
+		return c.json({ ok: true, model: result.model });
+	});
+
+	app.openapi(treeRoute, (c) => {
+		return c.json(deps.getSessionTree());
+	});
+
+	app.openapi(treeNavigateRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (typeof body?.targetId !== "string" || !body.targetId) {
+			return c.json({ error: "targetId is required" }, 400);
+		}
+		if (deps.getIsBusy()) {
+			return c.json({ error: "Agent is busy — cannot switch branches mid-turn" }, 409);
+		}
+		const result = await deps.navigateTree(body.targetId);
+		if (!result.ok) {
+			return c.json({ error: result.error || "Navigation failed" }, 400);
+		}
+		return c.json({ ok: true, reload: result.reload !== false });
+	});
+
+	app.openapi(promptRoute, async (c) => {
+		const contentType = c.req.header("content-type") || "";
+		const rawBody = await c.req.text();
+
+		if (!rawBody.trim()) {
+			return c.json({ error: "Empty request body" }, 400);
+		}
+
+		const parsed = helpers.parsePromptBody(rawBody, contentType);
+		if ("error" in parsed) {
+			return c.json({ error: parsed.error }, 400);
+		}
+
+		if (deps.isPendingOrSse()) {
+			return c.json({ error: "Another request is being processed" }, 409);
+		}
+
+		// Intercept executable builtins (e.g. /compact) typed in the prompt box
+		const trimmed = parsed.message.trim();
+		if (trimmed.startsWith("/")) {
+			const spaceIdx = trimmed.indexOf(" ");
+			const cmdName = spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx);
+			const cmdArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+			if (WEBUI_EXECUTABLE.has(cmdName)) {
+				const accept = c.req.header("accept") || "";
+				const useSse = accept.includes("text/event-stream");
+				if (cmdName === "compact") {
+					if (useSse) {
+						const { readable, res } = createSseRes();
+						deps.compactAndStream(res, cmdArgs);
+						return new Response(readable, {
+							headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+						});
+					}
+					try {
+						if (!executeBuiltin(cmdName, deps.getSessionCtx())) {
+							return c.json({ error: `Command "${cmdName}" has no handler` }, 400);
+						}
+						return c.json({ ok: true });
+					} catch (err) {
+						return c.json({ error: err.message }, 500);
+					}
+				}
+			}
+		}
+
+		const accept = c.req.header("accept") || "";
+		const useSse = parsed.stream || accept.includes("text/event-stream");
+
+		if (useSse) {
+			const { readable, res } = createSseRes();
+			(async () => {
+				await deps.sendAndStream(parsed.message, parsed.timeoutMs, res);
+			})();
+
+			return new Response(readable, {
+				headers: {
+					"Content-Type": "text/event-stream",
+					"Cache-Control": "no-cache",
+					"Connection": "keep-alive",
+					"X-Accel-Buffering": "no",
+				},
+			});
+		}
+
+		try {
+			const messages = await deps.sendAndWait(parsed.message, parsed.timeoutMs);
+			const result = {
+				text: helpers.extractText(messages),
+				toolCalls: helpers.extractToolCalls(messages),
+				thinking: helpers.extractThinking(messages),
+				messageCount: messages.length,
+			};
+			if (parsed.includeFull) result.messages = messages;
+			return c.json(result);
+		} catch (err) {
+			return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+		}
+	});
+
+	app.openapi(abortRoute, (c) => {
+		try {
+			const ctx = deps.getSessionCtx();
+			if (ctx) {
+				// Flag before abort: the agent_end it triggers must finalize
+				// immediately (no grace) so busy drops and no client replays.
+				deps.noteAbortRequested?.();
+				ctx.abort();
+				return c.json({ ok: true });
+			}
+			return c.json({ error: "No active session context" }, 500);
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(steerRoute, async (c) => {
+		let message;
+		try {
+			message = (await c.req.json()).message;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (typeof message !== "string" || !message.trim()) {
+			return c.json({ error: "Missing or invalid message" }, 400);
+		}
+		const result = deps.steer(message);
+		if (!result.ok) return c.json({ error: result.error || "Steer failed" }, 500);
+		return c.json({ ok: true });
+	});
+
+	app.openapi(newSessionRoute, async (c) => {
+		let cwd;
+		try {
+			const body = await c.req.json();
+			cwd = body.cwd;
+		} catch {
+			// empty or non-JSON body is fine
+		}
+		try {
+			const { pid } = deps.spawnNewSession(cwd);
+			return c.json({ ok: true, pid });
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(openSessionRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 500);
+		}
+		if (!body?.sessionId) {
+			return c.json({ error: "sessionId is required" }, 500);
+		}
+		try {
+			const { pid } = deps.openSession(body.sessionId, body.name, body.cwd);
+			return c.json({ ok: true, pid });
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(killSessionRoute, async (c) => {
+		let pid;
+		try {
+			pid = (await c.req.json()).pid;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (!pid || typeof pid !== "number") {
+			return c.json({ error: "Missing or invalid pid" }, 400);
+		}
+		const killed = deps.killSession(pid);
+		return c.json({ ok: killed, pid });
+	});
+
+	app.openapi(renameSessionRoute, async (c) => {
+		let name;
+		try {
+			name = (await c.req.json()).name;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (!name || typeof name !== "string") {
+			return c.json({ error: "Missing or invalid name" }, 400);
+		}
+		try {
+			deps.setSessionName(name);
+			return c.json({ ok: true, name });
+		} catch (err) {
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.openapi(reloadRoute, (c) => {
+		const sessionPath = deps.getSessionFile();
+		if (!sessionPath) {
+			return c.json({ error: "No session file to resume" }, 500);
+		}
+		deps.reload();
+		return c.json({ ok: true });
+	});
+
+	app.openapi(clientLogRoute, async (c) => {
+		let body;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ ok: false });
+		}
+		deps.clientLog(body.level || "info", body.message, body.data);
+		return c.json({ ok: true });
+	});
+
+	app.openapi(streamAttachRoute, (c) => {
+		// attachStream decides: false when idle with nothing buffered, or when
+		// an active /api/prompt stream owns the SSE slot.
+		const { readable, res } = createSseRes();
+		const attached = deps.attachStream(res);
+		if (!attached) {
+			res.end();
+			return c.json({ error: "No active stream to attach" }, 409);
+		}
+		return new Response(readable, {
+			headers: {
+				"Content-Type": "text/event-stream",
+				"Cache-Control": "no-cache",
+				"Connection": "keep-alive",
+				"X-Accel-Buffering": "no",
+			},
+		});
+	});
+
+	app.openapi(uploadRoute, async (c) => {
+		const contentType = c.req.header("content-type") || "";
+		const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : contentType.includes("webp") ? "webp" : contentType.includes("gif") ? "gif" : "png";
+		const body = await c.req.arrayBuffer();
+		if (!body || body.byteLength === 0) {
+			return c.json({ error: "Empty body" }, 400);
+		}
+		const path = await deps.saveUpload(new Uint8Array(body), ext);
+		return c.json({ path });
+	});
+
+	// ── Static file serving (fallback) ───────────────────────────
+
+	app.get("*", async (c) => {
+		const reqPath = c.req.path;
+		const filePath = reqPath === "/" ? "/index.html" : reqPath;
+		return serveStatic(filePath, c);
+	});
+
+	return app;
+}

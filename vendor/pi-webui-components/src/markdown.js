@@ -1,0 +1,203 @@
+/**
+ * Minimal markdown renderer — no dependencies.
+ *
+ * Supports: headings, code blocks (fenced), inline code, bold, italic,
+ * links, lists, blockquotes, horizontal rules, tables.
+ *
+ * Escapes HTML first, then applies markdown transformations.
+ */
+
+import { escapeHtml } from "./utils.js";
+
+function renderInline(text) {
+  const codePlaceholders = [];
+  text = text.replace(/`([^`]+)`/g, (_, code) => {
+    const idx = codePlaceholders.length;
+    codePlaceholders.push(`<code>${escapeHtml(code)}</code>`);
+    return `\x00CODE${idx}\x00`;
+  });
+
+  text = escapeHtml(text);
+
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<em>$1</em>");
+  text = text.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  text = text.replace(
+    /\[([^\]]+)\]\(([^)\s]+)\)/g,
+    (_, label, url) => {
+      const safe = /^(https?:|mailto:|\/|#)/i.test(url);
+      const href = safe ? url : "#";
+      return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+    },
+  );
+
+  // Autolink bare URLs that are NOT already inside an <a href="..."> tag
+  // The negative lookbehind avoids matching URLs inside href attributes.
+  // Trailing punctuation [.,;:!?)"'] is excluded from the URL.
+  text = text.replace(
+    /(?<!["'\w])(https?:\/\/[^\s<]*[^\s<.,;:!?)"'\]])/g,
+    (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`,
+  );
+
+  text = text.replace(/\x00CODE(\d+)\x00/g, (_, idx) => codePlaceholders[parseInt(idx)]);
+  return text;
+}
+
+export function renderMarkdown(md) {
+  if (!md) return "";
+
+  const lines = md.split("\n");
+  const html = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.trim() === "") { i++; continue; }
+
+    // Fenced code block
+    const fenceMatch = line.match(/^(\s*)(```|~~~)(\w*)/);
+    if (fenceMatch) {
+      const lang = fenceMatch[3] || "";
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !lines[i].match(/^(\s*)(```|~~~)/)) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++;
+      const code = escapeHtml(codeLines.join("\n"));
+      const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+      html.push(`<pre><code${langClass}>${code}</code></pre>`);
+      continue;
+    }
+
+    // Heading
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      html.push(`<h${level}>${renderInline(headingMatch[2].trim())}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (line.match(/^(\s*[-*_]){3,}\s*$/)) { html.push("<hr>"); i++; continue; }
+
+    // Blockquote
+    if (line.match(/^\s*>/)) {
+      const quoteLines = [];
+      while (i < lines.length && lines[i].match(/^\s*>/)) {
+        quoteLines.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      html.push(`<blockquote>${renderInline(quoteLines.join(" "))}</blockquote>`);
+      continue;
+    }
+
+    // Table
+    if (line.includes("|") && i + 1 < lines.length && lines[i + 1].match(/^[\s|:-]+$/)) {
+      // Strip only the empties from the outer pipes — interior empty cells
+      // are real cells and must keep their column position.
+      const splitRow = (l) => {
+        const cells = l.split("|").map((c) => c.trim());
+        if (cells.length && cells[0] === "") cells.shift();
+        if (cells.length && cells[cells.length - 1] === "") cells.pop();
+        return cells;
+      };
+      const headerCells = splitRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      let table = "<table><thead><tr>";
+      for (const cell of headerCells) table += `<th>${renderInline(cell)}</th>`;
+      table += "</tr></thead><tbody>";
+      for (const row of rows) {
+        table += "<tr>";
+        for (const cell of row) table += `<td>${renderInline(cell)}</td>`;
+        table += "</tr>";
+      }
+      table += "</tbody></table>";
+      html.push(table);
+      continue;
+    }
+
+    // Ordered list (tolerates blank lines between items)
+    if (line.match(/^\s*\d+\.\s/)) {
+      const items = [];
+      while (i < lines.length) {
+        if (lines[i].match(/^\s*\d+\.\s/)) {
+          items.push(`<li>${renderInline(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>`);
+          i++;
+        } else if (lines[i].trim() === "") {
+          // Skip blank line only if next non-blank line is also a list item
+          let j = i;
+          while (j < lines.length && lines[j].trim() === "") j++;
+          if (j < lines.length && lines[j].match(/^\s*\d+\.\s/)) {
+            i = j;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      html.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    // Unordered list (tolerates blank lines between items)
+    if (line.match(/^\s*[-*]\s/)) {
+      const items = [];
+      while (i < lines.length) {
+        if (lines[i].match(/^\s*[-*]\s/)) {
+          const itemText = lines[i].replace(/^\s*[-*]\s+/, "");
+          const indent = lines[i].match(/^(\s*)/)[1].length;
+          items.push(indent > 0
+            ? `<li style="margin-left:${indent * 1.5}em">${renderInline(itemText)}</li>`
+            : `<li>${renderInline(itemText)}</li>`);
+          i++;
+        } else if (lines[i].trim() === "") {
+          let j = i;
+          while (j < lines.length && lines[j].trim() === "") j++;
+          if (j < lines.length && lines[j].match(/^\s*[-*]\s/)) {
+            i = j;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    // Paragraph
+    const paraLines = [];
+    while (
+      i < lines.length && lines[i].trim() !== "" &&
+      !lines[i].match(/^(\s*)(```|~~~)/) &&
+      !lines[i].match(/^#{1,6}\s/) &&
+      !lines[i].match(/^(\s*[-*_]){3,}\s*$/) &&
+      !lines[i].match(/^\s*>/) &&
+      !lines[i].match(/^\s*\d+\.\s/) &&
+      !lines[i].match(/^\s*[-*]\s/) &&
+      !(lines[i].includes("|") && i + 1 < lines.length && lines[i + 1].match(/^[\s|:-]+$/))
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length > 0) {
+      // Join multi-line paragraphs with <br> — use placeholder to survive escapeHtml
+      const joined = paraLines.join("\x00BR\x00");
+      const rendered = renderInline(joined);
+      html.push(`<p>${rendered.replace(/\x00BR\x00/g, "<br>")}</p>`);
+    }
+  }
+
+  return html.join("\n");
+}
