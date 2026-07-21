@@ -148,6 +148,10 @@ const PromptResponse = z.object({
 	messages: z.array(z.any()).optional(),
 }).openapi("PromptResponse");
 
+const SteerBody = z.object({
+	message: z.string(),
+}).openapi("SteerBody");
+
 const ErrorResponse = z.object({
 	error: z.string(),
 }).openapi("ErrorResponse");
@@ -377,6 +381,20 @@ const abortRoute = createRoute({
 	summary: "Abort the current agent operation",
 	responses: {
 		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
+	},
+});
+
+const steerRoute = createRoute({
+	method: "post",
+	path: "/api/steer",
+	summary: "Inject a user message into the running turn (mid-turn steer)",
+	request: {
+		body: { content: { "application/json": { schema: SteerBody } } },
+	},
+	responses: {
+		200: { description: "OK", content: { "application/json": { schema: OkResponse } } },
+		400: { description: "Bad request", content: { "application/json": { schema: ErrorResponse } } },
 		500: { description: "Server error", content: { "application/json": { schema: ErrorResponse } } },
 	},
 });
@@ -865,6 +883,21 @@ export function createBridgeApp(deps) {
 		} catch (err) {
 			return c.json({ error: err.message }, 500);
 		}
+	});
+
+	app.openapi(steerRoute, async (c) => {
+		let message;
+		try {
+			message = (await c.req.json()).message;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (typeof message !== "string" || !message.trim()) {
+			return c.json({ error: "Missing or invalid message" }, 400);
+		}
+		const result = deps.steer(message);
+		if (!result.ok) return c.json({ error: result.error || "Steer failed" }, 500);
+		return c.json({ ok: true });
 	});
 
 	app.openapi(newSessionRoute, async (c) => {

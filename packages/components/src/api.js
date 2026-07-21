@@ -156,6 +156,23 @@ export async function abortAgent(fetchFn = fetch) {
   return res.json();
 }
 
+/**
+ * Inject a user message into the running turn (mid-turn steer). The steer
+ * bubble + continuation reach every viewer via the bridge's broadcast echo,
+ * so this just fires the request; it renders nothing itself.
+ * @param {string} message
+ * @param {typeof fetch} [fetchFn]
+ */
+export async function steerAgent(message, fetchFn = fetch) {
+  const res = await fetchFn("/api/steer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) await throwHttpError(res);
+  return res.json();
+}
+
 export async function executeCommand(command, fetchFn = fetch) {
   const res = await fetchFn("/api/command", {
     method: "POST",

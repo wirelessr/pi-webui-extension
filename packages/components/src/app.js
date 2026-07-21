@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, navigateTree, navUrl, pollUntil, sendPromptStream, setModel, statFiles } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, navigateTree, navUrl, pollUntil, sendPromptStream, setModel, statFiles, steerAgent } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, syncExpandButtonState } from "./flow.js";
@@ -140,6 +140,9 @@ import { formatStats } from "./utils.js";
     onSend: handleSend,
     onSelectCommand: handleSelectCommand,
     onStop: handleStop,
+    // Allow Enter to submit mid-turn: a send while streaming becomes a steer
+    // (injected into the running turn). The button still acts as Stop.
+    allowQueueWhileStreaming: true,
   });
 
 
@@ -239,6 +242,18 @@ import { formatStats } from "./utils.js";
         getStatusFn: getStatus,
         onStatusUpdateFn: (status) => updateStats(status),
       });
+      return;
+    }
+    // Busy → STEER into the running turn. The bubble is not rendered here; the
+    // bridge echoes it back as a user_message on our live stream (the still-open
+    // prompt stream, or the reattach), so rendering has a single owner and the
+    // DOM order matches a later history reload.
+    if (sending || $busyIndicator.classList.contains("busy")) {
+      try {
+        await steerAgent(text);
+      } catch (err) {
+        chat.showError(`Steer failed: ${err.message}`);
+      }
       return;
     }
     sending = true;

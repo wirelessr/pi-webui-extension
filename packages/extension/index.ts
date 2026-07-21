@@ -73,6 +73,13 @@ export default function (pi: ExtensionAPI) {
 	// later (queued dispatch, another tab) renders the user bubble too, not just
 	// the assistant's reply.
 	let pendingUserText: string | null = null;
+	// Per-run "the assistant has started replying" flag, reset on every
+	// agent_start. It discriminates a mid-turn STEER's user message_start (fires
+	// AFTER the assistant is under way) from the OPENING prompt's user
+	// message_start (fires BEFORE any assistant output). Only a steer is
+	// broadcast as a live user_message; the opening bubble is owned by the
+	// pendingUserText path at agent_start. See the message_start handler.
+	let assistantSeenThisRun = false;
 	// Turn-active/busy tracking, finalize grace scheduling, and the coalescing
 	// replay buffer all live in turn-lifecycle.js (pure, unit-tested — the
 	// multi-loop/orphaned-turn bugs were here). This file only feeds pi events
@@ -155,6 +162,7 @@ export default function (pi: ExtensionAPI) {
 		computeContextUsage,
 		sendAndWait,
 		sendAndStream,
+		steer,
 		compactAndStream,
 		attachStream,
 		saveUpload,
@@ -439,6 +447,9 @@ export default function (pi: ExtensionAPI) {
 		// isBusy=true on its next poll, re-attaches, and replays the buffer.
 		const { reasserted } = lifecycle.agentStart();
 		if (reasserted) serverLog("agent_start: re-asserting ourTurnActive (orphaned continuation)");
+		// A fresh loop: the next user message_start is an opening prompt (owned by
+		// pendingUserText below), not a steer, until the assistant starts replying.
+		assistantSeenThisRun = false;
 		if (pendingUserText != null) {
 			// Buffer-only, never live-broadcast: the only client connected this
 			// early is the sender's own prompt stream, which already rendered its
@@ -523,6 +534,32 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
+	// Native message_start is pi's source of truth for a mid-turn STEER bubble.
+	// pi fires message_start(role:"user") both for the opening prompt (BEFORE any
+	// assistant output) and for a steer (AFTER the assistant has started) — we
+	// forward ONLY the steer as a live user_message. The opening prompt's bubble
+	// is already owned by the pendingUserText path at agent_start, so forwarding
+	// it here would double-render. Discriminator: assistantSeenThisRun (set when
+	// the assistant's own message_start fires, reset on agent_start).
+	pi.on("message_start", (event: any) => {
+		const role = event?.message?.role;
+		if (role === "assistant") {
+			assistantSeenThisRun = true;
+			return;
+		}
+		if (role !== "user") return;
+		// Not a steer: no turn in flight, or the assistant hasn't started (opening
+		// prompt). A steer lands only while the turn is active AND mid-reply.
+		if (!lifecycle.isTurnActive() || !assistantSeenThisRun) return;
+		const text = messageText(event?.message);
+		if (typeof text === "string" && text.length > 0) {
+			// writeTurnEvent records into the replay buffer at the true injection
+			// point (buffer is NOT reset on steer) and fans out live — so a
+			// late-joiner replays [assistant-so-far][user][assistant-continuation].
+			writeTurnEvent({ type: "user_message", text });
+		}
+	});
+
 	pi.on("tool_execution_start", (event: any) => {
 		writeTurnEvent({
 			type: "tool_execution_start",
@@ -572,6 +609,17 @@ export default function (pi: ExtensionAPI) {
 	function writeTurnEvent(data: any): void {
 		if (!lifecycle.recordEvent(data)) return;
 		viewers.broadcast(data);
+	}
+
+	// Flatten a pi AgentMessage's content (string or content-block array) to
+	// plain text — used to surface a steer's user message for the live bubble.
+	function messageText(msg: any): string {
+		const c = msg?.content;
+		if (typeof c === "string") return c;
+		if (Array.isArray(c)) {
+			return c.map((b: any) => (typeof b === "string" ? b : b?.type === "text" ? (b.text ?? "") : "")).join("");
+		}
+		return "";
 	}
 
 	function sendSseError(message: string): void {
@@ -1033,6 +1081,50 @@ export default function (pi: ExtensionAPI) {
 			if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
 			waitingForExtensionInput = false;
 			sendSseError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	// Mid-turn steer: inject a user message into the running turn. Fire-and-
+	// forget (no SSE response of its own) — the sender is already an attached
+	// viewer, so the steer bubble + continuation reach it via the broadcast echo
+	// from the native message_start handler, keeping rendering single-owner.
+	function steer(message: string): { ok: boolean; error?: string } {
+		const expanded = expandInput(message);
+		if (lifecycle.isBusy()) {
+			// The turn is streaming: pi queues this as a steer, delivered after the
+			// current tool calls and before the next LLM call. deliverAs:"steer" is
+			// honored only while streaming; pi checks isStreaming synchronously so
+			// there is no race with a turn that is about to end.
+			try {
+				pi.sendUserMessage(expanded, { deliverAs: "steer" });
+				return { ok: true };
+			} catch (err) {
+				return { ok: false, error: err instanceof Error ? err.message : String(err) };
+			}
+		}
+		// Idle race: the turn ended between the client seeing "busy" and this
+		// request landing, so pi runs it as a fresh turn (deliverAs ignored when
+		// not streaming). Set up the opening path — as sendAndStream does, minus
+		// its own SSE response — so the user bubble is recorded into the replay
+		// buffer at agent_start; a late attach (the hub's busy poll /
+		// ensureActiveAttached, or another tab) replays it.
+		pendingDone = null;
+		waitingForExtensionInput = true;
+		inputWatchdog = setTimeout(() => {
+			if (waitingForExtensionInput) {
+				serverLog("steer idle watchdog: agent did not start processing message");
+				waitingForExtensionInput = false;
+				lifecycle.abandonTurn();
+				pendingUserText = null;
+			}
+		}, 10000);
+		try {
+			pi.sendUserMessage(expanded);
+			return { ok: true };
+		} catch (err) {
+			if (inputWatchdog) { clearTimeout(inputWatchdog); inputWatchdog = null; }
+			waitingForExtensionInput = false;
+			return { ok: false, error: err instanceof Error ? err.message : String(err) };
 		}
 	}
 

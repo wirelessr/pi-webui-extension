@@ -28,6 +28,7 @@ function createMockDeps(overrides = {}) {
 		setModel: [],
 		noteAbortRequested: [],
 		navigateTree: [],
+		steer: [],
 	};
 
 	return {
@@ -82,6 +83,7 @@ function createMockDeps(overrides = {}) {
 		},
 		attachStream: () => false,
 		isPendingOrSse: () => false,
+		steer: (message) => { calls.steer.push(message); return { ok: true }; },
 		noteAbortRequested: () => { calls.noteAbortRequested.push(true); },
 		getSessionTree: () => ({
 			nodes: [{ id: "u1", navTargetId: "a1", text: "first", active: true, current: true, children: [] }],
@@ -496,6 +498,40 @@ test("POST /api/abort without session context returns 500", async () => {
 	const app = createBridgeApp(createMockDeps({ getSessionCtx: () => null }));
 	const res = await app.fetch(req("/api/abort", { method: "POST" }));
 	assert.strictEqual(res.status, 500);
+});
+
+test("POST /api/steer forwards the message to deps.steer", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/steer", { message: "only look at TS files" }));
+	assert.strictEqual(res.status, 200);
+	assert.deepStrictEqual(await res.json(), { ok: true });
+	assert.deepStrictEqual(deps.calls.steer, ["only look at TS files"]);
+});
+
+test("POST /api/steer rejects an empty message with 400", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/steer", { message: "   " }));
+	assert.strictEqual(res.status, 400);
+	assert.strictEqual(deps.calls.steer.length, 0);
+});
+
+test("POST /api/steer rejects a non-JSON body with 400", async () => {
+	const app = createBridgeApp(createMockDeps());
+	const res = await app.fetch(req("/api/steer", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: "not json",
+	}));
+	assert.strictEqual(res.status, 400);
+});
+
+test("POST /api/steer returns 500 when deps.steer fails", async () => {
+	const app = createBridgeApp(createMockDeps({ steer: () => ({ ok: false, error: "boom" }) }));
+	const res = await app.fetch(postJson("/api/steer", { message: "hi" }));
+	assert.strictEqual(res.status, 500);
+	assert.strictEqual((await res.json()).error, "boom");
 });
 
 test("GET /api/stream/attach returns 409 when not busy", async () => {
