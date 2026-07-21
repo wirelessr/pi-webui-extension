@@ -60,6 +60,14 @@ import { formatStats } from "/utils.js";
     renderSessions();
     renderQueue();
   });
+  // Optimistic pending-steer list per session (control state, not the store):
+  // sessionId -> [{ seq, text }]. A steer is added on send and removed when its
+  // own user_message echo arrives (= pi injected it → it's now a transcript
+  // bubble). pi exposes no readable steering queue, so this is the only source
+  // for "messages waiting to be injected". No persistence; cleared on session
+  // gone. Survives switching away (per-session), so returning shows what's left.
+  const pendingSteers = new Map();
+  let pendingSteerSeq = 0;
   let activeAttach = null; // AbortController for the active session's attach SSE (control handle, not view state)
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
   let draggingGroupId = null; // group being dragged (reorders groups)
@@ -342,8 +350,22 @@ import { formatStats } from "/utils.js";
     // each loop opens its own bubble below, and only the post-done history
     // reload merges them back into one canonical bubble.
     let loopStarts = 0;
+    let steerSeen = false;
     return (event) => {
       if (sessionId !== activeSessionId) return; // stale stream after a switch
+      // A user_message echo means pi injected a steer (or the opening prompt) —
+      // drop the matching optimistic pending-steer chip. Harmless for the
+      // opening prompt (no pending entry matches). Runs on both live and replay.
+      if (event.type === "user_message" && typeof event.text === "string") {
+        removePendingSteerOnEcho(sessionId, event.text);
+        // A user_message arriving while an assistant message is active is a
+        // mid-turn steer (the opening prompt's arrives before any assistant).
+        // A steer ends the current assistant sub-message and starts a new one,
+        // so a late-joiner's loadHistory returns persisted sub-messages that the
+        // buffer replay ALSO re-delivers → double-render. Flag it so the
+        // post-done canonical reload runs (same remedy as a multi-loop turn).
+        if (chat.hasActiveMessage()) steerSeen = true;
+      }
       // user_message precedes agent_start in the replay — it must not trigger
       // the lazy assistant-bubble open, or the user bubble lands below it.
       if (event.type === "agent_start" || (!chat.hasActiveMessage() && event.type !== "done" && event.type !== "error" && event.type !== "user_message")) {
@@ -358,8 +380,10 @@ import { formatStats } from "/utils.js";
         activeStreaming = false;
         if (event.type === "done") {
           notifyActiveDone(activeName());
-          if (loopStarts > 1) {
-            // Multi-loop turn: bubbles need the canonical re-group.
+          if (loopStarts > 1 || steerSeen) {
+            // Multi-loop turn OR a steer split the stream: the live DOM may
+            // double up (loadHistory + replay both cover the steer's persisted
+            // sub-messages). Rebuild from the canonical history.
             getHistory(scopedFetch(sessionId)).then((data) => {
               if (sessionId === activeSessionId && data.history?.length) {
                 chat.loadHistory(data.history);
@@ -526,35 +550,21 @@ import { formatStats } from "/utils.js";
       return;
     }
     const active = sessions.find((s) => s.sessionId === id);
-    const pending = active?.queue?.items?.length > 0;
     // Busy → STEER: inject into the running turn (delivered after the current
-    // tool calls, before the next LLM call) instead of waiting for turn-end.
-    // We don't render the bubble here — the bridge echoes it back as a
-    // user_message on our live stream (prompt or attach), so rendering has one
-    // owner and the DOM order matches a later history reload. Exception: a
-    // paused/pending queue keeps FIFO (steering would jump the queued items).
-    if ((activeStreaming || active?.busy) && !pending) {
+    // tool calls, before the next LLM call) instead of waiting for turn-end. pi
+    // holds its own steering queue and drains one-at-a-time, so multiple sends
+    // all land in this turn in order. We don't render the bubble here — the
+    // bridge echoes it back as a user_message on our live stream (prompt or
+    // attach), so rendering has one owner and the DOM order matches a later
+    // history reload. The "waiting to be injected" list is tracked optimistically
+    // (addPendingSteer now, removed on echo) since pi exposes no readable queue.
+    if (activeStreaming || active?.busy) {
+      addPendingSteer(id, text);
       try {
         await steerAgent(text, scopedFetch(id));
       } catch (err) {
+        removePendingSteerByText(id, text); // send failed → it never entered pi's queue
         alert(`Steer failed: ${err.message}`);
-      }
-      return;
-    }
-    // A queue already exists (paused after a failed dispatch, or draining while
-    // switched away) → queue on the hub so it dispatches in order and keeps
-    // going after we switch away. Idle with no queue → send live below.
-    if (pending) {
-      try {
-        const res = await fetch("/api/queue", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: id, message: text }),
-        });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-        const data = await res.json();
-        setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === id ? { ...x, queue: { items: data.items, paused: data.paused } } : x)) }));
-      } catch (err) {
-        alert(`Queue failed: ${err.message}`);
       }
       return;
     }
@@ -567,7 +577,12 @@ import { formatStats } from "/utils.js";
     const result = await doSendPrompt({
       text, chat: guard.chat, input: guard.input,
       setBusyFn: (b) => { if (id === activeSessionId) { setBusy(b); activeStreaming = b; } },
-      sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, onEvent, streamFetch),
+      // A steer sent while this prompt is still streaming echoes back on THIS
+      // stream (not makeStreamHandler), so drain its pending chip here too.
+      sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, (event) => {
+        if (event.type === "user_message" && typeof event.text === "string") removePendingSteerOnEcho(id, event.text);
+        onEvent(event);
+      }, streamFetch),
       getHistoryFn: () => getHistory(f),
       getStatusFn: () => getStatus(f),
       onCompleteFn: () => notifyActiveDone(activeName()),
@@ -623,10 +638,10 @@ import { formatStats } from "/utils.js";
     nameEl.textContent = name;
     nameEl.title = "Double-click to rename";
     nameEl.addEventListener("dblclick", (e) => { e.stopPropagation(); handleRename(s); });
-    const qn = s.queue?.items?.length || 0;
+    const pn = pendingSteers.get(s.sessionId)?.length || 0;
     let meta = `:${s.port}`;
     if (s.busy) meta += " · busy";
-    if (qn) meta += ` · ${qn} queued${s.queue?.paused ? " ⚠" : ""}`;
+    if (pn) meta += ` · ${pn} steering`;
     el.querySelector(".item-meta").textContent = meta;
     if (s.busy) el.classList.add("session-busy");
     el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
@@ -790,6 +805,9 @@ import { formatStats } from "/utils.js";
     // reloaded under a new id), drop the stale active so we re-select.
     let active = activeSessionId;
     if (active && !next.some((s) => s.sessionId === active)) active = null;
+    // Drop pending-steer chips for sessions that no longer exist.
+    const liveIds = new Set(next.map((s) => s.sessionId));
+    for (const sid of pendingSteers.keys()) if (!liveIds.has(sid)) pendingSteers.delete(sid);
     setState({ sessions: next, hubState: hs, activeSessionId: active }); // → renders sidebar + queue
     // Reconcile the active header against the poll (authoritative bridge state).
     // A live stream owns the pill, but if the bridge says the turn ended while
@@ -1012,56 +1030,83 @@ import { formatStats } from "/utils.js";
     else alert(`Clone of "${srcName}" did not appear.\nCheck the source session has saved history.`);
   }
 
-  // ── Queued messages (pending chips for the active session) ──
+  // ── Pending steers (optimistic "waiting to be injected" chips) ──
 
   const $queueChips = document.getElementById("queue-chips");
 
+  function addPendingSteer(sessionId, text) {
+    const list = pendingSteers.get(sessionId) || [];
+    list.push({ seq: ++pendingSteerSeq, text });
+    pendingSteers.set(sessionId, list);
+    if (sessionId === activeSessionId) renderQueue();
+  }
+
+  // Remove the oldest pending steer matching this text — called when pi echoes
+  // a user_message back (the steer was injected). Matching by text (not seq)
+  // because the echo carries only the message, and pi drains FIFO so the oldest
+  // match is the one that just landed. Returns true if one was removed.
+  function removePendingSteerOnEcho(sessionId, text) {
+    const list = pendingSteers.get(sessionId);
+    if (!list || list.length === 0) return false;
+    const i = list.findIndex((p) => p.text === text);
+    if (i === -1) return false;
+    list.splice(i, 1);
+    if (list.length === 0) pendingSteers.delete(sessionId);
+    if (sessionId === activeSessionId) renderQueue();
+    return true;
+  }
+
+  function removePendingSteerByText(sessionId, text) {
+    // Send failed: drop the newest match (the one we just optimistically added).
+    const list = pendingSteers.get(sessionId);
+    if (!list) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].text === text) { list.splice(i, 1); break; }
+    }
+    if (list.length === 0) pendingSteers.delete(sessionId);
+    if (sessionId === activeSessionId) renderQueue();
+  }
+
+  function clearPendingSteers(sessionId) {
+    // Frontend-only: pi has no reachable clearQueue, and already-injected steers
+    // still land. This just stops SHOWING not-yet-echoed ones (they were about
+    // to become bubbles anyway). Honest limit, documented in the plan.
+    pendingSteers.delete(sessionId);
+    if (sessionId === activeSessionId) renderQueue();
+  }
+
   function renderQueue() {
     if (!$queueChips) return;
-    const active = sessions.find((s) => s.sessionId === activeSessionId);
-    const q = active?.queue;
+    const list = pendingSteers.get(activeSessionId) || [];
     $queueChips.innerHTML = "";
-    if (!q || (q.items.length === 0 && !q.paused)) { $queueChips.classList.add("hidden"); return; }
+    if (list.length === 0) { $queueChips.classList.add("hidden"); return; }
     $queueChips.classList.remove("hidden");
-    if (q.paused) {
-      const banner = document.createElement("div");
-      banner.className = "queue-paused";
-      banner.innerHTML = `<span>Queue paused after an error.</span>`;
-      const resume = document.createElement("button");
-      resume.className = "queue-resume"; resume.textContent = "Resume";
-      resume.addEventListener("click", () => queueAction("/api/queue/resume", { sessionId: activeSessionId }));
-      banner.appendChild(resume);
-      $queueChips.appendChild(banner);
-    }
-    for (const it of q.items) {
+    const header = document.createElement("div");
+    header.className = "queue-header";
+    const caption = document.createElement("span");
+    caption.textContent = list.length === 1 ? "1 steer waiting to inject" : `${list.length} steers waiting to inject`;
+    const clear = document.createElement("button");
+    clear.className = "queue-resume"; clear.textContent = "Clear";
+    clear.title = "Stop showing pending steers (already-injected ones still land)";
+    clear.addEventListener("click", () => clearPendingSteers(activeSessionId));
+    header.appendChild(caption); header.appendChild(clear);
+    $queueChips.appendChild(header);
+    for (const it of list) {
       const chip = document.createElement("div");
       chip.className = "queue-chip";
       const label = document.createElement("span");
       label.className = "queue-chip-text";
-      label.textContent = it.message;
-      label.title = it.message;
-      const rm = document.createElement("button");
-      rm.className = "queue-chip-del"; rm.innerHTML = "&times;"; rm.title = "Remove from queue";
-      rm.addEventListener("click", () => queueAction("/api/queue/remove", { sessionId: activeSessionId, id: it.id }));
-      chip.appendChild(label); chip.appendChild(rm);
+      label.textContent = it.text;
+      label.title = it.text;
+      chip.appendChild(label);
       $queueChips.appendChild(chip);
     }
   }
 
-  async function queueAction(url, body) {
-    try {
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === body.sessionId ? { ...x, queue: { items: data.items, paused: data.paused } } : x)) }));
-    } catch (err) {
-      alert(`Queue action failed: ${err.message}`);
-    }
-  }
-
-  // When the active session goes busy from a hub-dispatched queued turn, attach
-  // so we watch it live (the bridge buffers + replays; see reattach). Guarded so
-  // the 3s poll and the session_busy event don't fire overlapping attaches.
+  // When the active session is busy but we have no live stream (e.g. a turn
+  // started from another tab/device, or after a reconnect), attach so we watch
+  // it live — the bridge buffers + replays. Guarded so the 3s poll doesn't fire
+  // overlapping attaches.
   function ensureActiveAttached() {
     if (!activeSessionId || activeStreaming || attachingActive) return;
     const active = sessions.find((s) => s.sessionId === activeSessionId);
@@ -1169,14 +1214,6 @@ import { formatStats } from "/utils.js";
       if (msg.type === "session_done" && msg.sessionId !== activeSessionId) {
         fireNotification(msg.sessionName || msg.sessionId.slice(0, 8));
         loadSessions(); // refresh busy badges
-      } else if (msg.type === "queue") {
-        setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === msg.sessionId ? { ...x, queue: { items: msg.items, paused: msg.paused } } : x)) }));
-      } else if (msg.type === "session_busy") {
-        // A queued turn started dispatching. Reflect busy + attach if it's ours.
-        setState((st) => ({ sessions: st.sessions.map((x) => (x.sessionId === msg.sessionId ? { ...x, busy: true } : x)) }));
-        if (msg.sessionId === activeSessionId) { setBusy(true); ensureActiveAttached(); }
-      } else if (msg.type === "queue_error" && msg.sessionId !== activeSessionId) {
-        fireNotification(`${msg.sessionName || msg.sessionId.slice(0, 8)}: queue paused`);
       }
     };
     es.onerror = () => {}; // EventSource auto-reconnects

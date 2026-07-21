@@ -222,6 +222,52 @@ import { formatStats } from "./utils.js";
 
   let sending = false;
 
+  // Optimistic pending-steer list: messages steered into the running turn but
+  // not yet injected by pi (no readable steering queue exists). Added on send,
+  // removed when the message's own user_message echo arrives. No persistence.
+  const $queueChips = document.getElementById("queue-chips");
+  let pendingSteers = [];
+
+  function renderPendingSteers() {
+    if (!$queueChips) return;
+    $queueChips.innerHTML = "";
+    if (pendingSteers.length === 0) { $queueChips.classList.add("hidden"); return; }
+    $queueChips.classList.remove("hidden");
+    const header = document.createElement("div");
+    header.className = "queue-header";
+    const caption = document.createElement("span");
+    caption.textContent = pendingSteers.length === 1 ? "1 steer waiting to inject" : `${pendingSteers.length} steers waiting to inject`;
+    const clear = document.createElement("button");
+    clear.className = "queue-resume"; clear.textContent = "Clear";
+    clear.title = "Stop showing pending steers (already-injected ones still land)";
+    clear.addEventListener("click", () => { pendingSteers = []; renderPendingSteers(); });
+    header.appendChild(caption); header.appendChild(clear);
+    $queueChips.appendChild(header);
+    for (const text of pendingSteers) {
+      const chip = document.createElement("div");
+      chip.className = "queue-chip";
+      const label = document.createElement("span");
+      label.className = "queue-chip-text";
+      label.textContent = text; label.title = text;
+      chip.appendChild(label);
+      $queueChips.appendChild(chip);
+    }
+  }
+
+  function addPendingSteer(text) { pendingSteers.push(text); renderPendingSteers(); }
+  function removePendingSteerOnEcho(text) {
+    const i = pendingSteers.indexOf(text); // FIFO: oldest match is the one pi just injected
+    if (i === -1) return;
+    pendingSteers.splice(i, 1);
+    renderPendingSteers();
+  }
+  function removePendingSteerByText(text) {
+    const i = pendingSteers.lastIndexOf(text); // send failed: drop the one we just added
+    if (i === -1) return;
+    pendingSteers.splice(i, 1);
+    renderPendingSteers();
+  }
+
   async function handleSend(text) {
     if (text.trim() === "/tree") {
       treeView.open();
@@ -247,11 +293,14 @@ import { formatStats } from "./utils.js";
     // Busy → STEER into the running turn. The bubble is not rendered here; the
     // bridge echoes it back as a user_message on our live stream (the still-open
     // prompt stream, or the reattach), so rendering has a single owner and the
-    // DOM order matches a later history reload.
+    // DOM order matches a later history reload. The pending list (added now,
+    // removed on echo) shows what's waiting to inject — pi has no readable queue.
     if (sending || $busyIndicator.classList.contains("busy")) {
+      addPendingSteer(text);
       try {
         await steerAgent(text);
       } catch (err) {
+        removePendingSteerByText(text); // send failed → never entered pi's queue
         chat.showError(`Steer failed: ${err.message}`);
       }
       return;
@@ -264,7 +313,12 @@ import { formatStats } from "./utils.js";
         chat,
         input,
         setBusyFn: setBusy,
-        sendPromptStreamFn: sendPromptStream,
+        // Observe the sender's own stream for steer echoes (a steer sent while
+        // this prompt is still streaming echoes back here, not via onStreamEvent).
+        sendPromptStreamFn: (msg, onEvent) => sendPromptStream(msg, (event) => {
+          if (event.type === "user_message" && typeof event.text === "string") removePendingSteerOnEcho(event.text);
+          onEvent(event);
+        }),
         getHistoryFn: getHistory,
         getStatusFn: getStatus,
         clientLogFn: clientLog,
@@ -401,6 +455,10 @@ import { formatStats } from "./utils.js";
   // ── Init ──────────────────────────────────────────
 
   function onStreamEvent(event) {
+    // A user_message echo means pi injected a steer — drop its pending chip.
+    if (event.type === "user_message" && typeof event.text === "string") {
+      removePendingSteerOnEcho(event.text);
+    }
     // Attaching mid-turn means agent_start already streamed before we
     // connected — lazily open an assistant message on the first event,
     // otherwise chat.handleEvent drops everything (no accumulator).
