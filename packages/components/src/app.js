@@ -256,8 +256,14 @@ import { formatStats } from "./utils.js";
 
   function addPendingSteer(text) { pendingSteers.push(text); renderPendingSteers(); }
   function removePendingSteerOnEcho(text) {
-    const i = pendingSteers.indexOf(text); // FIFO: oldest match is the one pi just injected
-    if (i === -1) return;
+    if (pendingSteers.length === 0) return;
+    // Exact match, else drop the oldest: the bridge injects expandInput(message)
+    // (skill/template expansion), so the echo can differ from the raw text we
+    // stored — draining the oldest keeps a steered skill command's chip from
+    // leaking. FIFO-safe: pending is only non-empty mid-turn, so one echo ==
+    // one steer drain.
+    let i = pendingSteers.indexOf(text);
+    if (i === -1) i = 0;
     pendingSteers.splice(i, 1);
     renderPendingSteers();
   }
@@ -299,6 +305,13 @@ import { formatStats } from "./utils.js";
       addPendingSteer(text);
       try {
         await steerAgent(text);
+        // Idle-race: if the turn ended just before this landed, the bridge runs
+        // it as a FRESH turn but (unlike a prompt send) adds no viewer for us.
+        // When we're not already holding a stream, reattach so that new turn
+        // renders — otherwise it'd only appear after a manual refresh, and the
+        // pending chip would never get its echo. Harmless mid-turn (a live
+        // stream is already feeding us; tryReattach no-ops while sending).
+        if (!sending) tryReattach();
       } catch (err) {
         removePendingSteerByText(text); // send failed → never entered pi's queue
         chat.showError(`Steer failed: ${err.message}`);

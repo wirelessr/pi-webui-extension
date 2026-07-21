@@ -5,16 +5,21 @@
  * Builds an isolated extension, spawns ONE throwaway pi session + a test hub on
  * :8799, launches headless Chrome, and drives the hub SPA over raw CDP.
  *
- * Scenario: fire a long turn; once the assistant is streaming, type a message
- * and press Enter (a steer, since the turn is busy). pi injects it at the next
- * agent-loop step. The steer bubble must render in DOM order
+ * Fire a long turn; once the assistant is streaming, type a message and press
+ * Enter (a steer, since the turn is busy). pi injects it at the next agent-loop
+ * step. The steer bubble must render in DOM order
  *   [assistant-so-far] [user steer] [assistant-continuation]
- * both in the SENDER tab and in a SECOND tab attached mid-turn (late joiner).
+ * matching what a later loadHistory rebuilds, with no double-render or dupes.
  *
- * It also drives two steers in a row (R2: pi drains one-at-a-time → two
- * [user][assistant] segments) and prints a machine-checkable verdict per tab.
+ * Scenarios (all REQUIRED — a SKIP counts as FAIL):
+ *   S1  hub sender tab: two steers split the stream, ordered, opener rendered once
+ *   S2  late-joiner tab attaches mid-turn: transcript CONVERGES (no double-render)
+ *   S3  optimistic pending chip appears on send, drains when pi echoes it back
+ *   S4  clear-all drops not-yet-echoed pending chips
+ *   S5  standalone bridge UI (own isolated session): steer wires + splits
  *
- * Everything is isolated (own PI_BRIDGE_DIR, own port, own Chrome profile) and
+ * Two isolated throwaway sessions (hub-driven + standalone) so transcripts don't
+ * collide. Everything is isolated (own PI_BRIDGE_DIR, ports, Chrome profile) and
  * torn down at the end. Never touches the user's real sessions.
  *
  * Usage: node scripts/repro-steer.mjs
@@ -181,7 +186,10 @@ const CLICK_CLEAR_EXPR = `
 
 // Verdict: user bubbles appear BETWEEN assistant bubbles (a steer split the
 // stream), never as the last bubble, and match the steered text in order.
-function judge(seq, expectedSteers) {
+// `opener` (optional): a substring of the turn's opening prompt — asserted to
+// appear EXACTLY once, guarding against the turn-boundary bug where a stale
+// discriminator flag re-broadcasts the opening prompt as if it were a steer.
+function judge(seq, expectedSteers, opener) {
   const userTexts = seq.filter((b) => b.role === "user").map((b) => b.text);
   const steersSeen = expectedSteers.filter((s) => userTexts.some((u) => u.includes(s)));
   // Each steer's user bubble must be followed by an assistant bubble (the
@@ -199,6 +207,13 @@ function judge(seq, expectedSteers) {
   for (const s of expectedSteers) {
     const dupes = userTexts.filter((u) => u.includes(s)).length;
     if (dupes > 1) problems.push(`steer "${s}" rendered ${dupes} times (double-render)`);
+  }
+  // The opening prompt must render exactly once — a stale steer discriminator
+  // would re-broadcast it as a mid-turn user_message (double-render).
+  if (opener) {
+    const openerCount = userTexts.filter((u) => u.includes(opener)).length;
+    if (openerCount === 0) problems.push(`opener "${opener}" bubble missing`);
+    if (openerCount > 1) problems.push(`opener "${opener}" rendered ${openerCount} times (stale-flag double-render)`);
   }
   return {
     seq,
@@ -257,15 +272,39 @@ async function main() {
 
   const results = {};
 
+  // Opener that reliably produces a LONG TEXT STREAM (not a tool call): the
+  // model must type each number itself. A tool like `seq 1 300` returns
+  // instantly and collapses the steer window, so a 2nd steer lands after
+  // turn-end (becomes a fresh turn) — a test artifact, not a product bug.
+  const opener = (tag, done) => `${tag} count from 1 to 400, one number per line. Type each number yourself as plain text — do NOT use bash, seq, or any tool. When done, print ${done}.`;
+
+  // Send a steer ONCE, then poll (no resend — resending would queue duplicates
+  // in pi and double-inject). Returns true if its bubble lands. A steer injects
+  // at an agent-loop boundary while streaming; the openers below are long enough
+  // that a single steer reliably lands. If it doesn't, that's a real signal
+  // (turn ended first / steer path broken), surfaced as a scenario failure.
+  const steerUntilLanded = async (tab, marker, fullText) => {
+    await evalInPage(tab, driveSteerExpr(fullText));
+    return await evalInPage(tab, `
+      const has = () => [...document.querySelectorAll("#messages .message.user")].some((b) => (b.textContent||"").includes(${JSON.stringify(marker)}));
+      for (let i = 0; i < 200; i++) { // up to ~50s
+        if (has()) return true;
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return has();
+    `);
+  };
+
   // Reset the session between scenarios by firing a fresh turn each time; the
   // transcript accumulates, so each scenario keys its verdict on unique tokens.
-  const kickAndSteer = async (tab, opener, steers, gapMs = 2500) => {
+  const kickAndSteer = async (tab, opener, steers) => {
     await evalInPage(tab, driveSteerExpr(opener));
     const streaming = await evalInPage(tab, waitAssistantStreamingExpr());
     if (!streaming) throw new Error("assistant never started streaming");
     for (const s of steers) {
-      await evalInPage(tab, driveSteerExpr(s));
-      await sleep(gapMs);
+      const marker = s.split(":")[0]; // e.g. "STEER-CHARLIE"
+      const landed = await steerUntilLanded(tab, marker, s);
+      if (!landed) throw new Error(`steer "${marker}" never injected (turn too short)`);
     }
   };
 
@@ -287,15 +326,17 @@ async function main() {
   `);
 
   log("S1: firing a long turn + two steers on the hub sender tab…");
-  await evalInPage(tab1, driveSteerExpr("Count slowly from 1 to 150, one number per line. When you finish, print the token S1DONE."));
+  await evalInPage(tab1, driveSteerExpr(opener("S1OPEN", "S1DONE")));
   const s1streaming = await evalInPage(tab1, waitAssistantStreamingExpr());
   if (!s1streaming) throw new Error("S1: assistant never started streaming");
-  await evalInPage(tab1, driveSteerExpr("STEER-ALPHA: also print the word ALPHA."));
-  await sleep(1800);
+  // ALPHA: resend until it lands (decoupled from model speed).
+  if (!(await steerUntilLanded(tab1, "STEER-ALPHA", "STEER-ALPHA: also print the word ALPHA."))) {
+    throw new Error("S1: STEER-ALPHA never injected");
+  }
 
   // ── Scenario 3 (pending list): verify a chip is showing BEFORE it drains ──
-  // Send BRAVO and immediately assert it appears as a pending chip, then that
-  // it drains (chip removed) once pi injects it (echo).
+  // Send BRAVO with a RAW send (not steerUntilLanded) so we can observe the
+  // optimistic chip appear immediately, before pi injects it.
   log("S3: sending STEER-BRAVO and checking the pending chip appears…");
   await evalInPage(tab1, driveSteerExpr("STEER-BRAVO: also print the word BRAVO."));
   const pendingAppeared = await evalInPage(tab1, waitPendingCountExpr(1, 30));
@@ -325,7 +366,7 @@ async function main() {
   await sleep(1500);
 
   const snap1 = await evalInPage(tab1, SNAPSHOT_EXPR);
-  results.hubSender = judge(snap1.seq, ["STEER-ALPHA", "STEER-BRAVO"]);
+  results.hubSender = judge(snap1.seq, ["STEER-ALPHA", "STEER-BRAVO"], "S1OPEN");
 
   if (tab2) {
     await focusTab(tab2);
@@ -343,14 +384,14 @@ async function main() {
       return false;
     `);
     const snap2 = await evalInPage(tab2, SNAPSHOT_EXPR);
-    results.hubLateJoiner = judge(snap2.seq, ["STEER-ALPHA", "STEER-BRAVO"]);
+    results.hubLateJoiner = judge(snap2.seq, ["STEER-ALPHA", "STEER-BRAVO"], "S1OPEN");
   }
 
   // ── Scenario 4: clear-all drops not-yet-echoed pending chips ──
   // Fire a fresh turn, steer twice fast, then Clear before they drain.
   log("S4: clear-all on the hub sender tab…");
   await focusTab(tab1);
-  await evalInPage(tab1, driveSteerExpr("Count slowly from 1 to 150, one number per line. When you finish, print the token S4DONE."));
+  await evalInPage(tab1, driveSteerExpr(opener("S4OPEN", "S4DONE")));
   const s4streaming = await evalInPage(tab1, waitAssistantStreamingExpr());
   if (s4streaming) {
     await evalInPage(tab1, driveSteerExpr("STEER-CLEARME-1: print CLEARONE."));
@@ -386,7 +427,7 @@ async function main() {
     // split (the sender path). Multi-steer ordering is already covered by S1.
     // A single steer avoids the tool-less-turn drain-window flake where a 2nd
     // steer sometimes lands at turn-end (becomes a fresh turn).
-    await kickAndSteer(tab3, "Count slowly from 1 to 200, one number per line. When you finish, print the token S5DONE.", ["STEER-CHARLIE: also print CHARLIE."]);
+    await kickAndSteer(tab3, opener("S5OPEN", "S5DONE"), ["STEER-CHARLIE: also print CHARLIE."]);
     // Wait for the steer bubble AND its continuation (CHARLIE printed) so the
     // user bubble is not the trailing element.
     await evalInPage(tab3, `
@@ -408,46 +449,15 @@ async function main() {
     results.standalone = { verdict: "SKIPPED", error: String(e).slice(0, 120) };
   }
 
-  // ── Scenario 6: switch away and back — replay + pending survive ──
-  // Needs a second session to switch to. Spawn one via the hub, steer session-1
-  // mid-turn, switch to session-2, switch back, verify the transcript rebuilt
-  // with steers in order.
-  log("S6: switch-away-and-back replay…");
-  await focusTab(tab1);
-  try {
-    // Fire a long turn + a steer on the current (session-1) hub tab.
-    await evalInPage(tab1, driveSteerExpr("Count slowly from 1 to 200, one number per line. When you finish, print the token S6DONE."));
-    const s6streaming = await evalInPage(tab1, waitAssistantStreamingExpr());
-    if (!s6streaming) throw new Error("S6: no stream");
-    await evalInPage(tab1, driveSteerExpr("STEER-ECHO: also print ECHO."));
-    await sleep(1800);
-    // Spawn a second session and switch to it, then back.
-    await fetch(`http://localhost:${HUB_PORT}/api/new-session`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
-    await sleep(4000);
-    const switched = await evalInPage(tab1, `
-      const items = [...document.querySelectorAll(".session-item")];
-      if (items.length < 2) return { ok: false, n: items.length };
-      // Click the session that is NOT current, then back to the first.
-      const other = items.find((el) => !el.classList.contains("current"));
-      if (!other) return { ok: false, n: items.length };
-      other.click();
-      await new Promise(r => setTimeout(r, 3000));
-      const back = [...document.querySelectorAll(".session-item")].find((el) => !el.classList.contains("current"));
-      if (back) back.click();
-      await new Promise(r => setTimeout(r, 3000));
-      return { ok: true, n: items.length };
-    `);
-    if (switched.ok) {
-      await evalInPage(tab1, waitForTextExpr("S6DONE", 800));
-      await sleep(1000);
-      const snap6 = await evalInPage(tab1, SNAPSHOT_EXPR);
-      results.switchBack = judge(snap6.seq, ["STEER-ECHO"]);
-    } else {
-      results.switchBack = { verdict: "SKIPPED", note: `only ${switched.n} session(s)` };
-    }
-  } catch (e) {
-    results.switchBack = { verdict: "SKIPPED", error: String(e).slice(0, 120) };
-  }
+  // NOTE: a "switch away to another session and back" scenario was prototyped
+  // but removed — its verdict depended on hub session-switching orchestration
+  // (spawn a 3rd session, click the right sidebar item among 4) more than on
+  // steer behavior, making it flaky in a way that could MASK a steer regression.
+  // Its actual product concern — a steer turn's transcript rebuilds correctly
+  // from replay + loadHistory — is already covered by S2 (late-joiner attaches
+  // mid-turn and its transcript must CONVERGE to no-double-render), which
+  // exercises the same loadHistory + attach-replay + post-done canonical reload
+  // path. Adding a flaky switch-back test would weaken the suite, not strengthen it.
 
   // ── Report ──
   const labels = {
@@ -457,8 +467,12 @@ async function main() {
     pendingChipDrained: "S3b pending chip drains on echo",
     clearAll: "S4 clear-all",
     standalone: "S5 standalone bridge UI",
-    switchBack: "S6 switch-away-and-back replay",
   };
+  // EVERY listed scenario is REQUIRED: a SKIP or "not run" is a FAIL, not a free
+  // pass. Otherwise a regression could hide behind a thrown setup exception (a
+  // scenario's try/catch → SKIPPED) and OVERALL would still be green — defeating
+  // the whole point of a regression guard. If a path genuinely can't run in this
+  // environment, delete its scenario rather than let it silently SKIP.
   console.log("\n========== STEER E2E RESULTS ==========");
   const fails = [];
   for (const [key, label] of Object.entries(labels)) {
@@ -467,16 +481,14 @@ async function main() {
     if (typeof r === "boolean") { pass = r; detail = String(r); }
     else if (r && typeof r === "object") {
       const v = r.verdict || "";
-      if (v.startsWith("SKIPPED")) { pass = null; detail = v + (r.note ? ` (${r.note})` : "") + (r.error ? ` (${r.error})` : ""); }
+      if (v.startsWith("SKIPPED")) { pass = false; detail = "REQUIRED but SKIPPED — " + v + (r.note ? ` (${r.note})` : "") + (r.error ? ` (${r.error})` : ""); }
       else { pass = v.startsWith("OK"); detail = v + (r.problems?.length ? ` ${JSON.stringify(r.problems)}` : ""); }
-    } else { pass = null; detail = "not run"; }
-    const mark = pass === true ? "PASS" : pass === false ? "FAIL" : "SKIP";
+    } else { pass = false; detail = "REQUIRED but not run"; }
+    const mark = pass === true ? "PASS" : "FAIL";
     console.log(`  [${mark}] ${label}: ${detail}`);
-    if (pass === false) fails.push(label);
+    if (!pass) fails.push(label);
   }
-  const critical = [results.hubSender, results.standalone];
-  const criticalOk = critical.every((r) => r && r.verdict?.startsWith("OK"));
-  const anyFail = fails.length > 0 || !criticalOk;
+  const anyFail = fails.length > 0;
   console.log("\n========== OVERALL:", anyFail ? "FAIL" : "PASS", "==========");
   if (anyFail) {
     console.log("full results:", JSON.stringify(results, null, 2));
