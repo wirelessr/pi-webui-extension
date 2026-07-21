@@ -1041,15 +1041,18 @@ import { formatStats } from "/utils.js";
     if (sessionId === activeSessionId) renderQueue();
   }
 
-  // Remove the oldest pending steer matching this text — called when pi echoes
-  // a user_message back (the steer was injected). Matching by text (not seq)
-  // because the echo carries only the message, and pi drains FIFO so the oldest
-  // match is the one that just landed. Returns true if one was removed.
+  // Drain one pending steer when pi echoes a user_message back (it was injected).
+  // Prefer an exact text match; otherwise drop the OLDEST. The fallback matters
+  // because the bridge injects expandInput(message) (skill/template expansion),
+  // so the echo text can differ from the raw text we stored — without it a
+  // steered skill command's chip would leak forever. FIFO-safe: while pending is
+  // non-empty a turn is running and its only user_messages are our steers (the
+  // opening prompt echoes when pending is empty), so one echo == one drain.
   function removePendingSteerOnEcho(sessionId, text) {
     const list = pendingSteers.get(sessionId);
     if (!list || list.length === 0) return false;
-    const i = list.findIndex((p) => p.text === text);
-    if (i === -1) return false;
+    let i = list.findIndex((p) => p.text === text);
+    if (i === -1) i = 0; // expanded echo: no exact match → drain oldest
     list.splice(i, 1);
     if (list.length === 0) pendingSteers.delete(sessionId);
     if (sessionId === activeSessionId) renderQueue();

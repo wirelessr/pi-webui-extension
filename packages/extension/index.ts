@@ -478,6 +478,13 @@ export default function (pi: ExtensionAPI) {
 		if (waitingForExtensionInput && event.source === "extension") {
 			waitingForExtensionInput = false;
 			lifecycle.beginTurn();
+			// Reset the steer discriminator the moment a new turn's opening prompt
+			// is accepted, not a step later at agent_start. beginTurn() flips
+			// isTurnActive true immediately, so a stale assistantSeenThisRun left
+			// true by the PREVIOUS turn would make this opening prompt's user
+			// message_start (if pi emits it before agent_start) pass the steer
+			// guard and double-render (once here, once via pendingUserText).
+			assistantSeenThisRun = false;
 			pendingUserText = typeof event.text === "string" ? event.text : null;
 			if (inputWatchdog) {
 				clearTimeout(inputWatchdog);
