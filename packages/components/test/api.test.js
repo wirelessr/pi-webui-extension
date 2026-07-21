@@ -24,6 +24,7 @@ import {
   sessionUrl,
   setModel,
   statFiles,
+  steerAgent,
   uploadImage,
 } from "../src/api.js";
 
@@ -244,6 +245,23 @@ describe("abortAgent", () => {
     await abortAgent(fetchFn);
     assert.equal(fetchFn.calls[0].url, "/api/abort");
     assert.equal(fetchFn.calls[0].init.method, "POST");
+  });
+});
+
+describe("steerAgent", () => {
+  test("POSTs the message as JSON to /api/steer", async () => {
+    const fetchFn = mockFetch({ jsonData: { ok: true } });
+    const result = await steerAgent("only look at TS files", fetchFn);
+    assert.equal(fetchFn.calls[0].url, "/api/steer");
+    assert.equal(fetchFn.calls[0].init.method, "POST");
+    assert.equal(fetchFn.calls[0].init.headers["Content-Type"], "application/json");
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { message: "only look at TS files" });
+    assert.equal(result.ok, true);
+  });
+
+  test("throws the server error on non-ok response", async () => {
+    const fetchFn = mockFetch({ status: 500, jsonData: { error: "Steer failed" } });
+    await assert.rejects(steerAgent("hi", fetchFn), /Steer failed/);
   });
 });
 

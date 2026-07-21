@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles } from "/api.js";
+import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles, steerAgent } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
@@ -525,11 +525,26 @@ import { formatStats } from "/utils.js";
       });
       return;
     }
-    // Busy (or something already queued) → queue on the hub so it dispatches in
-    // order and keeps going after we switch away. Idle → send live as usual.
     const active = sessions.find((s) => s.sessionId === id);
     const pending = active?.queue?.items?.length > 0;
-    if (activeStreaming || active?.busy || pending) {
+    // Busy → STEER: inject into the running turn (delivered after the current
+    // tool calls, before the next LLM call) instead of waiting for turn-end.
+    // We don't render the bubble here — the bridge echoes it back as a
+    // user_message on our live stream (prompt or attach), so rendering has one
+    // owner and the DOM order matches a later history reload. Exception: a
+    // paused/pending queue keeps FIFO (steering would jump the queued items).
+    if ((activeStreaming || active?.busy) && !pending) {
+      try {
+        await steerAgent(text, scopedFetch(id));
+      } catch (err) {
+        alert(`Steer failed: ${err.message}`);
+      }
+      return;
+    }
+    // A queue already exists (paused after a failed dispatch, or draining while
+    // switched away) → queue on the hub so it dispatches in order and keeps
+    // going after we switch away. Idle with no queue → send live below.
+    if (pending) {
       try {
         const res = await fetch("/api/queue", {
           method: "POST", headers: { "Content-Type": "application/json" },

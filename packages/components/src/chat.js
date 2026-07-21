@@ -816,7 +816,25 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     // switchTo loads history (which already contains the in-progress turn's
     // user message) right before attaching.
     if (event.type === "user_message") {
-      if (typeof event.text === "string" && lastUserText !== event.text) addMessage("user", event.text);
+      const text = typeof event.text === "string" ? event.text : null;
+      if (text === null) return;
+      // A steer arrives while the assistant is actively streaming (accumulator
+      // live). Split the bubble so DOM order is [assistant-so-far][user steer]
+      // [assistant-continuation] — matching what a later loadHistory rebuilds.
+      // The split runs even when the bubble itself is deduped (a late joiner
+      // whose loadHistory already contains the steer message): the "add bubble"
+      // and "split bubble" decisions are decoupled, because skipping the split
+      // would merge the continuation deltas into the pre-steer bubble.
+      if (accumulator) {
+        finalizeTextSegment(); // markdown-render the in-progress text run first
+        finishAssistantMessage();
+        if (lastUserText !== text) addMessage("user", text);
+        startAssistantMessage();
+        return;
+      }
+      // No active assistant bubble: the opening prompt replayed before
+      // agent_start. Just the bubble, deduped against freshly-loaded history.
+      if (lastUserText !== text) addMessage("user", text);
       return;
     }
     if (!accumulator) return;
