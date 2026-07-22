@@ -39,7 +39,14 @@ export function pickSession(sessions, id) {
 export function buildSessionList(discoveries, isPidAlive) {
   const byId = new Map();
   for (const d of discoveries) {
-    if (!d || !d.sessionId || !d.pid || !isPidAlive(d.pid)) continue;
+    // Liveness = the PI process (piPid) is alive, NOT the recorded `pid`. For a
+    // hub-spawned session `pid` is the `sh -c` group leader; for a manually-run
+    // `pi -p`/`pi` session `pid` is the user's long-lived interactive shell,
+    // which outlives pi and would keep a dead session looking alive (a ghost the
+    // hub then fails to proxy). Prefer piPid; fall back to pid for legacy files
+    // written before piPid existed.
+    const livenessPid = d?.piPid ?? d?.pid;
+    if (!d || !d.sessionId || !livenessPid || !isPidAlive(livenessPid)) continue;
     const existing = byId.get(d.sessionId);
     if (!existing || (d.startedAt ?? 0) > (existing.startedAt ?? 0)) {
       byId.set(d.sessionId, d);

@@ -62,6 +62,24 @@ describe("buildSessionList", () => {
     assert.deepEqual(list.map((s) => s.port), [7331, 7335]);
   });
 
+  test("liveness follows piPid, not pid — a dead pi under a live shell is a ghost", () => {
+    // `pi -p`/manual run: pid is the user's long-lived interactive shell (alive),
+    // piPid is the pi process (dead). Must be dropped, not shown as alive.
+    const list = buildSessionList(
+      [
+        { sessionId: "ghost", pid: 100, piPid: 999, port: 7335 }, // shell alive, pi dead
+        { sessionId: "real", pid: 100, piPid: 101, port: 7331 }, // both alive
+      ],
+      alive,
+    );
+    assert.deepEqual(list.map((s) => s.sessionId), ["real"]);
+  });
+
+  test("piPid alive keeps the session even when the recorded pid is dead", () => {
+    const list = buildSessionList([{ sessionId: "a", pid: 999, piPid: 101, port: 7331 }], alive);
+    assert.deepEqual(list.map((s) => s.sessionId), ["a"]);
+  });
+
   test("skips malformed entries", () => {
     const list = buildSessionList([null, {}, { sessionId: "a" }, { sessionId: "a", pid: 100, port: 7331 }], alive);
     assert.deepEqual(list.map((s) => s.sessionId), ["a"]);
