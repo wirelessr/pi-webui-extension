@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBridgeApp } from "../bridge-app.js";
@@ -278,6 +278,51 @@ test("GET /api/file returns 404 for an allowlisted path missing on disk", async 
 	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history, total: 1 }) }));
 	const res = await app.fetch(req(`/api/file?path=${encodeURIComponent(missing)}`));
 	assert.strictEqual(res.status, 404);
+});
+
+test("GET /api/file expands a leading ~ in an allowlisted path", async () => {
+	const name = `pi-file-route-tilde-${process.pid}.md`;
+	const abs = join(homedir(), name);
+	const tildePath = `~/${name}`;
+	writeFileSync(abs, "tilde content", "utf8");
+	const history = [
+		{ role: "assistant", toolCalls: [{ name: "write", arguments: { path: tildePath, content: "stale" } }] },
+	];
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history, total: 1 }) }));
+	try {
+		const res = await app.fetch(req(`/api/file?path=${encodeURIComponent(tildePath)}`));
+		assert.strictEqual(res.status, 200);
+		const body = await res.json();
+		// The client watches by the recorded (tilde) path, so it must be echoed as-is.
+		assert.strictEqual(body.path, tildePath);
+		assert.strictEqual(body.content, "tilde content");
+	} finally {
+		unlinkSync(abs);
+	}
+});
+
+test("POST /api/file/stat expands ~ and keys stats by the original tilde path", async () => {
+	const name = `pi-stat-tilde-${process.pid}.md`;
+	const abs = join(homedir(), name);
+	const tildePath = `~/${name}`;
+	const tildeMissing = `~/pi-stat-tilde-missing-${process.pid}.md`;
+	writeFileSync(abs, "x", "utf8");
+	const history = [
+		{ role: "assistant", toolCalls: [
+			{ name: "write", arguments: { path: tildePath, content: "x" } },
+			{ name: "write", arguments: { path: tildeMissing, content: "x" } },
+		] },
+	];
+	const app = createBridgeApp(createMockDeps({ readSessionHistory: async () => ({ history, total: 1 }) }));
+	try {
+		const res = await app.fetch(postJson("/api/file/stat", { paths: [tildePath, tildeMissing] }));
+		assert.strictEqual(res.status, 200);
+		const { stats } = await res.json();
+		assert.strictEqual(typeof stats[tildePath], "number");
+		assert.strictEqual(stats[tildeMissing], null);
+	} finally {
+		unlinkSync(abs);
+	}
 });
 
 test("POST /api/file/stat returns mtimes for allowlisted paths, skips others, null for missing", async () => {

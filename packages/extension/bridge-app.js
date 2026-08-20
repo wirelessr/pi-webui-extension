@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { collectWrittenPaths } from "@wirelessr/pi-webui-components/artifacts.js";
 import * as helpers from "./helpers.js";
@@ -36,6 +37,12 @@ const MIME_TYPES = {
 };
 
 const WEBUI_EXECUTABLE = new Set(["compact"]);
+
+// Node's fs APIs don't expand a leading "~". Agents often record write/edit
+// paths as "~/..." (pi's write tool expands it on write, but the raw tilde
+// string is what lands in the allowlist and the client file chips), so disk
+// access must expand it explicitly.
+const expandHome = (p) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
 
 // Builtins listed in /api/commands as insert-only (selecting them types
 // "/name " into the input instead of executing — they take arguments).
@@ -673,10 +680,11 @@ export function createBridgeApp(deps) {
 			if (!collectWrittenPaths(history).has(requested)) {
 				return c.json({ error: "Path not produced by this session" }, 403);
 			}
-			if (!existsSync(requested)) {
+			const resolved = expandHome(requested);
+			if (!existsSync(resolved)) {
 				return c.json({ error: "File not found on disk" }, 404);
 			}
-			const [content, st] = await Promise.all([readFile(requested, "utf8"), stat(requested)]);
+			const [content, st] = await Promise.all([readFile(resolved, "utf8"), stat(resolved)]);
 			return c.json({ path: requested, content, mtime: st.mtimeMs });
 		} catch (err) {
 			return c.json({ error: err.message }, 404);
@@ -696,7 +704,7 @@ export function createBridgeApp(deps) {
 		for (const p of paths) {
 			if (!allowed.has(p)) continue; // never stat outside the allowlist
 			try {
-				stats[p] = (await stat(p)).mtimeMs;
+				stats[p] = (await stat(expandHome(p))).mtimeMs;
 			} catch {
 				stats[p] = null; // gone/unreadable
 			}
