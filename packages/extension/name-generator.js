@@ -24,7 +24,7 @@ Rules:
 
 const DEFAULTS = {
   apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions",
-  model: "accounts/fireworks/models/qwen3p7-plus",
+  model: "accounts/fireworks/models/qwen3p8-max",
 };
 
 /**

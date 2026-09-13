@@ -5,7 +5,7 @@ import { buildTitleRequest, generateSessionName, parseTitleResponse, resolveAuto
 describe("buildTitleRequest", () => {
   test("returns request body with correct model and params", () => {
     const req = buildTitleRequest("review PR 123");
-    assert.equal(req.model, "accounts/fireworks/models/qwen3p7-plus");
+    assert.equal(req.model, "accounts/fireworks/models/qwen3p8-max");
     assert.equal(req.temperature, 0);
     assert.equal(req.max_tokens, 50);
     assert.equal(req.reasoning_effort, "none");
@@ -154,7 +154,7 @@ describe("resolveAutoNameConfig", () => {
     assert.equal(cfg.enabled, true);
     assert.equal(cfg.apiKey, "fw-key");
     assert.equal(cfg.apiUrl, "https://api.fireworks.ai/inference/v1/chat/completions");
-    assert.equal(cfg.model, "accounts/fireworks/models/qwen3p7-plus");
+    assert.equal(cfg.model, "accounts/fireworks/models/qwen3p8-max");
   });
 
   test("PI_AUTO_NAME=0 disables", () => {

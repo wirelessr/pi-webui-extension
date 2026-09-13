@@ -98,7 +98,7 @@ data: {"type":"done","text":"...","messages":[...]}
 | `PI_AUTO_NAME` | `1` | extension | set `0` to disable auto session naming |
 | `PI_AUTO_NAME_API_KEY` | `$FIREWORKS_API_KEY` | extension | API key for the title model |
 | `PI_AUTO_NAME_API_URL` | Fireworks chat-completions URL | extension | OpenAI-compatible chat-completions endpoint |
-| `PI_AUTO_NAME_MODEL` | `accounts/fireworks/models/qwen3p7-plus` | extension | model id for title generation |
+| `PI_AUTO_NAME_MODEL` | `accounts/fireworks/models/qwen3p8-max` | extension | model id for title generation |
 
 ## Security
 
