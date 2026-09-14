@@ -7,7 +7,7 @@ describe("buildTitleRequest", () => {
     const req = buildTitleRequest("review PR 123");
     assert.equal(req.model, "accounts/fireworks/models/qwen3p8-max");
     assert.equal(req.temperature, 0);
-    assert.equal(req.max_tokens, 50);
+    assert.equal(req.max_tokens, 150);
     assert.equal(req.reasoning_effort, "none");
   });
 
@@ -65,6 +65,34 @@ describe("parseTitleResponse", () => {
   test("trims whitespace from title", () => {
     const data = { choices: [{ message: { content: "  OBS-12086 investigation  " } }] };
     assert.equal(parseTitleResponse(data), "OBS-12086 investigation");
+  });
+
+  test("strips a closed <think> block and returns the title after it", () => {
+    const data = {
+      choices: [{ message: { content: "<think>User wants to review a PR, I should keep it short.</think>service#107231 review" } }],
+    };
+    assert.equal(parseTitleResponse(data), "service#107231 review");
+  });
+
+  test("strips a closed <think> block with trailing whitespace/newlines", () => {
+    const data = {
+      choices: [{ message: { content: "<think>\nsome reasoning here\n</think>\n\nENG-12345 fix\n" } }],
+    };
+    assert.equal(parseTitleResponse(data), "ENG-12345 fix");
+  });
+
+  test("returns null when <think> is never closed (truncated by max_tokens)", () => {
+    const data = {
+      choices: [{ message: { content: "<think>The user's message only contains a URL with a vague verb like" } }],
+    };
+    assert.equal(parseTitleResponse(data), null);
+  });
+
+  test("returns null when content is only a closed <think> block (no title left)", () => {
+    const data = {
+      choices: [{ message: { content: "<think>reasoning only, forgot the title</think>" } }],
+    };
+    assert.equal(parseTitleResponse(data), null);
   });
 });
 

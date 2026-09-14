@@ -37,7 +37,10 @@ export function buildTitleRequest(text, opts = {}) {
   return {
     model: opts.model || DEFAULTS.model,
     temperature: 0,
-    max_tokens: 50,
+    // 150 (not 50) — some providers don't fully honor reasoning_effort:"none"
+    // and still emit a <think> block before the title; too small a budget
+    // truncates mid-thought and leaves no title at all.
+    max_tokens: 150,
     reasoning_effort: "none",
     messages: [
       { role: "system", content: TITLE_SYSTEM_PROMPT },
@@ -46,16 +49,31 @@ export function buildTitleRequest(text, opts = {}) {
   };
 }
 
+const THINK_BLOCK_RE = /<think>[\s\S]*?<\/think>/gi;
+
 /**
  * Parse the API response and extract the title.
  * Returns null for SKIP or empty responses.
+ *
+ * Some reasoning models (e.g. Qwen3 on Fireworks) leak chain-of-thought into
+ * `message.content` wrapped in <think>...</think>, even with
+ * reasoning_effort:"none" requested — that's a provider-side quirk, not
+ * something the request can fully suppress. We strip those blocks so the
+ * reasoning's first sentence never ends up as the session name. If the
+ * <think> block is never closed, max_tokens cut the response off mid-thought
+ * before any title was produced, so there's nothing usable to return.
+ *
  * @param {object} data — parsed JSON response from the chat completions API
  * @returns {string | null} the title, or null if should skip
  */
 export function parseTitleResponse(data) {
   const content = data?.choices?.[0]?.message?.content;
   if (!content) return null;
-  const trimmed = content.trim();
+
+  if (/<think>/i.test(content) && !/<\/think>/i.test(content)) return null;
+  const stripped = content.replace(THINK_BLOCK_RE, "");
+
+  const trimmed = stripped.trim();
   if (trimmed.length === 0) return null;
   if (trimmed.toUpperCase() === "SKIP") return null;
   return trimmed;
