@@ -5,7 +5,7 @@ import { buildTitleRequest, generateSessionName, parseTitleResponse, resolveAuto
 describe("buildTitleRequest", () => {
   test("returns request body with correct model and params", () => {
     const req = buildTitleRequest("review PR 123");
-    assert.equal(req.model, "accounts/fireworks/models/qwen3p8-max");
+    assert.equal(req.model, "accounts/fireworks/models/deepseek-v4p1-flash");
     assert.equal(req.temperature, 0);
     assert.equal(req.max_tokens, 150);
     assert.equal(req.reasoning_effort, "none");
@@ -93,6 +93,37 @@ describe("parseTitleResponse", () => {
       choices: [{ message: { content: "<think>reasoning only, forgot the title</think>" } }],
     };
     assert.equal(parseTitleResponse(data), null);
+  });
+
+  test("returns null when content is untagged narrated reasoning (no <think> at all)", () => {
+    const data = {
+      choices: [{ message: { content: "The user is asking for a formal scale/failure re-review, reading CONTEXT.md and checking various technical items in detail." } }],
+    };
+    assert.equal(parseTitleResponse(data), null);
+  });
+
+  test("returns null for a lone <tool_call> token with no title", () => {
+    const data = { choices: [{ message: { content: "<tool_call>" } }] };
+    assert.equal(parseTitleResponse(data), null);
+  });
+
+  test("returns null for narration starting with 'Let me'", () => {
+    const data = { choices: [{ message: { content: "Let me generate a short title for this." } }] };
+    assert.equal(parseTitleResponse(data), null);
+  });
+
+  test("returns null for a title-shaped response that is still too long", () => {
+    const data = {
+      choices: [{ message: { content: "a".repeat(61) } }],
+    };
+    assert.equal(parseTitleResponse(data), null);
+  });
+
+  test("accepts a short title right at the length boundary", () => {
+    const data = {
+      choices: [{ message: { content: "a".repeat(60) } }],
+    };
+    assert.equal(parseTitleResponse(data), "a".repeat(60));
   });
 });
 
@@ -182,7 +213,7 @@ describe("resolveAutoNameConfig", () => {
     assert.equal(cfg.enabled, true);
     assert.equal(cfg.apiKey, "fw-key");
     assert.equal(cfg.apiUrl, "https://api.fireworks.ai/inference/v1/chat/completions");
-    assert.equal(cfg.model, "accounts/fireworks/models/qwen3p8-max");
+    assert.equal(cfg.model, "accounts/fireworks/models/deepseek-v4p1-flash");
   });
 
   test("PI_AUTO_NAME=0 disables", () => {

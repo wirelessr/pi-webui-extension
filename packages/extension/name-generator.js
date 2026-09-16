@@ -24,7 +24,14 @@ Rules:
 
 const DEFAULTS = {
   apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions",
-  model: "accounts/fireworks/models/qwen3p8-max",
+  // qwen3p8-max deterministically ignores the "reply with ONLY the title"
+  // instruction on a meaningful fraction of prompts and dumps a full
+  // explanatory preamble as plain content (not even flagged via
+  // usage.completion_tokens_details.reasoning_tokens — it's not a reasoning
+  // leak, it's an instruction-following failure). deepseek-v4p1-flash held up
+  // clean across the same repro set, including deterministic re-runs of the
+  // input that broke qwen every time.
+  model: "accounts/fireworks/models/deepseek-v4p1-flash",
 };
 
 /**
@@ -51,17 +58,31 @@ export function buildTitleRequest(text, opts = {}) {
 
 const THINK_BLOCK_RE = /<think>[\s\S]*?<\/think>/gi;
 
+// A real title is 2-6 words per the system prompt; anything this long is the
+// model narrating instead of answering. Kept generous (well above any
+// legitimate title) to avoid false-positive rejections.
+const MAX_TITLE_LENGTH = 60;
+
+// Telltale phrasing/tokens some models emit instead of following the "reply
+// with ONLY the title" instruction — narrated reasoning or a stray tool-call
+// token with no title at all.
+const LEAK_MARKERS_RE = /<tool_call|<\/tool_call|^(the user|i'll|let me|looking at)\b/i;
+
 /**
  * Parse the API response and extract the title.
- * Returns null for SKIP or empty responses.
+ * Returns null for SKIP, empty, or leaked responses that should fall back
+ * to the prompt-prefix naming instead.
  *
- * Some reasoning models (e.g. Qwen3 on Fireworks) leak chain-of-thought into
- * `message.content` wrapped in <think>...</think>, even with
- * reasoning_effort:"none" requested — that's a provider-side quirk, not
- * something the request can fully suppress. We strip those blocks so the
- * reasoning's first sentence never ends up as the session name. If the
- * <think> block is never closed, max_tokens cut the response off mid-thought
- * before any title was produced, so there's nothing usable to return.
+ * Some models leak chain-of-thought or narration into `message.content`
+ * even with reasoning_effort:"none" requested — that's a provider/model
+ * quirk, not something the request can fully suppress. Two independent
+ * defenses:
+ *   1. Strip <think>...</think> blocks when the model does tag its
+ *      reasoning (if the block is never closed, max_tokens cut the
+ *      response off mid-thought before any title was produced).
+ *   2. Reject anything that doesn't look like a short title at all —
+ *      covers models that narrate in plain, untagged prose instead of
+ *      emitting a <think> block.
  *
  * @param {object} data — parsed JSON response from the chat completions API
  * @returns {string | null} the title, or null if should skip
@@ -76,6 +97,8 @@ export function parseTitleResponse(data) {
   const trimmed = stripped.trim();
   if (trimmed.length === 0) return null;
   if (trimmed.toUpperCase() === "SKIP") return null;
+  if (trimmed.length > MAX_TITLE_LENGTH) return null;
+  if (LEAK_MARKERS_RE.test(trimmed)) return null;
   return trimmed;
 }
 
