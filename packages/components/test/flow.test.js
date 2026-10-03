@@ -12,6 +12,7 @@ function mockChat(overrides = {}) {
     handleEvent: [],
     showError: [],
     loadHistory: [],
+    loadHistoryStart: [],
   };
   return {
     calls,
@@ -20,7 +21,7 @@ function mockChat(overrides = {}) {
     finishAssistantMessage: () => calls.finishAssistantMessage++,
     handleEvent: (event) => calls.handleEvent.push(event),
     showError: (msg) => calls.showError.push(msg),
-    loadHistory: (history) => calls.loadHistory.push(history),
+    loadHistory: (history, start) => calls.loadHistory.push(history) && calls.loadHistoryStart.push(start),
     ...overrides,
   };
 }
@@ -198,6 +199,16 @@ describe("doSendPrompt — core send flow", () => {
     assert.equal(result.completed, false);
     assert.equal(result.historyReloaded, true);
     assert.equal(chat.calls.loadHistory.length, 1);
+  });
+
+  test("history reload forwards the page start so chat can offer earlier messages", async () => {
+    const chat = mockChat();
+    await doSendPrompt(makeOpts({
+      chat,
+      sendPromptStreamFn: async () => {},
+      getHistoryFn: async () => ({ history: [{ role: "user", text: "hi" }], start: 42 }),
+    }));
+    assert.deepEqual(chat.calls.loadHistoryStart, [42]);
   });
 
   test("no done event + empty history → no reload", async () => {
@@ -400,6 +411,20 @@ describe("doInit — initialization sequence", () => {
     assert.equal(order[4], "autoResize");
     assert.equal(order[5], "history");
     assert.equal(order[6], "loadHistory");
+  });
+
+  test("passes the history page start to loadHistoryFn", async () => {
+    let got;
+    await doInit({
+      getStatusFn: async () => ({ port: 7331, pid: 1, sessionName: "test" }),
+      getHistoryFn: async () => ({ history: [{ role: "user", text: "hi" }], start: 7 }),
+      loadCommandsFn: async () => {},
+      loadSessionsFn: () => {},
+      loadHistoryFn: (_history, start) => { got = start; },
+      autoResizeFn: () => {},
+      onStatusFn: () => {},
+    });
+    assert.equal(got, 7);
   });
 
   test("status failure does not block commands/sessions/history", async () => {

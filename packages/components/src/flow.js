@@ -87,7 +87,7 @@ export async function doSendPrompt(opts) {
     try {
       const data = await getHistoryFn();
       if (data.history && data.history.length > 0) {
-        chat.loadHistory(data.history);
+        chat.loadHistory(data.history, data.start);
         historyReloaded = true;
       }
     } catch {
@@ -365,7 +365,7 @@ export function syncExpandButtonState({ toolsExpanded, countAllFn, countExpanded
  * @param {function} opts.getHistoryFn — () => Promise<{history: Array}>
  * @param {function} opts.loadCommandsFn — () => Promise<void>
  * @param {function} opts.loadSessionsFn — () => Promise<void>
- * @param {function} opts.loadHistoryFn — (history) => void
+ * @param {function} opts.loadHistoryFn — (history, start) => void
  * @param {function} opts.autoResizeFn — () => void
  * @param {function} opts.onStatusFn — (status) => void (update port/pid/name/stats display)
  * @returns {Promise<{statusLoaded: boolean, historyLoaded: boolean, commandsLoaded: boolean, sessionsLoaded: boolean}>}
@@ -416,7 +416,7 @@ export async function doInit(opts) {
   try {
     const data = await getHistoryFn();
     if (data.history && data.history.length > 0) {
-      loadHistoryFn(data.history);
+      loadHistoryFn(data.history, data.start);
       result.historyLoaded = true;
     }
   } catch {

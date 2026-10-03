@@ -181,6 +181,20 @@ describe("pollUntil", () => {
   });
 });
 
+describe("getHistory options", () => {
+  test("encodes limit, before and align as query params", async () => {
+    const fetchFn = mockFetch({ jsonData: { history: [] } });
+    await getHistory(fetchFn, { limit: 200, before: 40, align: "turn" });
+    assert.equal(fetchFn.calls[0].url, "/api/history?limit=200&before=40&align=turn");
+  });
+
+  test("before=0 is still sent", async () => {
+    const fetchFn = mockFetch({ jsonData: { history: [] } });
+    await getHistory(fetchFn, { limit: 5, before: 0 });
+    assert.equal(fetchFn.calls[0].url, "/api/history?limit=5&before=0");
+  });
+});
+
 // ── GET wrappers ──────────────────────────────────────
 
 describe("GET wrappers", () => {

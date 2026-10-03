@@ -245,6 +245,20 @@ test("GET /api/history returns paginated history", async () => {
 	assert.strictEqual(body.history[0].text, "hi");
 });
 
+test("GET /api/history forwards before/align and returns start", async () => {
+	let seen;
+	const app = createBridgeApp(createMockDeps({
+		readSessionHistory: async (_file, limit, offset, opts) => {
+			seen = { limit, offset, opts };
+			return { history: [], total: 9, start: 4 };
+		},
+	}));
+	const res = await app.fetch(req("/api/history?limit=5&before=7&align=turn"));
+	assert.strictEqual(res.status, 200);
+	assert.strictEqual((await res.json()).start, 4);
+	assert.deepStrictEqual(seen, { limit: 5, offset: 0, opts: { align: "turn", before: 7 } });
+});
+
 test("GET /api/file serves an allowlisted file the agent wrote", async () => {
 	const filePath = join(tmpdir(), `pi-file-route-${process.pid}.md`);
 	writeFileSync(filePath, "# hello\n\ndisk content", "utf8");

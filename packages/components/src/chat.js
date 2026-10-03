@@ -15,7 +15,7 @@ import { createStreamAccumulator } from "./stream-accumulator.js";
 import { doCopy } from "./ui-behaviors.js";
 import { escapeHtml, formatTokens } from "./utils.js";
 
-export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null, overlays = null }) {
+export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, isNodeExpanded = null, logFn = () => {}, getFileContentFn = null, statFilesFn = null, overlays = null, loadEarlierFn = null }) {
   // Overlay exclusivity + transcript hide/restore live in the manager. Apps
   // pass the shared instance (so tree/model panels join the same exclusivity
   // group); standalone use gets a private one.
@@ -143,7 +143,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     }
   }
 
-  function addMessage(role, text) {
+  function addMessage(role, text, target = $messages) {
     if (role === "user") {
       lastUserText = text;
       const skill = parseSkillBlock(text);
@@ -152,26 +152,26 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
         const skillEl = document.createElement("div");
         skillEl.className = "message skill-invocation";
         skillEl.appendChild(createCollapsibleBlock("skill", skill.name, skill.content));
-        $messages.appendChild(skillEl);
+        target.appendChild(skillEl);
         // User args: separate right-aligned user bubble
         if (skill.userMessage) {
           const userEl = document.createElement("div");
           userEl.className = "message user";
           userEl.innerHTML = renderContent("user", skill.userMessage);
-          $messages.appendChild(userEl);
+          target.appendChild(userEl);
         }
-        forceScrollToBottom();
+        if (target === $messages) forceScrollToBottom();
         return;
       }
     }
     const el = document.createElement("div");
     el.className = `message ${role}`;
     el.innerHTML = renderContent(role, text);
-    $messages.appendChild(el);
+    target.appendChild(el);
     // A user message is a fresh send: jump to it (re-engage follow even if the
     // user had scrolled up). Assistant/system content is followed by the
     // observer if engaged — no explicit scroll here.
-    if (role === "user") forceScrollToBottom();
+    if (role === "user" && target === $messages) forceScrollToBottom();
   }
 
   function formatUsage(usage) {
@@ -976,9 +976,10 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
     }
   }
 
-  function loadHistory(history) {
-    overlayMgr.closeAll(); // transcript is being replaced — no overlay may outlive it
-    $messages.innerHTML = "";
+  // Render history entries into `out` (a fragment or any container). Pages are
+  // turn-aligned by the server, so each call is self-contained: a tool result
+  // only ever pairs with a tool call from the same call.
+  function renderHistory(history, out) {
     // Group each turn's assistant messages + tool results into ONE bubble, so
     // reload matches the live view (one bubble per turn, blocks interleaved).
     let turnEl = null;
@@ -994,14 +995,14 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       turnEl = document.createElement("div");
       turnEl.className = "message assistant";
       turnPaths = [];
-      $messages.appendChild(turnEl);
+      out.appendChild(turnEl);
       return turnEl;
     };
 
     for (const entry of history) {
       if (entry.role === "user") {
         closeTurn();
-        addMessage("user", entry.text);
+        addMessage("user", entry.text, out);
       } else if (entry.role === "assistant") {
         const parts = entryParts(entry);
         if (parts.length === 0) continue;
@@ -1026,9 +1027,9 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
           content.innerHTML = renderMarkdown(entry.text.split("\n").slice(1).join("\n").trim());
           block.appendChild(header);
           block.appendChild(content);
-          $messages.appendChild(block);
+          out.appendChild(block);
         } else {
-          addMessage("system", entry.text);
+          addMessage("system", entry.text, out);
         }
       } else if (entry.role === "toolResult") {
         if (entry.subagentDetails) {
@@ -1047,7 +1048,7 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
                 turnEl.appendChild(saBlock);
               }
             } else {
-              $messages.appendChild(saBlock);
+              out.appendChild(saBlock);
             }
           }
         } else if (entry.toolCallId && entry.text && turnEl) {
@@ -1069,10 +1070,76 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       }
     }
     closeTurn();
+  }
+
+  // Bumped on every full transcript replace so an in-flight "load earlier"
+  // (or a session switch mid-fetch) can tell its result is stale.
+  let historyGen = 0;
+  let earlierStart = 0;
+  let earlierLoadingGen = -1;
+  let $earlier = null;
+
+  // `start` = absolute index of history[0] in the full transcript (0 or
+  // omitted = nothing earlier). When > 0 a "load earlier" button tops the view.
+  function loadHistory(history, start = 0) {
+    overlayMgr.closeAll(); // transcript is being replaced — no overlay may outlive it
+    historyGen++;
+    $messages.innerHTML = "";
+    $earlier = null;
+    const out = document.createDocumentFragment();
+    renderHistory(history, out);
+    $messages.appendChild(out);
+    setEarlierBanner(start);
     // The transcript was fully rebuilt — land at the bottom and re-engage
     // follow regardless of any prior scroll position.
     forceScrollToBottom();
     surfaceWatchedChanges(); // fire-and-forget: re-flag any watched file changed since last view
+  }
+
+  function setEarlierBanner(start) {
+    earlierStart = start > 0 ? start : 0;
+    $earlier?.remove();
+    $earlier = null;
+    if (earlierStart === 0 || !loadEarlierFn) return;
+    $earlier = document.createElement("button");
+    $earlier.type = "button";
+    $earlier.className = "load-earlier";
+    $earlier.textContent = `Load earlier messages (${earlierStart} more)`;
+    $earlier.addEventListener("click", loadEarlier);
+    $messages.insertBefore($earlier, $messages.firstChild);
+  }
+
+  async function loadEarlier() {
+    if (!loadEarlierFn || earlierStart === 0 || earlierLoadingGen === historyGen) return;
+    const gen = historyGen;
+    const btn = $earlier;
+    earlierLoadingGen = gen;
+    btn.disabled = true;
+    btn.textContent = "Loading...";
+    try {
+      const data = await loadEarlierFn(earlierStart);
+      if (gen !== historyGen) return;
+      const out = document.createDocumentFragment();
+      // Older entries must not overwrite the "last user text" the live-echo
+      // dedup compares against.
+      const savedUserText = lastUserText;
+      renderHistory(data.history || [], out);
+      lastUserText = savedUserText;
+      // Keep the viewport anchored on what the user was reading.
+      const prevHeight = $chat.scrollHeight;
+      const prevTop = $chat.scrollTop;
+      $messages.insertBefore(out, btn.nextSibling);
+      setEarlierBanner(data.start || 0);
+      $chat.scrollTop = prevTop + ($chat.scrollHeight - prevHeight);
+    } catch (err) {
+      logFn("warn", "loadEarlier failed", { message: err?.message });
+      if (gen === historyGen) {
+        btn.disabled = false;
+        btn.textContent = `Load earlier messages (${earlierStart} more) - retry`;
+      }
+    } finally {
+      earlierLoadingGen = -1;
+    }
   }
 
   function expandAllTools() {

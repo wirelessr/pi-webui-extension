@@ -138,6 +138,7 @@ const HistoryEntry = z.object({
 const HistoryResponse = z.object({
 	history: z.array(HistoryEntry),
 	total: z.number(),
+	start: z.number().optional().openapi({ description: "Absolute index of the first returned entry (0 = no earlier entries)" }),
 }).openapi("HistoryResponse");
 
 const PromptBody = z.object({
@@ -283,6 +284,8 @@ const historyRoute = createRoute({
 		query: z.object({
 			limit: z.string().optional().openapi({ description: "Max entries (0 = all)" }),
 			offset: z.string().optional().openapi({ description: "Skip from end (0 = most recent)" }),
+			before: z.string().optional().openapi({ description: "Absolute index; the page ends just before it (overrides offset)" }),
+			align: z.string().optional().openapi({ description: "\"turn\" = start the page at a user message" }),
 		}),
 	},
 	responses: {
@@ -662,9 +665,12 @@ export function createBridgeApp(deps) {
 	app.openapi(historyRoute, async (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "0", 10);
 		const offset = Number.parseInt(c.req.query("offset") || "0", 10);
+		const beforeRaw = Number.parseInt(c.req.query("before") || "", 10);
+		const opts = { align: c.req.query("align") };
+		if (Number.isInteger(beforeRaw)) opts.before = beforeRaw;
 		try {
-			const { history, total } = await deps.readSessionHistory(deps.getSessionFile(), limit, offset);
-			return c.json({ history, total });
+			const { history, total, start } = await deps.readSessionHistory(deps.getSessionFile(), limit, offset, opts);
+			return c.json({ history, total, start });
 		} catch (err) {
 			return c.json({ error: err.message }, 500);
 		}

@@ -334,6 +334,53 @@ describe("paginateHistory", () => {
     assert.equal(result.history.length, 10);
   });
 
+  test("reports the absolute start index of the page", () => {
+    assert.equal(paginateHistory(items, 0, 0).start, 0);
+    assert.equal(paginateHistory(items, 5, 0).start, 5);
+    assert.equal(paginateHistory(items, 20, 0).start, 0);
+  });
+
+  test("before ends the page just before the given absolute index", () => {
+    const result = paginateHistory(items, 3, 0, { before: 6 });
+    assert.deepEqual(result.history.map((h) => h.id), [3, 4, 5]);
+    assert.equal(result.start, 3);
+  });
+
+  test("before is clamped to [0, total]", () => {
+    assert.deepEqual(paginateHistory(items, 3, 0, { before: 99 }).history.map((h) => h.id), [7, 8, 9]);
+    assert.deepEqual(paginateHistory(items, 3, 0, { before: -4 }).history, []);
+  });
+
+  describe("align=turn", () => {
+    const roles = ["user", "assistant", "toolResult", "assistant", "user", "assistant", "toolResult", "assistant"];
+    const turns = roles.map((role, i) => ({ role, id: i }));
+
+    test("moves a mid-turn start back to the owning user message", () => {
+      const result = paginateHistory(turns, 3, 0, { align: "turn" });
+      assert.equal(result.start, 4);
+      assert.deepEqual(result.history.map((h) => h.id), [4, 5, 6, 7]);
+    });
+
+    test("a start already on a user message is unchanged", () => {
+      const result = paginateHistory(turns, 4, 0, { align: "turn" });
+      assert.equal(result.start, 4);
+    });
+
+    test("falls back to 0 when no user message precedes the page", () => {
+      const noUser = turns.slice(1, 4);
+      const result = paginateHistory(noUser, 2, 0, { align: "turn" });
+      assert.equal(result.start, 0);
+      assert.equal(result.history.length, noUser.length);
+    });
+
+    test("pages chain without gaps or overlap via before=start", () => {
+      const first = paginateHistory(turns, 3, 0, { align: "turn" });
+      const second = paginateHistory(turns, 3, 0, { align: "turn", before: first.start });
+      assert.equal(second.start, 0);
+      assert.deepEqual([...second.history, ...first.history].map((h) => h.id), turns.map((h) => h.id));
+    });
+  });
+
   test("offset exceeds total returns empty", () => {
     const result = paginateHistory(items, 5, 20);
     assert.equal(result.history.length, 0);

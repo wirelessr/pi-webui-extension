@@ -11,7 +11,7 @@
  * whose tab you've since switched away from.
  */
 
-import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, getModels, getStatus, getTree, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles, steerAgent } from "/api.js";
+import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, getModels, getStatus, getTree, HISTORY_PAGE_SIZE, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles, steerAgent } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
@@ -98,7 +98,11 @@ import { formatStats } from "/utils.js";
     // the active session's bridge.log — the hub proxies /api/* per session.
     logFn: (level, message, data) => clientLog(level, message, data, scopedFetch(activeSessionId)),
     overlays,
+    // chat drops the result if the transcript was replaced (session switch) mid-fetch.
+    loadEarlierFn: (before) => getHistory(scopedFetch(activeSessionId), { limit: HISTORY_PAGE_SIZE, before, align: "turn" }),
   });
+  // Render loads fetch only the latest turn-aligned page.
+  const getHistoryPage = (f) => getHistory(f, { limit: HISTORY_PAGE_SIZE, align: "turn" });
   let treeNavStartedAt = 0;
   const treeView = createTreeView({
     $chat,
@@ -131,9 +135,9 @@ import { formatStats } from "/utils.js";
       }
       if (id !== activeSessionId) return;
       try {
-        const data = await getHistory(scopedFetch(id));
+        const data = await getHistoryPage(scopedFetch(id));
         if (id !== activeSessionId) return;
-        chat.loadHistory(data.history || []);
+        chat.loadHistory(data.history || [], data.start);
         chat.addMessage("system", "Switched branch");
         updateHeader(await getStatus(scopedFetch(id)));
       } catch {
@@ -384,9 +388,9 @@ import { formatStats } from "/utils.js";
             // Multi-loop turn OR a steer split the stream: the live DOM may
             // double up (loadHistory + replay both cover the steer's persisted
             // sub-messages). Rebuild from the canonical history.
-            getHistory(scopedFetch(sessionId)).then((data) => {
+            getHistoryPage(scopedFetch(sessionId)).then((data) => {
               if (sessionId === activeSessionId && data.history?.length) {
-                chat.loadHistory(data.history);
+                chat.loadHistory(data.history, data.start);
                 activeInterrupted = isTranscriptInterrupted(data.history);
               }
             }).catch(() => {});
@@ -433,12 +437,12 @@ import { formatStats } from "/utils.js";
 
     await doInit({
       getStatusFn: () => getStatus(f),
-      getHistoryFn: () => getHistory(f),
+      getHistoryFn: () => getHistoryPage(f),
       loadCommandsFn: () => commandsView.load(),
       loadSessionsFn: () => {},
-      loadHistoryFn: (history) => {
+      loadHistoryFn: (history, start) => {
         if (sessionId !== activeSessionId) return;
-        chat.loadHistory(history);
+        chat.loadHistory(history, start);
         activeInterrupted = isTranscriptInterrupted(history);
         if (!activeStreaming) setBusy(false); // refresh the pill (idle vs interrupted)
       },
@@ -487,7 +491,8 @@ import { formatStats } from "/utils.js";
   // call this so the pill reflects a cut-off turn.
   async function refreshActiveInterrupted(id) {
     try {
-      const data = await getHistory(scopedFetch(id));
+      // Only the last entry decides "interrupted" — don't pull the transcript.
+      const data = await getHistory(scopedFetch(id), { limit: 1 });
       if (id !== activeSessionId) return;
       activeInterrupted = isTranscriptInterrupted(data.history || []);
       if (!activeStreaming) setBusy(false);
@@ -583,7 +588,7 @@ import { formatStats } from "/utils.js";
         if (event.type === "user_message" && typeof event.text === "string") removePendingSteerOnEcho(id, event.text);
         onEvent(event);
       }, streamFetch),
-      getHistoryFn: () => getHistory(f),
+      getHistoryFn: () => getHistoryPage(f),
       getStatusFn: () => getStatus(f),
       onCompleteFn: () => notifyActiveDone(activeName()),
       onStatusUpdateFn: (status) => { if (id === activeSessionId) updateHeader(status); },

@@ -183,19 +183,29 @@ export function parseHistoryData(data) {
  * Apply cursor-based pagination to a history array.
  * offset counts from the tail: offset=0 → last `limit` items,
  * offset=50 → items[-(limit+50):-50]. limit=0 → all.
+ * `before` (absolute index) overrides offset: the page ends just before it, so
+ * a client paging backwards is immune to entries appended since its last fetch.
+ * `align` ("turn") moves the page start back to the nearest user message so a
+ * page never begins mid-turn (an orphaned toolResult can't be paired by the
+ * renderer). The page may therefore exceed `limit`.
  * @param {Array} allHistory — full history array
  * @param {number} limit — max items (0 = all)
  * @param {number} offset — items to skip from the end
- * @returns {{history: Array, total: number}}
+ * @param {{before?: number, align?: string}} [opts]
+ * @returns {{history: Array, total: number, start: number}} start = absolute
+ *   index of the first returned item (0 means nothing earlier exists)
  */
-export function paginateHistory(allHistory, limit = 0, offset = 0) {
+export function paginateHistory(allHistory, limit = 0, offset = 0, opts = {}) {
   const total = allHistory.length;
-  if (limit > 0) {
-    const start = Math.max(0, total - offset - limit);
-    const end = Math.max(0, total - offset);
-    return { history: allHistory.slice(start, end), total };
+  if (limit <= 0) return { history: allHistory, total, start: 0 };
+  const end = Number.isInteger(opts.before)
+    ? Math.min(total, Math.max(0, opts.before))
+    : Math.max(0, total - offset);
+  let start = Math.max(0, end - limit);
+  if (opts.align === "turn") {
+    while (start > 0 && allHistory[start]?.role !== "user") start--;
   }
-  return { history: allHistory, total };
+  return { history: allHistory.slice(start, end), total, start };
 }
 
 /**

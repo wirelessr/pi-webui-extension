@@ -856,13 +856,13 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 
-	async function readSessionHistory(filePath: string | undefined, limit: number = 0, offset: number = 0): Promise<{ history: any[]; total: number }> {
+	async function readSessionHistory(filePath: string | undefined, limit: number = 0, offset: number = 0, opts: { before?: number; align?: string } = {}): Promise<{ history: any[]; total: number; start?: number }> {
 		// Prefer the active branch: sessions are trees (fork / tree navigation),
 		// and a linear file read would interleave entries from every branch.
 		try {
 			const branch = sessionCtx?.sessionManager?.getBranch?.();
 			if (Array.isArray(branch)) {
-				return helpers.paginateHistory(helpers.parseHistoryEntries(branch), limit, offset);
+				return helpers.paginateHistory(helpers.parseHistoryEntries(branch), limit, offset, opts);
 			}
 		} catch {
 			// Fall through to the file read
@@ -870,7 +870,7 @@ export default function (pi: ExtensionAPI) {
 		if (!filePath || !existsSync(filePath)) return { history: [], total: 0 };
 		const data = await readFile(filePath, "utf-8");
 		const allHistory = helpers.parseHistoryData(data);
-		return helpers.paginateHistory(allHistory, limit, offset);
+		return helpers.paginateHistory(allHistory, limit, offset, opts);
 	}
 
 	function listAllSessions(): any[] {

@@ -11,7 +11,7 @@
  *   - mobile-nav: bottom tab bar for mobile
  */
 
-import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, navigateTree, navUrl, pollUntil, sendPromptStream, setModel, statFiles, steerAgent } from "./api.js";
+import { abortAgent, attachStream, clientLog, executeCommand, getFile, getHistory, getModels, getStatus, getTree, HISTORY_PAGE_SIZE, navigateTree, navUrl, pollUntil, sendPromptStream, setModel, statFiles, steerAgent } from "./api.js";
 import { createChat } from "./chat.js";
 import { createCommandsView } from "./commands.js";
 import { doInit, doModelCommand, doReattach, doSelectCommand, doSendPrompt, doStop, parseModelCommand, syncExpandButtonState } from "./flow.js";
@@ -62,7 +62,12 @@ import { formatStats } from "./utils.js";
 
   const overlays = createOverlayManager({ $chat, $messages });
 
-  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog, getFileContentFn: (path) => getFile(path), statFilesFn: (paths) => statFiles(paths), overlays });
+  const chat = createChat({ $messages, $chat, $scrollBottom, isToolsExpanded: () => toolsExpanded, logFn: clientLog, getFileContentFn: (path) => getFile(path), statFilesFn: (paths) => statFiles(paths), overlays,
+    loadEarlierFn: (before) => getHistory(undefined, { limit: HISTORY_PAGE_SIZE, before, align: "turn" }) });
+
+  // Render loads fetch only the latest turn-aligned page; older entries come
+  // on demand via chat's "load earlier" button.
+  const getHistoryPage = () => getHistory(undefined, { limit: HISTORY_PAGE_SIZE, align: "turn" });
 
   let treeNavStartedAt = 0;
   const treeView = createTreeView({
@@ -84,8 +89,8 @@ import { formatStats } from "./utils.js";
         }, 1000, 20);
       }
       try {
-        const data = await getHistory();
-        chat.loadHistory(data.history || []);
+        const data = await getHistoryPage();
+        chat.loadHistory(data.history || [], data.start);
         chat.addMessage("system", "Switched branch");
         updateStats(await getStatus());
       } catch {
@@ -332,7 +337,7 @@ import { formatStats } from "./utils.js";
           if (event.type === "user_message" && typeof event.text === "string") removePendingSteerOnEcho(event.text);
           onEvent(event);
         }),
-        getHistoryFn: getHistory,
+        getHistoryFn: getHistoryPage,
         getStatusFn: getStatus,
         clientLogFn: clientLog,
         onCompleteFn: notifyAgentDone,
@@ -488,9 +493,9 @@ import { formatStats } from "./utils.js";
       setBusy(false);
       if (event.type === "done") {
         notifyAgentDone();
-        getHistory().then((data) => {
+        getHistoryPage().then((data) => {
           if (data.history && data.history.length > 0) {
-            chat.loadHistory(data.history);
+            chat.loadHistory(data.history, data.start);
           }
         }).catch(() => {});
       }
@@ -502,11 +507,11 @@ import { formatStats } from "./utils.js";
   async function init() {
     await doInit({
       getStatusFn: getStatus,
-      getHistoryFn: getHistory,
+      getHistoryFn: getHistoryPage,
       loadCommandsFn: () => commandsView.load(),
       loadSessionsFn: () => sessionsView.load(),
-      loadHistoryFn: (history) => {
-        chat.loadHistory(history);
+      loadHistoryFn: (history, start) => {
+        chat.loadHistory(history, start);
         syncExpandButtonState({
           toolsExpanded,
           countAllFn: () => $messages.querySelectorAll(".tool-block, .thinking-block").length,

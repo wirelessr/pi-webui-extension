@@ -98,8 +98,23 @@ export async function getCommands(fetchFn = fetch) {
   return res.json();
 }
 
-export async function getHistory(fetchFn = fetch) {
-  const res = await fetchFn("/api/history");
+// Entries fetched per transcript page. The server extends a page back to the
+// owning user message, so a page can exceed this by up to one turn.
+export const HISTORY_PAGE_SIZE = 200;
+
+/**
+ * @param {Function} [fetchFn]
+ * @param {{limit?: number, before?: number, align?: string}} [opts] — no opts =
+ *   the whole transcript. With limit, the response carries `start` (absolute
+ *   index of the first entry; 0 = nothing earlier) to page back with `before`.
+ */
+export async function getHistory(fetchFn = fetch, { limit, before, align } = {}) {
+  const q = new URLSearchParams();
+  if (limit) q.set("limit", String(limit));
+  if (before != null) q.set("before", String(before));
+  if (align) q.set("align", align);
+  const qs = q.toString();
+  const res = await fetchFn(qs ? `/api/history?${qs}` : "/api/history");
   return res.json();
 }
 
