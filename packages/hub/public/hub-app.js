@@ -1219,6 +1219,11 @@ import { formatStats } from "/utils.js";
       } catch {
         return;
       }
+      // An idle session has no steer left in pi's queue (pi drains steers
+      // before ending the turn), so any chip still pending missed its echo:
+      // the steer was injected while this session wasn't being viewed, and a
+      // later attach only replays the buffered done, not the user_message.
+      if (msg.type === "session_done") clearPendingSteers(msg.sessionId);
       if (msg.type === "session_done" && msg.sessionId !== activeSessionId) {
         fireNotification(msg.sessionName || msg.sessionId.slice(0, 8));
         loadSessions(); // refresh busy badges
