@@ -158,6 +158,7 @@ const PromptResponse = z.object({
 
 const SteerBody = z.object({
 	message: z.string(),
+	mode: z.enum(["steer", "followUp"]).optional(),
 }).openapi("SteerBody");
 
 const ErrorResponse = z.object({
@@ -398,7 +399,7 @@ const abortRoute = createRoute({
 const steerRoute = createRoute({
 	method: "post",
 	path: "/api/steer",
-	summary: "Inject a user message into the running turn (mid-turn steer)",
+	summary: "Inject a user message into the running turn (steer) or queue it as a follow-up",
 	request: {
 		body: { content: { "application/json": { schema: SteerBody } } },
 	},
@@ -900,16 +901,19 @@ export function createBridgeApp(deps) {
 	});
 
 	app.openapi(steerRoute, async (c) => {
-		let message;
+		let message, mode;
 		try {
-			message = (await c.req.json()).message;
+			({ message, mode = "steer" } = await c.req.json());
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 		if (typeof message !== "string" || !message.trim()) {
 			return c.json({ error: "Missing or invalid message" }, 400);
 		}
-		const result = deps.steer(message);
+		if (mode !== "steer" && mode !== "followUp") {
+			return c.json({ error: "Invalid mode" }, 400);
+		}
+		const result = deps.steer(message, mode);
 		if (!result.ok) return c.json({ error: result.error || "Steer failed" }, 500);
 		return c.json({ ok: true });
 	});

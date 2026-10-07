@@ -19,6 +19,7 @@ import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { createModelView } from "./model-view.js";
 import { createOverlayManager } from "./overlay-manager.js";
+import { pendingCaption, pendingDrainIndex } from "./pending-steers.js";
 import { initResize } from "./resize.js";
 import { createSessionsView } from "./sessions.js";
 import { createTreeView } from "./tree-view.js";
@@ -227,9 +228,10 @@ import { formatStats } from "./utils.js";
 
   let sending = false;
 
-  // Optimistic pending-steer list: messages steered into the running turn but
-  // not yet injected by pi (no readable steering queue exists). Added on send,
-  // removed when the message's own user_message echo arrives. No persistence.
+  // Optimistic pending list: { text, kind } entries (kind "steer" | "followUp")
+  // sent into the running turn but not yet injected by pi (no readable queue
+  // exists). Added on send, removed when the message's own user_message echo
+  // arrives. No persistence.
   const $queueChips = document.getElementById("queue-chips");
   let pendingSteers = [];
 
@@ -241,16 +243,22 @@ import { formatStats } from "./utils.js";
     const header = document.createElement("div");
     header.className = "queue-header";
     const caption = document.createElement("span");
-    caption.textContent = pendingSteers.length === 1 ? "1 steer waiting to inject" : `${pendingSteers.length} steers waiting to inject`;
+    caption.textContent = pendingCaption(pendingSteers);
     const clear = document.createElement("button");
     clear.className = "queue-resume"; clear.textContent = "Clear";
     clear.title = "Stop showing pending steers (already-injected ones still land)";
     clear.addEventListener("click", () => { pendingSteers = []; renderPendingSteers(); });
     header.appendChild(caption); header.appendChild(clear);
     $queueChips.appendChild(header);
-    for (const text of pendingSteers) {
+    for (const { text, kind } of pendingSteers) {
       const chip = document.createElement("div");
       chip.className = "queue-chip";
+      if (kind === "followUp") {
+        const tag = document.createElement("span");
+        tag.className = "queue-chip-kind";
+        tag.textContent = "follow-up";
+        chip.appendChild(tag);
+      }
       const label = document.createElement("span");
       label.className = "queue-chip-text";
       label.textContent = text; label.title = text;
@@ -259,27 +267,23 @@ import { formatStats } from "./utils.js";
     }
   }
 
-  function addPendingSteer(text) { pendingSteers.push(text); renderPendingSteers(); }
+  function addPendingSteer(text, kind) { pendingSteers.push({ text, kind }); renderPendingSteers(); }
   function removePendingSteerOnEcho(text) {
     if (pendingSteers.length === 0) return;
-    // Exact match, else drop the oldest: the bridge injects expandInput(message)
-    // (skill/template expansion), so the echo can differ from the raw text we
-    // stored — draining the oldest keeps a steered skill command's chip from
-    // leaking. FIFO-safe: pending is only non-empty mid-turn, so one echo ==
-    // one steer drain.
-    let i = pendingSteers.indexOf(text);
-    if (i === -1) i = 0;
-    pendingSteers.splice(i, 1);
+    // See pendingDrainIndex for the match order. FIFO-safe: pending is only
+    // non-empty mid-turn, so one echo == one drain.
+    pendingSteers.splice(pendingDrainIndex(pendingSteers, text), 1);
     renderPendingSteers();
   }
-  function removePendingSteerByText(text) {
-    const i = pendingSteers.lastIndexOf(text); // send failed: drop the one we just added
+  function removePendingSteerByText(text, kind) {
+    // Send failed: drop the newest match (the one we just added).
+    const i = pendingSteers.findLastIndex((p) => p.text === text && p.kind === kind);
     if (i === -1) return;
     pendingSteers.splice(i, 1);
     renderPendingSteers();
   }
 
-  async function handleSend(text) {
+  async function handleSend(text, { followUp = false } = {}) {
     if (text.trim() === "/tree") {
       treeView.open();
       return;
@@ -306,10 +310,12 @@ import { formatStats } from "./utils.js";
     // prompt stream, or the reattach), so rendering has a single owner and the
     // DOM order matches a later history reload. The pending list (added now,
     // removed on echo) shows what's waiting to inject — pi has no readable queue.
+    // Option/Cmd/Ctrl+Enter queues a pi follow-up instead, same endpoint + echo.
     if (sending || $busyIndicator.classList.contains("busy")) {
-      addPendingSteer(text);
+      const kind = followUp ? "followUp" : "steer";
+      addPendingSteer(text, kind);
       try {
-        await steerAgent(text);
+        await steerAgent(text, fetch, kind);
         // Idle-race: if the turn ended just before this landed, the bridge runs
         // it as a FRESH turn but (unlike a prompt send) adds no viewer for us.
         // When we're not already holding a stream, reattach so that new turn
@@ -318,8 +324,8 @@ import { formatStats } from "./utils.js";
         // stream is already feeding us; tryReattach no-ops while sending).
         if (!sending) tryReattach();
       } catch (err) {
-        removePendingSteerByText(text); // send failed → never entered pi's queue
-        chat.showError(`Steer failed: ${err.message}`);
+        removePendingSteerByText(text, kind); // send failed → never entered pi's queue
+        chat.showError(`${followUp ? "Follow-up" : "Steer"} failed: ${err.message}`);
       }
       return;
     }

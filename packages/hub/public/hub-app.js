@@ -21,6 +21,7 @@ import { createMobileNav } from "/mobile-nav.js";
 import { createModelView } from "/model-view.js";
 import { createOverlayManager } from "/overlay-manager.js";
 import { isTranscriptInterrupted } from "/parsers.js";
+import { pendingCaption, pendingDrainIndex } from "/pending-steers.js";
 import { createStore } from "/store.js";
 import { createTreeView } from "/tree-view.js";
 import { formatStats } from "/utils.js";
@@ -60,10 +61,11 @@ import { formatStats } from "/utils.js";
     renderSessions();
     renderQueue();
   });
-  // Optimistic pending-steer list per session (control state, not the store):
-  // sessionId -> [{ seq, text }]. A steer is added on send and removed when its
-  // own user_message echo arrives (= pi injected it → it's now a transcript
-  // bubble). pi exposes no readable steering queue, so this is the only source
+  // Optimistic pending list per session (control state, not the store):
+  // sessionId -> [{ seq, text, kind }], kind "steer" | "followUp". Added on
+  // send and removed when its own user_message echo arrives (= pi injected it
+  // → it's now a transcript bubble). pi exposes no readable queue to
+  // extensions, so this is the only source
   // for "messages waiting to be injected". No persistence; cleared on session
   // gone. Survives switching away (per-session), so returning shows what's left.
   const pendingSteers = new Map();
@@ -518,7 +520,7 @@ import { formatStats } from "/utils.js";
     refreshActiveInterrupted(id);
   }
 
-  async function handleSend(text) {
+  async function handleSend(text, { followUp = false } = {}) {
     if (!activeSessionId) return;
     const id = activeSessionId;
     if (text.trim() === "/tree") {
@@ -563,13 +565,16 @@ import { formatStats } from "/utils.js";
     // attach), so rendering has one owner and the DOM order matches a later
     // history reload. The "waiting to be injected" list is tracked optimistically
     // (addPendingSteer now, removed on echo) since pi exposes no readable queue.
+    // Option/Cmd/Ctrl+Enter queues a pi follow-up instead (delivered when the
+    // agent would stop), through the same endpoint and echo.
     if (activeStreaming || active?.busy) {
-      addPendingSteer(id, text);
+      const kind = followUp ? "followUp" : "steer";
+      addPendingSteer(id, text, kind);
       try {
-        await steerAgent(text, scopedFetch(id));
+        await steerAgent(text, scopedFetch(id), kind);
       } catch (err) {
-        removePendingSteerByText(id, text); // send failed → it never entered pi's queue
-        alert(`Steer failed: ${err.message}`);
+        removePendingSteerByText(id, text, kind); // send failed → it never entered pi's queue
+        alert(`${followUp ? "Follow-up" : "Steer"} failed: ${err.message}`);
       }
       return;
     }
@@ -646,7 +651,7 @@ import { formatStats } from "/utils.js";
     const pn = pendingSteers.get(s.sessionId)?.length || 0;
     let meta = `:${s.port}`;
     if (s.busy) meta += " · busy";
-    if (pn) meta += ` · ${pn} steering`;
+    if (pn) meta += ` · ${pn} pending`;
     el.querySelector(".item-meta").textContent = meta;
     if (s.busy) el.classList.add("session-busy");
     el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
@@ -1039,37 +1044,32 @@ import { formatStats } from "/utils.js";
 
   const $queueChips = document.getElementById("queue-chips");
 
-  function addPendingSteer(sessionId, text) {
+  function addPendingSteer(sessionId, text, kind) {
     const list = pendingSteers.get(sessionId) || [];
-    list.push({ seq: ++pendingSteerSeq, text });
+    list.push({ seq: ++pendingSteerSeq, text, kind });
     pendingSteers.set(sessionId, list);
     if (sessionId === activeSessionId) renderQueue();
   }
 
-  // Drain one pending steer when pi echoes a user_message back (it was injected).
-  // Prefer an exact text match; otherwise drop the OLDEST. The fallback matters
-  // because the bridge injects expandInput(message) (skill/template expansion),
-  // so the echo text can differ from the raw text we stored — without it a
-  // steered skill command's chip would leak forever. FIFO-safe: while pending is
-  // non-empty a turn is running and its only user_messages are our steers (the
+  // Drain one pending entry when pi echoes a user_message back (it was injected);
+  // see pendingDrainIndex for the match order. FIFO-safe: while pending is
+  // non-empty a turn is running and its only user_messages are ours (the
   // opening prompt echoes when pending is empty), so one echo == one drain.
   function removePendingSteerOnEcho(sessionId, text) {
     const list = pendingSteers.get(sessionId);
     if (!list || list.length === 0) return false;
-    let i = list.findIndex((p) => p.text === text);
-    if (i === -1) i = 0; // expanded echo: no exact match → drain oldest
-    list.splice(i, 1);
+    list.splice(pendingDrainIndex(list, text), 1);
     if (list.length === 0) pendingSteers.delete(sessionId);
     if (sessionId === activeSessionId) renderQueue();
     return true;
   }
 
-  function removePendingSteerByText(sessionId, text) {
+  function removePendingSteerByText(sessionId, text, kind) {
     // Send failed: drop the newest match (the one we just optimistically added).
     const list = pendingSteers.get(sessionId);
     if (!list) return;
     for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].text === text) { list.splice(i, 1); break; }
+      if (list[i].text === text && list[i].kind === kind) { list.splice(i, 1); break; }
     }
     if (list.length === 0) pendingSteers.delete(sessionId);
     if (sessionId === activeSessionId) renderQueue();
@@ -1092,7 +1092,7 @@ import { formatStats } from "/utils.js";
     const header = document.createElement("div");
     header.className = "queue-header";
     const caption = document.createElement("span");
-    caption.textContent = list.length === 1 ? "1 steer waiting to inject" : `${list.length} steers waiting to inject`;
+    caption.textContent = pendingCaption(list);
     const clear = document.createElement("button");
     clear.className = "queue-resume"; clear.textContent = "Clear";
     clear.title = "Stop showing pending steers (already-injected ones still land)";
@@ -1102,6 +1102,12 @@ import { formatStats } from "/utils.js";
     for (const it of list) {
       const chip = document.createElement("div");
       chip.className = "queue-chip";
+      if (it.kind === "followUp") {
+        const tag = document.createElement("span");
+        tag.className = "queue-chip-kind";
+        tag.textContent = "follow-up";
+        chip.appendChild(tag);
+      }
       const label = document.createElement("span");
       label.className = "queue-chip-text";
       label.textContent = it.text;

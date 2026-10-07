@@ -7,7 +7,7 @@
  * tool, steer it while the tool runs (chip appears), then switch to B BEFORE pi
  * injects the steer. The injection echo goes to nobody, and the later attach on
  * A only replays the buffered `done`. Once A is idle, the chip (and the
- * sidebar's "· N steering") must be gone, both while away and after switching back.
+ * sidebar's "· N pending") must be gone, both while away and after switching back.
  *
  * Isolated (own bridge dir, ports, Chrome profile); never touches real sessions.
  * Prints PASS/FAIL lines, exits non-zero on failure.
@@ -161,7 +161,7 @@ async function main() {
   const hist = await (await fetch(`http://localhost:${A.port}/api/history`)).json();
   check("A: steer was actually injected (in history)", (hist.history || []).some((m) => m.role === "user" && (m.text || "").includes(MARKER)));
   const metaAway = await evalPage(sidebarMeta(A.port));
-  check("sidebar: A no longer shows pending steering while away", metaAway != null && !metaAway.includes("steering"), `(meta "${metaAway}")`);
+  check("sidebar: A no longer shows pending steering while away", metaAway != null && !metaAway.includes("pending"), `(meta "${metaAway}")`);
 
   // 5. Switch back to A: no leaked chip.
   await evalPage(clickSession(A.port));

@@ -172,17 +172,19 @@ export async function abortAgent(fetchFn = fetch) {
 }
 
 /**
- * Inject a user message into the running turn (mid-turn steer). The steer
+ * Inject a user message into the running turn (mid-turn steer), or queue it
+ * as a follow-up (mode "followUp": delivered when the agent would stop). The
  * bubble + continuation reach every viewer via the bridge's broadcast echo,
  * so this just fires the request; it renders nothing itself.
  * @param {string} message
  * @param {typeof fetch} [fetchFn]
+ * @param {"steer"|"followUp"} [mode]
  */
-export async function steerAgent(message, fetchFn = fetch) {
+export async function steerAgent(message, fetchFn = fetch, mode = "steer") {
   const res = await fetchFn("/api/steer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, mode }),
   });
   if (!res.ok) await throwHttpError(res);
   return res.json();

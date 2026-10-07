@@ -1091,19 +1091,22 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	// Mid-turn steer: inject a user message into the running turn. Fire-and-
-	// forget (no SSE response of its own) — the sender is already an attached
-	// viewer, so the steer bubble + continuation reach it via the broadcast echo
-	// from the native message_start handler, keeping rendering single-owner.
-	function steer(message: string): { ok: boolean; error?: string } {
+	// Mid-turn steer or follow-up: inject a user message into the running turn.
+	// Fire-and-forget (no SSE response of its own) — the sender is already an
+	// attached viewer, so the bubble + continuation reach it via the broadcast
+	// echo from the native message_start handler, keeping rendering single-owner.
+	// A follow-up lands inside the same agent run (pi's outer loop), after the
+	// assistant has replied, so that echo covers it too.
+	function steer(message: string, mode: "steer" | "followUp" = "steer"): { ok: boolean; error?: string } {
 		const expanded = expandInput(message);
 		if (lifecycle.isBusy()) {
-			// The turn is streaming: pi queues this as a steer, delivered after the
-			// current tool calls and before the next LLM call. deliverAs:"steer" is
+			// The turn is streaming: pi queues this — a steer is delivered after the
+			// current tool calls and before the next LLM call, a follow-up when the
+			// agent would otherwise stop. deliverAs is
 			// honored only while streaming; pi checks isStreaming synchronously so
 			// there is no race with a turn that is about to end.
 			try {
-				pi.sendUserMessage(expanded, { deliverAs: "steer" });
+				pi.sendUserMessage(expanded, { deliverAs: mode });
 				return { ok: true };
 			} catch (err) {
 				return { ok: false, error: err instanceof Error ? err.message : String(err) };

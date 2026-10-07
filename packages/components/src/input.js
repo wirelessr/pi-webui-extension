@@ -139,6 +139,7 @@ export function createInput({
     const action = decideKeyAction({
       key: e.key,
       shiftKey: e.shiftKey,
+      modKey: e.altKey || e.metaKey || e.ctrlKey,
       hasFilter: !!hasFilter,
       selectedIndex: commandsView.getSelectedIndex(),
       filteredCount: commandsView.getFilteredCount(),
@@ -161,18 +162,21 @@ export function createInput({
         return;
       }
       case "send": e.preventDefault(); sendMessage(); return;
+      case "send:followUp": e.preventDefault(); sendMessage({ followUp: true }); return;
       default: return;
     }
   });
 
-  function sendMessage() {
+  // followUp: the shell queues a mid-turn send as a pi follow-up instead of a
+  // steer. Ignored when idle (a plain send either way).
+  function sendMessage({ followUp = false } = {}) {
     const text = $input.value.trim();
     if (!shouldSend(text, isStreaming, allowQueueWhileStreaming)) return;
 
     $input.value = "";
     autoResize();
     filterCommands();
-    onSend(text);
+    onSend(text, { followUp });
   }
 
   function setStreaming(streaming) {

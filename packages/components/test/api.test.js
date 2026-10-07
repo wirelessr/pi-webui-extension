@@ -269,8 +269,14 @@ describe("steerAgent", () => {
     assert.equal(fetchFn.calls[0].url, "/api/steer");
     assert.equal(fetchFn.calls[0].init.method, "POST");
     assert.equal(fetchFn.calls[0].init.headers["Content-Type"], "application/json");
-    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { message: "only look at TS files" });
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { message: "only look at TS files", mode: "steer" });
     assert.equal(result.ok, true);
+  });
+
+  test("sends mode followUp when asked", async () => {
+    const fetchFn = mockFetch({ jsonData: { ok: true } });
+    await steerAgent("then summarize", fetchFn, "followUp");
+    assert.deepEqual(JSON.parse(fetchFn.calls[0].init.body), { message: "then summarize", mode: "followUp" });
   });
 
   test("throws the server error on non-ok response", async () => {

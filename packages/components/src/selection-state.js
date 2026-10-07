@@ -75,13 +75,14 @@ export function createSelectionState(onSelectFn) {
  * @param {object} opts
  * @param {string} opts.key
  * @param {boolean} opts.shiftKey
+ * @param {boolean} [opts.modKey] — Alt/Option, Cmd or Ctrl held: Enter sends as a follow-up
  * @param {boolean} opts.hasFilter — commandsView.hasFilter() AND a / token exists
  * @param {number} opts.selectedIndex — current selection index (-1 if none)
  * @param {number} [opts.filteredCount] — number of currently matching commands
- * @returns {"move:1"|"move:-1"|"select"|"complete"|"escape"|"send"|"passthrough"}
+ * @returns {"move:1"|"move:-1"|"select"|"complete"|"escape"|"send"|"send:followUp"|"passthrough"}
  */
 export function decideKeyAction(opts) {
-  const { key, shiftKey, hasFilter, selectedIndex, filteredCount = 0 } = opts;
+  const { key, shiftKey, modKey = false, hasFilter, selectedIndex, filteredCount = 0 } = opts;
 
   if (hasFilter) {
     if (key === "ArrowDown") return "move:1";
@@ -92,7 +93,7 @@ export function decideKeyAction(opts) {
     if (key === "Escape") return "escape";
   }
 
-  if (key === "Enter" && !shiftKey) return "send";
+  if (key === "Enter" && !shiftKey) return modKey ? "send:followUp" : "send";
 
   return "passthrough";
 }

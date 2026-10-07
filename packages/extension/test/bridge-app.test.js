@@ -83,7 +83,7 @@ function createMockDeps(overrides = {}) {
 		},
 		attachStream: () => false,
 		isPendingOrSse: () => false,
-		steer: (message) => { calls.steer.push(message); return { ok: true }; },
+		steer: (message, mode) => { calls.steer.push({ message, mode }); return { ok: true }; },
 		noteAbortRequested: () => { calls.noteAbortRequested.push(true); },
 		getSessionTree: () => ({
 			nodes: [{ id: "u1", navTargetId: "a1", text: "first", active: true, current: true, children: [] }],
@@ -559,13 +559,29 @@ test("POST /api/abort without session context returns 500", async () => {
 	assert.strictEqual(res.status, 500);
 });
 
-test("POST /api/steer forwards the message to deps.steer", async () => {
+test("POST /api/steer forwards the message to deps.steer (mode defaults to steer)", async () => {
 	const deps = createMockDeps();
 	const app = createBridgeApp(deps);
 	const res = await app.fetch(postJson("/api/steer", { message: "only look at TS files" }));
 	assert.strictEqual(res.status, 200);
 	assert.deepStrictEqual(await res.json(), { ok: true });
-	assert.deepStrictEqual(deps.calls.steer, ["only look at TS files"]);
+	assert.deepStrictEqual(deps.calls.steer, [{ message: "only look at TS files", mode: "steer" }]);
+});
+
+test("POST /api/steer forwards mode followUp", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/steer", { message: "then summarize", mode: "followUp" }));
+	assert.strictEqual(res.status, 200);
+	assert.deepStrictEqual(deps.calls.steer, [{ message: "then summarize", mode: "followUp" }]);
+});
+
+test("POST /api/steer rejects an unknown mode with 400", async () => {
+	const deps = createMockDeps();
+	const app = createBridgeApp(deps);
+	const res = await app.fetch(postJson("/api/steer", { message: "hi", mode: "nextTurn" }));
+	assert.strictEqual(res.status, 400);
+	assert.strictEqual(deps.calls.steer.length, 0);
 });
 
 test("POST /api/steer rejects an empty message with 400", async () => {

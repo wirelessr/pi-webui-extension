@@ -142,6 +142,9 @@ describe("decideKeyAction", () => {
     { name: "Escape with filter → escape", opts: { key: "Escape", shiftKey: false, hasFilter: true, selectedIndex: -1 }, expected: "escape" },
     // Normal mode (hasFilter=false)
     { name: "Enter without filter → send", opts: { key: "Enter", shiftKey: false, hasFilter: false, selectedIndex: -1 }, expected: "send" },
+    { name: "Enter+mod without filter → send:followUp", opts: { key: "Enter", shiftKey: false, modKey: true, hasFilter: false, selectedIndex: -1 }, expected: "send:followUp" },
+    { name: "Enter+mod with filter but no selection → send:followUp", opts: { key: "Enter", shiftKey: false, modKey: true, hasFilter: true, selectedIndex: -1 }, expected: "send:followUp" },
+    { name: "Enter+mod with filter + selected → select", opts: { key: "Enter", shiftKey: false, modKey: true, hasFilter: true, selectedIndex: 0 }, expected: "select" },
     { name: "Enter+Shift without filter → passthrough", opts: { key: "Enter", shiftKey: true, hasFilter: false, selectedIndex: -1 }, expected: "passthrough" },
     { name: "Random key without filter → passthrough", opts: { key: "a", shiftKey: false, hasFilter: false, selectedIndex: -1 }, expected: "passthrough" },
     // Filter active but key is not a picker key

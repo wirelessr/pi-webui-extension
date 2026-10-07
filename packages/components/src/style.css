@@ -903,6 +903,7 @@ body {
   background: var(--bg-input); border: 1px solid var(--border); border-radius: 999px;
 }
 .queue-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; opacity: 0.85; }
+.queue-chip-kind { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.6; }
 .queue-resume { background: none; border: 1px solid currentColor; color: inherit; cursor: pointer; border-radius: 4px; padding: 1px 8px; font-size: 12px; }
 
 #message-input {
