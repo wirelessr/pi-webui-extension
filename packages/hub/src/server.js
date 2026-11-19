@@ -69,7 +69,13 @@ function listSessions() {
       // skip unreadable
     }
   }
-  return buildSessionList(discoveries, isPidAlive);
+  return buildSessionList(discoveries, isPidAlive, (f) => {
+    try {
+      return statSync(f).mtimeMs;
+    } catch {
+      return null;
+    }
+  });
 }
 
 // ── Hub state (sidebar order + groups) ──

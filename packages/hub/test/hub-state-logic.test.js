@@ -8,7 +8,6 @@ import {
   moveToGroup,
   normalizeState,
   pruneState,
-  rebuildItems,
   removeGroup,
   renameGroup,
   setGroupCollapsed,
@@ -76,6 +75,28 @@ describe("displayLayout", () => {
   test("empty state → all live sessions top-level in incoming order", () => {
     assert.deepEqual(displayLayout(EMPTY_STATE, ["x", "y"]), [sess("x"), sess("y")]);
   });
+
+  describe("with lastActive", () => {
+    const t = (o) => new Map(Object.entries(o));
+
+    test("sessions and groups interleave by recency; a group counts as its newest member", () => {
+      const s = normalizeState({ items: [sess("A"), grp("g1", ["m1", "m2"]), sess("B")] });
+      const layout = displayLayout(s, ["A", "B", "m1", "m2"], t({ A: 10, B: 30, m1: 20, m2: 50 }));
+      assert.deepEqual(layout.map((i) => i.id), ["g1", "B", "A"]);
+    });
+
+    test("members are ordered by their own recency", () => {
+      const s = normalizeState({ items: [grp("g1", ["m1", "m2", "m3"])] });
+      const [g] = displayLayout(s, ["m1", "m2", "m3"], t({ m1: 1, m2: 3, m3: 2 }));
+      assert.deepEqual(g.members, ["m2", "m3", "m1"]);
+    });
+
+    test("empty groups sort first; sessions with no time sort last; ties keep state order", () => {
+      const s = normalizeState({ items: [sess("A"), sess("B"), grp("e1", []), grp("e2", []), sess("C")] });
+      const layout = displayLayout(s, ["A", "B", "C"], t({ C: 5 }));
+      assert.deepEqual(layout.map((i) => i.id), ["e1", "e2", "C", "A", "B"]);
+    });
+  });
 });
 
 describe("group mutations", () => {
@@ -122,24 +143,6 @@ describe("moveToGroup", () => {
     const s = normalizeState({ items: [grp("g1", ["m1"]), sess("B")] });
     const r = moveToGroup(s, "m1", "nope");
     assert.deepEqual(r.items, [grp("g1", []), sess("B"), sess("m1")]);
-  });
-});
-
-describe("rebuildItems", () => {
-  test("rebuilds order + membership from a DOM layout, preserving name/collapsed", () => {
-    const state = normalizeState({ items: [grp("g1", ["m1"], { name: "Work", collapsed: true }), sess("A")] });
-    // DOM after drag: session A moved above the group, m1 stayed; new member m2 added
-    const layout = [sess("A"), { type: "group", id: "g1", members: ["m1", "m2"] }];
-    const r = rebuildItems(state, layout);
-    assert.deepEqual(r.items, [
-      { type: "session", id: "A" },
-      { type: "group", id: "g1", name: "Work", collapsed: true, members: ["m1", "m2"] },
-    ]);
-  });
-
-  test("unknown group id in layout falls back to defaults", () => {
-    const r = rebuildItems(EMPTY_STATE, [{ type: "group", id: "gX", members: [] }]);
-    assert.deepEqual(r.items, [{ type: "group", id: "gX", name: "group", collapsed: false, members: [] }]);
   });
 });
 

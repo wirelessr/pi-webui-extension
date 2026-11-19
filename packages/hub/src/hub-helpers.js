@@ -30,13 +30,16 @@ export function pickSession(sessions, id) {
 /**
  * Build the browser-facing session list from raw discovery-file contents.
  * Keeps only live sessions (pid alive), dedupes by sessionId keeping the
- * newest (highest startedAt), sorts by port.
+ * newest (highest startedAt), sorts most-recently-active first (port breaks
+ * ties). Activity = mtime of the session's JSONL (pi appends on every entry),
+ * falling back to startedAt for a session with no file yet.
  *
  * @param {Array<object>} discoveries — parsed discovery file objects
  * @param {(pid: number) => boolean} isPidAlive
- * @returns {Array<{sessionId, sessionName, port, pid, cwd}>}
+ * @param {(file: string) => number|null} [fileMtimeMs] — mtime in ms, null if unreadable
+ * @returns {Array<{sessionId, sessionName, port, pid, cwd, lastActiveAt}>}
  */
-export function buildSessionList(discoveries, isPidAlive) {
+export function buildSessionList(discoveries, isPidAlive, fileMtimeMs = () => null) {
   const byId = new Map();
   for (const d of discoveries) {
     // Liveness = the PI process (piPid) is alive, NOT the recorded `pid`. For a
@@ -59,8 +62,9 @@ export function buildSessionList(discoveries, isPidAlive) {
       port: d.port,
       pid: d.pid,
       cwd: d.cwd ?? null,
+      lastActiveAt: (d.sessionFile ? fileMtimeMs(d.sessionFile) : null) ?? d.startedAt ?? 0,
     }))
-    .sort((a, b) => a.port - b.port);
+    .sort((a, b) => b.lastActiveAt - a.lastActiveAt || a.port - b.port);
 }
 
 // Session spawn/resume command builders + findSessionCwd live in the shared

@@ -1,9 +1,9 @@
 /**
  * Pure hub-state logic — the single source of truth for the sidebar's
- * persisted layout: a flat, ordered sequence of items where each item is
- * either a session or a group. Groups and ungrouped sessions live at the SAME
- * level and reorder together, so you can arrange e.g. "session A, group X,
- * session B". Browser-safe (no Node APIs): imported both by the hub server
+ * persisted layout: items that are either a session or a group. Groups and
+ * ungrouped sessions live at the SAME level; what is persisted is membership
+ * and group name/collapsed, while display order is derived from activity time
+ * (see displayLayout). Browser-safe (no Node APIs): imported both by the hub server
  * (normalize/prune before writing hub-state.json) and by the browser SPA
  * (render + mutate). Keep it pure.
  *
@@ -68,8 +68,14 @@ export function pruneState(state, liveIds) {
 /**
  * The render list: state items with dead sessions removed, plus any new live
  * sessions (not present anywhere in state) appended as top-level sessions.
+ *
+ * With `lastActive` (Map sessionId -> ms) the list is ordered most recent
+ * first: group members by their own time, top-level items (sessions and
+ * groups mixed) by their time, where a group counts as its newest member. An
+ * empty group sorts first so a freshly created group is easy to find and drop
+ * sessions onto. Ties keep state order. Without it, state order is kept.
  */
-export function displayLayout(state, liveIds) {
+export function displayLayout(state, liveIds, lastActive) {
   const pruned = pruneState(state, liveIds).items;
   const known = new Set();
   for (const it of pruned) {
@@ -77,7 +83,17 @@ export function displayLayout(state, liveIds) {
     else known.add(it.id);
   }
   const appended = liveIds.filter((id) => !known.has(id)).map((id) => ({ type: "session", id }));
-  return [...pruned, ...appended];
+  const items = [...pruned, ...appended];
+  if (!lastActive) return items;
+  const at = (id) => lastActive.get(id) ?? 0;
+  const byRecent = (a, b) => b.t - a.t;
+  const ranked = items.map((it) => {
+    if (it.type !== "group") return { it, t: at(it.id) };
+    const members = it.members.map((id) => ({ it: id, t: at(id) })).sort(byRecent).map((m) => m.it);
+    return { it: { ...it, members }, t: members.length ? Math.max(...members.map(at)) : Infinity };
+  });
+  // Infinity - Infinity is NaN, which would make the comparator inconsistent.
+  return ranked.sort((a, b) => (a.t === b.t ? 0 : b.t - a.t)).map((r) => r.it);
 }
 
 export function addGroup(state, group) {
@@ -127,23 +143,6 @@ export function moveToGroup(state, sid, gid) {
   }
   if (target) target.members.push(sid);
   else items.push({ type: "session", id: sid });
-  return { items };
-}
-
-/**
- * Rebuild items from a DOM-derived layout (after a drag). `layout` is the new
- * top-level sequence: [{type:"session",id} | {type:"group",id,members:[...]}].
- * Group name/collapsed are preserved from the current state by id.
- */
-export function rebuildItems(state, layout) {
-  const groupMeta = new Map(state.items.filter((it) => it.type === "group").map((g) => [g.id, g]));
-  const items = layout.map((it) => {
-    if (it.type === "group") {
-      const prev = groupMeta.get(it.id);
-      return { type: "group", id: it.id, name: prev ? prev.name : "group", collapsed: prev ? prev.collapsed : false, members: [...it.members] };
-    }
-    return { type: "session", id: it.id };
-  });
   return { items };
 }
 

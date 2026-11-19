@@ -51,15 +51,30 @@ describe("buildSessionList", () => {
     assert.equal(list[0].port, 7333);
   });
 
-  test("sorts by port ascending", () => {
+  test("sorts by last activity, newest first; port breaks ties", () => {
     const list = buildSessionList(
       [
-        { sessionId: "a", pid: 103, port: 7335 },
-        { sessionId: "b", pid: 101, port: 7331 },
+        { sessionId: "a", pid: 103, port: 7335, sessionFile: "/a.jsonl" },
+        { sessionId: "b", pid: 101, port: 7331, sessionFile: "/b.jsonl" },
+        { sessionId: "c", pid: 100, port: 7333, sessionFile: "/c.jsonl" },
       ],
       alive,
+      (f) => ({ "/a.jsonl": 900, "/b.jsonl": 100, "/c.jsonl": 100 })[f],
     );
-    assert.deepEqual(list.map((s) => s.port), [7331, 7335]);
+    assert.deepEqual(list.map((s) => [s.sessionId, s.lastActiveAt]), [["a", 900], ["b", 100], ["c", 100]]);
+  });
+
+  test("lastActiveAt falls back to startedAt when there is no file or it is unreadable", () => {
+    const list = buildSessionList(
+      [
+        { sessionId: "nofile", pid: 100, port: 7331, startedAt: 50 },
+        { sessionId: "gone", pid: 101, port: 7332, startedAt: 70, sessionFile: "/x.jsonl" },
+        { sessionId: "bare", pid: 103, port: 7333 },
+      ],
+      alive,
+      () => null,
+    );
+    assert.deepEqual(list.map((s) => [s.sessionId, s.lastActiveAt]), [["gone", 70], ["nofile", 50], ["bare", 0]]);
   });
 
   test("liveness follows piPid, not pid — a dead pi under a live shell is a ghost", () => {
@@ -87,7 +102,7 @@ describe("buildSessionList", () => {
 
   test("projects only the browser-facing fields", () => {
     const list = buildSessionList([{ sessionId: "a", pid: 100, port: 7331, sessionName: "x", cwd: "/c", secret: "nope" }], alive);
-    assert.deepEqual(list[0], { sessionId: "a", sessionName: "x", port: 7331, pid: 100, cwd: "/c" });
+    assert.deepEqual(list[0], { sessionId: "a", sessionName: "x", port: 7331, pid: 100, cwd: "/c", lastActiveAt: 0 });
   });
 });
 

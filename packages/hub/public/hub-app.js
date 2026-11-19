@@ -15,7 +15,7 @@ import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, 
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
-import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, rebuildItems, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
+import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { createModelView } from "/model-view.js";
@@ -72,7 +72,6 @@ import { formatStats } from "/utils.js";
   let pendingSteerSeq = 0;
   let activeAttach = null; // AbortController for the active session's attach SSE (control handle, not view state)
   let draggingSid = null; // sessionId being dragged (suppresses re-render mid-drag)
-  let draggingGroupId = null; // group being dragged (reorders groups)
   let openMenu = null; // open session context menu element (right-click)
   let attachingActive = false; // guard: an auto-attach to the active session is in flight
   let activeStreaming = false; // a live stream is feeding the active header (so the poll must not override it)
@@ -627,8 +626,13 @@ import { formatStats } from "/utils.js";
   // ── Session sidebar ──
 
   // First live session in display order (for auto-selecting on load).
+  // Display order is derived from activity (newest first); see displayLayout.
+  function sidebarLayout() {
+    return displayLayout(hubState, sessions.map((s) => s.sessionId), new Map(sessions.map((s) => [s.sessionId, s.lastActiveAt ?? 0])));
+  }
+
   function firstLiveSessionId() {
-    for (const it of displayLayout(hubState, sessions.map((s) => s.sessionId))) {
+    for (const it of sidebarLayout()) {
       if (it.type === "session") return it.id;
       if (it.type === "group" && it.members.length) return it.members[0];
     }
@@ -662,24 +666,20 @@ import { formatStats } from "/utils.js";
     el.addEventListener("dragend", () => {
       el.classList.remove("dragging");
       draggingSid = null;
-      commitLayout();
+      commitMembership(s.sessionId);
     });
     return el;
   }
 
-  // After any drag, the DOM is the source of truth: walk the top-level items
-  // (sessions and groups, interleaved), read each group's members, and persist.
-  function commitLayout() {
-    const layout = [];
-    for (const child of $sessionsList.children) {
-      if (child.classList.contains("session-item")) {
-        layout.push({ type: "session", id: child.dataset.sid });
-      } else if (child.classList.contains("group")) {
-        const members = [...child.querySelectorAll(".group-body > .session-item")].map((x) => x.dataset.sid);
-        layout.push({ type: "group", id: child.dataset.gid, members });
-      }
-    }
-    setState({ hubState: rebuildItems(hubState, layout) });
+  // After a drag, the DOM tells us which group (if any) the session landed in.
+  // Order is derived from activity, so only membership is persisted. A drag
+  // that ended where it started changes nothing and persists nothing.
+  function commitMembership(sid) {
+    const el = $sessionsList.querySelector(`.session-item[data-sid="${CSS.escape(sid)}"]`);
+    const gid = el?.closest(".group")?.dataset.gid ?? null;
+    const cur = hubState.items.find((it) => it.type === "group" && it.members.includes(sid))?.id ?? null;
+    if (gid === cur) { renderSessions(); return; }
+    setState({ hubState: moveToGroup(hubState, sid, gid) });
     persistHubState();
   }
 
@@ -691,17 +691,6 @@ import { formatStats } from "/utils.js";
 
     const header = document.createElement("div");
     header.className = "group-header";
-    header.draggable = true; // drag the header to move the whole group in the list
-    header.addEventListener("dragstart", (e) => {
-      e.stopPropagation(); // a group drag, not a session drag
-      draggingGroupId = g.id;
-      wrap.classList.add("group-dragging");
-    });
-    header.addEventListener("dragend", () => {
-      draggingGroupId = null;
-      wrap.classList.remove("group-dragging");
-      commitLayout();
-    });
     header.innerHTML = `<span class="group-toggle">${g.collapsed ? "▸" : "▾"}</span><span class="group-name"></span><span class="group-count"></span><button class="group-del" title="Delete group">&times;</button>`;
     header.querySelector(".group-name").textContent = g.name;
     header.querySelector(".group-count").textContent = g.members.length;
@@ -731,13 +720,13 @@ import { formatStats } from "/utils.js";
   }
 
   function renderSessions() {
-    if (draggingSid || draggingGroupId) return; // don't yank the DOM out from under an active drag
+    if (draggingSid) return; // don't yank the DOM out from under an active drag
     $sessionsList.innerHTML = "";
     if (!sessions.length) { $sessionsList.innerHTML = '<div class="cmd-empty">No active sessions</div>'; return; }
     const byId = new Map(sessions.map((s) => [s.sessionId, s]));
     // Sessions and groups are peers in one ordered list, rendered as direct
     // children of the sidebar so they reorder together.
-    for (const it of displayLayout(hubState, sessions.map((s) => s.sessionId))) {
+    for (const it of sidebarLayout()) {
       if (it.type === "group") {
         $sessionsList.appendChild(makeGroupEl(it));
       } else {
@@ -747,25 +736,8 @@ import { formatStats } from "/utils.js";
     }
   }
 
-  // Position the dragged element by cursor midpoint among a set of candidates.
-  function placeByCursor(dragged, container, candidates, y) {
-    const after = candidates.find((el) => y < el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2);
-    if (after) container.insertBefore(dragged, after);
-    else container.appendChild(dragged);
-  }
-  // Top-level items = direct children that are a session or a group.
-  const topLevelItems = (exclude) =>
-    [...$sessionsList.children].filter((c) => c !== exclude && (c.classList.contains("session-item") || c.classList.contains("group")));
-
   // Live DOM move while dragging (container outlives re-renders → attached once).
   $sessionsList.addEventListener("dragover", (e) => {
-    if (draggingGroupId) {
-      // A group moves among the top-level items (it can't nest in another group).
-      e.preventDefault();
-      const dragging = $sessionsList.querySelector(".group.group-dragging");
-      if (dragging) placeByCursor(dragging, $sessionsList, topLevelItems(dragging), e.clientY);
-      return;
-    }
     if (!draggingSid) return;
     e.preventDefault();
     const dragging = $sessionsList.querySelector(".session-item.dragging");
@@ -780,12 +752,9 @@ import { formatStats } from "/utils.js";
         body = group.querySelector(".group-body");
       }
     }
-    if (body) {
-      placeByCursor(dragging, body, [...body.querySelectorAll(".session-item:not(.dragging)")], e.clientY);
-    } else {
-      // Top level — reorders alongside groups.
-      placeByCursor(dragging, $sessionsList, topLevelItems(dragging), e.clientY);
-    }
+    // Order within a level is activity-derived, so only the parent matters.
+    const target = body || $sessionsList;
+    if (dragging.parentElement !== target) target.appendChild(dragging);
   });
 
   async function persistHubState() {
