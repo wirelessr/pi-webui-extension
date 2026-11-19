@@ -32,6 +32,13 @@ then start again. Run exactly one instance per token (a second poller gets 409).
   `/kill` (asks for confirmation).
 - With exactly one live session and nothing selected, that session is used.
 
+## Tests
+
+`npm test -w pi-webui-telegram`. Pure modules are unit tested (100% line gate in
+CI). `test/e2e.test.js` runs the real bot and the real hub against a mock Telegram
+API and a stub session bridge (no model, loopback only, isolated bridge dir).
+It does not cover `/new`, which makes the hub spawn a real `pi`.
+
 ## Security
 
 The bot is a remote shell for your machine. Updates are accepted only when both
