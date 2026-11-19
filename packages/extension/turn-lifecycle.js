@@ -35,6 +35,27 @@ export function lastAssistantEndedOnError(messages) {
 }
 
 /**
+ * Event types the client UI ignores entirely. They carry the provider's
+ * growing partial message on every delta, so a long turn's replay buffer would
+ * hold tens of thousands of them for no rendering benefit.
+ */
+const UNBUFFERED_TYPES = new Set(["toolcall_start", "toolcall_delta", "toolcall_end"]);
+
+/**
+ * Copy of a turn event without its `partial` snapshot (the provider's whole
+ * message-so-far, re-serialized per event: O(n^2) over a turn). No client reads
+ * it. Returns a copy — `data` may be pi's own event object, shared with other
+ * extensions, so it must never be mutated.
+ * @param {object} data
+ * @returns {object}
+ */
+export function stripPartial(data) {
+  if (!("partial" in data)) return data;
+  const { partial: _partial, ...rest } = data;
+  return rest;
+}
+
+/**
  * Create the turn lifecycle state machine.
  *
  * @param {object} opts
@@ -63,6 +84,9 @@ export function createTurnLifecycle(opts = {}) {
   let busy = false;
   let finalizeTimer = null;
   let buffer = [];
+  // toolCallId -> index of that tool's tool_execution_update in `buffer`. Tied
+  // to `buffer`'s lifetime: every `buffer = []` also resets it.
+  let updateSlots = new Map();
   let abortRequested = false;
 
   function cancelPendingFinalize() {
@@ -77,6 +101,10 @@ export function createTurnLifecycle(opts = {}) {
     busy = false;
     const wasActive = turnActive;
     turnActive = false;
+    // Nobody replays a finished turn (attach after finalize gets only the
+    // buffered done event); don't pin its events until the next agent_start.
+    buffer = [];
+    updateSlots = new Map();
     onFinalize(event, wasActive);
   }
 
@@ -129,6 +157,7 @@ export function createTurnLifecycle(opts = {}) {
         reasserted = true;
       }
       buffer = [];
+      updateSlots = new Map();
       return { reasserted };
     },
 
@@ -163,19 +192,36 @@ export function createTurnLifecycle(opts = {}) {
       abortRequested = false;
       cancelPendingFinalize();
       buffer = [];
+      updateSlots = new Map();
     },
 
     /**
-     * Record a turn event into the replay buffer. Consecutive text/thinking
-     * deltas are coalesced so a long turn replays as a handful of events
-     * instead of thousands — replay-only; live SSE forwarding is the
-     * caller's job and stays per-delta. Segment boundaries are preserved
-     * naturally: any other event type (text_start/text_end, thinking_*,
-     * tool_*) breaks the run.
+     * Record a turn event into the replay buffer, which is replay-only: live
+     * SSE forwarding is the caller's job and stays per-event. The buffer is
+     * compacted so a long turn replays as a small number of events:
+     * - consecutive text/thinking deltas are coalesced (any other buffered
+     *   event type breaks the run);
+     * - toolcall_* events are not buffered (the client ignores them);
+     * - a tool's tool_execution_update is replaced in place by its latest one —
+     *   the client overwrites per toolCallId and the payload is cumulative.
+     *   A tool_execution_start for the same id opens a fresh slot; events with
+     *   no toolCallId are never merged.
      * @returns {boolean} false when no turn is active (event must be dropped)
      */
     recordEvent(data) {
       if (!turnActive) return false;
+      if (UNBUFFERED_TYPES.has(data.type)) return true;
+      if (data.type === "tool_execution_start") updateSlots.delete(data.toolCallId);
+      if (data.type === "tool_execution_update" && data.toolCallId) {
+        const slot = updateSlots.get(data.toolCallId);
+        if (slot !== undefined) {
+          buffer[slot] = data;
+          return true;
+        }
+        updateSlots.set(data.toolCallId, buffer.length);
+        buffer.push(data);
+        return true;
+      }
       const last = buffer[buffer.length - 1];
       if (
         last &&

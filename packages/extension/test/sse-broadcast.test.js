@@ -69,6 +69,23 @@ describe("sse-broadcast", () => {
     assert.deepEqual(b.written, [frame]);
   });
 
+  test("broadcast serializes the event once for all clients, and not at all with none", () => {
+    const { bc } = makeBroadcast();
+    let serialized = 0;
+    const ev = { type: "x", toJSON: () => {
+        serialized++;
+        return { type: "x" };
+      },
+    };
+    bc.broadcast(ev);
+    assert.equal(serialized, 0);
+    bc.add(makeRes(), "prompt");
+    bc.add(makeRes(), "attach");
+    bc.add(makeRes(), "attach");
+    bc.broadcast(ev);
+    assert.equal(serialized, 1);
+  });
+
   test("writeTo targets one client only", () => {
     const { bc } = makeBroadcast();
     const a = makeRes();

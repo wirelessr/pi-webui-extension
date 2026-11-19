@@ -25,7 +25,7 @@ import { generateSessionName, resolveAutoNameConfig } from "./name-generator.js"
 import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 import { createSseBroadcast } from "./sse-broadcast.js";
 import { buildUserTree } from "./tree-logic.js";
-import { createTurnLifecycle, lastAssistantEndedOnError } from "./turn-lifecycle.js";
+import { createTurnLifecycle, lastAssistantEndedOnError, stripPartial } from "./turn-lifecycle.js";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -614,8 +614,11 @@ export default function (pi: ExtensionAPI) {
 	// Buffering happens regardless of attachment so events that occur while all
 	// clients are switched away are not lost.
 	function writeTurnEvent(data: any): void {
-		if (!lifecycle.recordEvent(data)) return;
-		viewers.broadcast(data);
+		// Strip the provider's growing `partial` snapshot (no client reads it) for
+		// both the buffer and the live feed; stripPartial copies, never mutates.
+		const ev = stripPartial(data);
+		if (!lifecycle.recordEvent(ev)) return;
+		viewers.broadcast(ev);
 	}
 
 	// Flatten a pi AgentMessage's content (string or content-block array) to

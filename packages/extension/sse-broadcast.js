@@ -98,10 +98,12 @@ export function createSseBroadcast(opts = {}) {
 
     /** Send one event to every connected client. */
     broadcast(data) {
+      if (clients.size === 0) return;
+      const line = `data: ${JSON.stringify(data)}\n\n`;
       for (const c of [...clients]) {
         if (!clients.has(c)) continue;
         try {
-          c.res.write(`data: ${JSON.stringify(data)}\n\n`);
+          c.res.write(line);
         } catch {
           evict(c, "write failed");
         }
