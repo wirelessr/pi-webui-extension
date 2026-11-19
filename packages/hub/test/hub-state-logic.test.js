@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   addGroup,
+  bucketByAge,
   decideStreamReconcile,
   displayLayout,
   EMPTY_STATE,
@@ -165,4 +166,38 @@ describe("decideStreamReconcile", () => {
   for (const c of cases) {
     test(c.name, () => assert.deepEqual(decideStreamReconcile(c.in), c.out));
   }
+});
+
+describe("bucketByAge", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = 100 * DAY;
+  const ago = (d) => now - d * DAY;
+  const t = (o) => new Map(Object.entries(o));
+  const keys = (secs) => secs.map((s) => [s.key, s.items.map((i) => i.id)]);
+
+  test("splits at 2 and 7 days; boundaries belong to the older section", () => {
+    const items = ["a", "b", "c", "d", "e"].map((id) => sess(id));
+    const secs = bucketByAge(items, t({ a: ago(0), b: ago(1.9), c: ago(2), d: ago(6.9), e: ago(7) }), now);
+    assert.deepEqual(keys(secs), [["recent", ["a", "b"]], ["week", ["c", "d"]], ["older", ["e"]]]);
+  });
+
+  test("omits empty sections and keeps incoming order within a section", () => {
+    const secs = bucketByAge([sess("x"), sess("y")], t({ x: ago(10), y: ago(9) }), now);
+    assert.deepEqual(keys(secs), [["older", ["x", "y"]]]);
+  });
+
+  test("a group sits in its newest member's section; an empty group is recent", () => {
+    const items = [grp("g1", ["m1", "m2"]), grp("g2", ["m3"]), grp("e", [])];
+    const secs = bucketByAge(items, t({ m1: ago(1), m2: ago(30), m3: ago(8) }), now);
+    assert.deepEqual(keys(secs), [["recent", ["g1", "e"]], ["older", ["g2"]]]);
+  });
+
+  test("a session with no activity time is older", () => {
+    assert.deepEqual(keys(bucketByAge([sess("z")], new Map(), now)), [["older", ["z"]]]);
+  });
+
+  test("returns the section labels", () => {
+    const secs = bucketByAge([sess("a"), sess("b"), sess("c")], t({ a: ago(0), b: ago(3), c: ago(9) }), now);
+    assert.deepEqual(secs.map((s) => s.label), ["Last 2 days", "Last 7 days", "Older"]);
+  });
 });

@@ -96,6 +96,30 @@ export function displayLayout(state, liveIds, lastActive) {
   return ranked.sort((a, b) => (a.t === b.t ? 0 : b.t - a.t)).map((r) => r.it);
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+const AGE_BUCKETS = [
+  { key: "recent", label: "Last 2 days", maxAgeMs: 2 * DAY },
+  { key: "week", label: "Last 7 days", maxAgeMs: 7 * DAY },
+  { key: "older", label: "Older", maxAgeMs: Infinity },
+];
+
+/**
+ * Split an activity-ordered layout (from displayLayout) into age sections for
+ * the sidebar. Only non-empty sections are returned, in recency order. A group
+ * lives in the section of its newest member (its first member, since members
+ * are already newest first); an empty group counts as recent. A session with
+ * no known activity time falls in "older".
+ */
+export function bucketByAge(items, lastActive, now) {
+  const at = (id) => lastActive.get(id) ?? 0;
+  const sections = AGE_BUCKETS.map((b) => ({ key: b.key, label: b.label, items: [] }));
+  for (const it of items) {
+    const age = it.type === "group" ? (it.members.length ? now - at(it.members[0]) : 0) : now - at(it.id);
+    sections[AGE_BUCKETS.findIndex((b) => age < b.maxAgeMs)].items.push(it);
+  }
+  return sections.filter((s) => s.items.length);
+}
+
 export function addGroup(state, group) {
   return { items: [...state.items, { type: "group", id: group.id, name: group.name, collapsed: false, members: [] }] };
 }

@@ -38,13 +38,13 @@ async function main() {
   iso = mkdtempSync(join(tmpdir(), "e2e-order-"));
   const now = Date.now() / 1000;
   const files = {}; // name -> jsonl path
-  const spec = [["A", 7001, 300], ["B", 7002, 200], ["C", 7003, 100], ["D", 7004, 400]]; // [name, port, age in s]
+  const spec = [["A", 7001, 300], ["B", 7002, 200], ["C", 7003, 100], ["D", 7004, 400], ["E", 7005, 3 * 86400], ["F", 7006, 10 * 86400]]; // [name, port, age in s]
   for (const [name, port, age] of spec) {
     const sleeper = spawn("sleep", ["600"], { stdio: "ignore" }); procs.push(sleeper);
     const f = join(iso, `${name}.jsonl`); writeFileSync(f, "{}\n"); utimesSync(f, now - age, now - age); files[name] = f;
     writeFileSync(join(iso, `${name}.json`), JSON.stringify({ port, sessionId: name, sessionName: `sess-${name}`, cwd: "/tmp", pid: sleeper.pid, piPid: sleeper.pid, startedAt: 1, sessionFile: f }));
   }
-  // expected newest-first: C(100s) B(200s) A(300s) D(400s)
+  // expected newest-first: C(100s) B(200s) A(300s) D(400s) E(3d) F(10d)
   procs.push(spawn("node", ["packages/hub/src/server.js"], { env: { ...process.env, PI_HUB_PORT: String(HUB_PORT), PI_BRIDGE_DIR: iso }, stdio: "ignore" }));
   await sleep(1500);
   procs.push(spawn(CHROME, [`--remote-debugging-port=${CDP_PORT}`, "--headless=new", "--no-first-run", `--user-data-dir=${join(iso, "chrome")}`, `http://localhost:${HUB_PORT}/`], { stdio: "ignore" }));
@@ -60,9 +60,10 @@ async function main() {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const list = document.getElementById("sessions-list") || document.querySelector("[id*=sessions]");
     const ids = (root) => [...root.querySelectorAll(":scope > .session-item")].map(e => e.dataset.sid);
-    const top = () => [...list.children].map(c => c.classList.contains("group") ? "g:" + c.dataset.gid + "[" + ids(c.querySelector(".group-body")).join("") + "]" : c.dataset.sid).join(",");
+    const top = () => [...list.children].filter(c => !c.classList.contains("sidebar-divider")).map(c => c.classList.contains("group") ? "g:" + c.dataset.gid + "[" + ids(c.querySelector(".group-body")).join("") + "]" : c.dataset.sid).join(",");
     const put = (items) => fetch("/api/hub-state", { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ items }) });
     const out = { tops: {} };
+    out.dividers = [...list.querySelectorAll(":scope > .sidebar-divider")].map(d => d.textContent);
     // 1) order by mtime, not port (ports ascend A..D)
     out.tops.initial = top();
     // 2) group: time = newest member; members sorted desc
@@ -96,15 +97,16 @@ async function main() {
 
   // 7) touching D's file moves it to the top after the next poll
   utimesSync(files.D, Date.now() / 1000, Date.now() / 1000);
-  await sleep(2500);
-  result.tops.afterTouchD = await page(cdp, `const l=document.getElementById("sessions-list")||document.querySelector("[id*=sessions]"); const ids=(r)=>[...r.querySelectorAll(":scope > .session-item")].map(e=>e.dataset.sid); return [...l.children].map(c=>c.classList.contains("group")?"g:"+c.dataset.gid+"["+ids(c.querySelector(".group-body")).join("")+"]":c.dataset.sid).join(",");`);
+  await sleep(3500); // page polls every 3s
+  result.tops.afterTouchD = await page(cdp, `const l=document.getElementById("sessions-list")||document.querySelector("[id*=sessions]"); const ids=(r)=>[...r.querySelectorAll(":scope > .session-item")].map(e=>e.dataset.sid); return [...l.children].filter(c=>!c.classList.contains("sidebar-divider")).map(c=>c.classList.contains("group")?"g:"+c.dataset.gid+"["+ids(c.querySelector(".group-body")).join("")+"]":c.dataset.sid).join(",");`);
 
   const t = result.tops;
   const checks = {
-    "initial: mtime order, not port": t.initial === "C,B,A,D",
-    "group = newest member, members desc": t.grouped === "C,B,g:g1[AD]",
-    "drag C into group": t.afterDragIn === "g:g1[CAD],B" && JSON.stringify(result.persistedIn).includes('"members":["A","D","C"]'),
-    "drag C out of group": t.afterDragOut === "C,B,g:g1[AD]" && JSON.stringify(result.persistedOut.items.find((i) => i.id === "g1").members) === '["A","D"]',
+    "initial: mtime order, not port": t.initial === "C,B,A,D,E,F",
+    "group = newest member, members desc": t.grouped === "C,B,g:g1[AD],E,F",
+    "drag C into group": t.afterDragIn === "g:g1[CAD],B,E,F" && JSON.stringify(result.persistedIn).includes('"members":["A","D","C"]'),
+    "drag C out of group": t.afterDragOut === "C,B,g:g1[AD],E,F" && JSON.stringify(result.persistedOut.items.find((i) => i.id === "g1").members) === '["A","D"]',
+    "age dividers: 2 days / 7 days / older": JSON.stringify(result.dividers) === '["Last 2 days","Last 7 days","Older"]',
     "no-op drag leaves order": t.afterNoop === t.afterDragOut,
     "empty group first": t.emptyGroup.startsWith("g:gE[]"),
     "touching D moves its group up": t.afterTouchD.includes("g:g1[DA]") && t.afterTouchD.indexOf("g:g1") < t.afterTouchD.indexOf("C"),

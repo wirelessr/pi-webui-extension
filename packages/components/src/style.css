@@ -290,6 +290,17 @@ body {
   border-left: 2px solid var(--accent);
 }
 
+.sidebar-divider {
+  padding: 6px 12px 2px;
+  margin-top: 4px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-top: 1px solid rgba(42, 42, 69, 0.8);
+}
+.sidebar-divider:first-child { border-top: none; margin-top: 0; }
+
 .session-item .item-name {
   font-weight: 600;
   font-size: 13px;

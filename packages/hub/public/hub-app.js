@@ -15,7 +15,7 @@ import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, 
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
-import { addGroup, decideStreamReconcile, displayLayout, moveToGroup, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
+import { addGroup, bucketByAge, decideStreamReconcile, displayLayout, moveToGroup, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { createModelView } from "/model-view.js";
@@ -638,8 +638,9 @@ import { formatStats } from "/utils.js";
 
   // First live session in display order (for auto-selecting on load).
   // Display order is derived from activity (newest first); see displayLayout.
+  const sidebarActivity = () => new Map(sessions.map((s) => [s.sessionId, s.lastActiveAt ?? 0]));
   function sidebarLayout() {
-    return displayLayout(hubState, sessions.map((s) => s.sessionId), new Map(sessions.map((s) => [s.sessionId, s.lastActiveAt ?? 0])));
+    return displayLayout(hubState, sessions.map((s) => s.sessionId), sidebarActivity());
   }
 
   function firstLiveSessionId() {
@@ -739,12 +740,18 @@ import { formatStats } from "/utils.js";
     const byId = new Map(sessions.map((s) => [s.sessionId, s]));
     // Sessions and groups are peers in one ordered list, rendered as direct
     // children of the sidebar so they reorder together.
-    for (const it of sidebarLayout()) {
-      if (it.type === "group") {
-        $sessionsList.appendChild(makeGroupEl(it));
-      } else {
-        const s = byId.get(it.id);
-        if (s) $sessionsList.appendChild(makeSessionEl(s));
+    for (const section of bucketByAge(sidebarLayout(), sidebarActivity(), Date.now())) {
+      const divider = document.createElement("div");
+      divider.className = "sidebar-divider";
+      divider.textContent = section.label;
+      $sessionsList.appendChild(divider);
+      for (const it of section.items) {
+        if (it.type === "group") {
+          $sessionsList.appendChild(makeGroupEl(it));
+        } else {
+          const s = byId.get(it.id);
+          if (s) $sessionsList.appendChild(makeSessionEl(s));
+        }
       }
     }
   }
