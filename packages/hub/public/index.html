@@ -58,6 +58,30 @@
     }
     .queue-resume { background: none; border: 1px solid currentColor; color: inherit; cursor: pointer; border-radius: 4px; padding: 1px 8px; font-size: 12px; }
     .queue-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; font-size: 12px; opacity: 0.85; }
+    #cron-section { flex-shrink: 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; max-height: 45%; }
+    #cron-section .cron-toggle { cursor: pointer; user-select: none; }
+    .cron-body { overflow-y: auto; flex: 0 1 auto; }
+    .cron-body.hidden { display: none; }
+    .cron-banner { padding: 4px 12px; font-size: 11px; color: var(--text-dim); }
+    .cron-error { padding: 2px 12px 4px; font-size: 11px; color: var(--error); word-break: break-word; }
+    .cron-job { padding: 6px 0; border-bottom: 1px solid rgba(42, 42, 69, 0.5); }
+    .cron-job-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 12px; }
+    .cron-job-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .cron-job-meta { display: flex; gap: 8px; align-items: center; padding: 2px 12px 0 26px; font-size: 11px; color: var(--text-dim); }
+    .cron-btn { background: none; border: 1px solid var(--border, rgba(128,128,128,0.35)); color: inherit; border-radius: 4px; padding: 1px 6px; font-size: 11px; cursor: pointer; }
+    .cron-btn:disabled { opacity: 0.4; cursor: default; }
+    .cron-runs { padding: 4px 8px 0 20px; }
+    .cron-run { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 4px; font-size: 11px; }
+    .cron-run-info { display: flex; gap: 6px; align-items: center; min-width: 0; }
+    .cron-run-time, .cron-run-trigger { color: var(--text-dim); white-space: nowrap; }
+    .cron-run-actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .cron-state { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; padding: 0 4px; border-radius: 3px; border: 1px solid currentColor; }
+    .cron-state-running { color: var(--accent, #7aa2f7); }
+    .cron-state-ok { color: var(--success); }
+    .cron-state-failed { color: var(--error); }
+    .cron-state-unknown { color: var(--warning); }
+    .cron-state-skipped { color: var(--text-dim); border-style: dashed; }
+    .cron-log-text { margin: 0; padding: 8px 12px; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
 </style>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>hub</text></svg>">
 </head>
@@ -105,6 +129,15 @@
           </div>
         </div>
         <div id="sessions-list" class="sidebar-list"></div>
+        <div id="cron-section">
+          <div class="sidebar-header">
+            <span class="cron-toggle">cron</span>
+            <div class="header-actions">
+              <button class="cron-refresh icon-btn" title="Refresh cron">&#8635;</button>
+            </div>
+          </div>
+          <div class="cron-body"></div>
+        </div>
       </aside>
       <div id="sidebar-resize" class="resize-handle"></div>
 

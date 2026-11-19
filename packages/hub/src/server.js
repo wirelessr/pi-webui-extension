@@ -9,7 +9,7 @@
  *   GET  /  and static        hub shell + shared components assets
  */
 
-import { spawn } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -17,8 +17,17 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildForkSessionCommand, buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
+import {
+  buildCronRunArgv,
+  buildForkSessionCommand,
+  buildOpenSessionCommand,
+  buildSpawnCommand,
+  findSessionCwd,
+  listSessionFileIds,
+} from "@wirelessr/pi-webui-components/session-spawn.js";
 import { normalizeState, pruneState } from "../public/hub-state-logic.js";
+import { createCronRunner } from "./cron-runner.js";
+import { spawnDetached } from "./detached-spawn.js";
 import { buildSessionList, diffBusyTransitions, lastMessageTimestamp, parseProxyPath, pickSession, updateUnread } from "./hub-helpers.js";
 
 const require = createRequire(import.meta.url);
@@ -196,15 +205,10 @@ function currentBusy(sessionId) {
 // file into the hub's BRIDGE_DIR via the env below.
 function spawnSession(cwd) {
   const cmd = buildSpawnCommand({ logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-new]" });
-  const child = spawn("sh", ["-c", cmd], {
+  return spawnDetached(["sh", "-c", cmd], {
     cwd: cwd || homedir(),
-    detached: true,
-    stdio: "ignore",
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
   });
-  child.unref();
-  if (!child.pid) throw new Error("spawn failed");
-  return child.pid;
 }
 
 // Open (resume) an existing session by ID. cwd is auto-resolved (shared
@@ -212,15 +216,10 @@ function spawnSession(cwd) {
 // directory — pi refuses to resume from the wrong project directory.
 function openSession(sessionId, name) {
   const cmd = buildOpenSessionCommand({ sessionId, name, logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-open]" });
-  const child = spawn("sh", ["-c", cmd], {
+  return spawnDetached(["sh", "-c", cmd], {
     cwd: findSessionCwd(sessionId) || homedir(),
-    detached: true,
-    stdio: "ignore",
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
   });
-  child.unref();
-  if (!child.pid) throw new Error("spawn failed");
-  return child.pid;
 }
 
 // Clone (fork) an existing session into a new one. Like resume, cwd must be the
@@ -228,16 +227,37 @@ function openSession(sessionId, name) {
 // it's auto-resolved with the shared findSessionCwd.
 function cloneSession(sessionId, name) {
   const cmd = buildForkSessionCommand({ sessionId, name, logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-clone]" });
-  const child = spawn("sh", ["-c", cmd], {
+  return spawnDetached(["sh", "-c", cmd], {
     cwd: findSessionCwd(sessionId) || homedir(),
-    detached: true,
-    stdio: "ignore",
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
   });
-  child.unref();
-  if (!child.pid) throw new Error("spawn failed");
-  return child.pid;
 }
+
+// ── Cron scheduler + Run now + run records (see cron-runner.js) ──
+// Files live in BRIDGE_DIR/cron/ (not top level: discovery scans would see them).
+
+const CRON_TICK_VALID = /^[1-9]\d*$/.test(process.env.PI_CRON_TICK_MS ?? "");
+const CRON_TICK_MS = CRON_TICK_VALID ? Number(process.env.PI_CRON_TICK_MS) : 60000;
+if (process.env.PI_CRON_TICK_MS !== undefined && !CRON_TICK_VALID) {
+  console.error(`[hub] cron: ignoring PI_CRON_TICK_MS=${JSON.stringify(process.env.PI_CRON_TICK_MS)} (not a positive integer), using 60000`);
+}
+const SYSTEM_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const cron = createCronRunner({
+  cronDir: join(BRIDGE_DIR, "cron"),
+  bridgeDir: BRIDGE_DIR,
+  env: process.env,
+  piBin: process.env.PI_CRON_PI_BIN || "pi",
+  tickMs: CRON_TICK_MS,
+  systemTz: SYSTEM_TZ,
+  now: Date.now,
+  randomHex4: () => randomBytes(2).toString("hex"),
+  randomUUID,
+  buildArgv: buildCronRunArgv,
+  spawnDetached,
+  isPidAlive,
+  listSessionFileIds: () => listSessionFileIds(),
+  liveSessionIds: () => new Set(listSessions().map((s) => s.sessionId)),
+});
 
 function readJsonBody(req) {
   return new Promise((resolve) => {
@@ -431,6 +451,18 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.startsWith("/api/cron/")) {
+    let r;
+    try {
+      r = cron.handle(req.method, url.split("?")[0]);
+    } catch (err) {
+      r = { status: 500, body: { error: err.message } };
+    }
+    res.writeHead(r.status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(r.body));
+    return;
+  }
+
   const proxied = parseProxyPath(url);
   if (proxied) {
     const session = pickSession(listSessions(), proxied.sessionId);
@@ -451,7 +483,23 @@ const server = createServer(async (req, res) => {
   res.end("Method not allowed");
 });
 
+// Best-effort lock release; a lock left behind names a dead pid and is stale.
+process.on("exit", () => cron.release());
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) process.once(signal, () => process.exit(code));
+
 server.listen(PORT, HOST, () => {
   console.log(`[hub] listening on http://${HOST}:${PORT} (discovery: ${BRIDGE_DIR})`);
+  console.log(`[hub] cron: system timezone ${SYSTEM_TZ}, jobs file ${join(BRIDGE_DIR, "cron", "cron-jobs.json")}, tick ${CRON_TICK_MS} ms`);
+  // First tick immediately (it can only take the lock; acting starts on the
+  // next tick once the lock still names this pid), then every tick.
+  const cronTick = () => {
+    try {
+      cron.tick();
+    } catch (err) {
+      console.error(`[hub] cron: tick failed: ${err.message}`);
+    }
+  };
+  cronTick();
+  setInterval(cronTick, CRON_TICK_MS);
   setInterval(pollBusy, 2000);
 });

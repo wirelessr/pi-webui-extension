@@ -14,6 +14,7 @@
 import { abortAgent, attachStream, clientLog, getCommands, getFile, getHistory, getModels, getStatus, getTree, HISTORY_PAGE_SIZE, killSession, navigateTree, pollUntil, reloadSession, renameSession, sendPromptStream, setModel, statFiles, steerAgent } from "/api.js";
 import { createChat } from "/chat.js";
 import { createCommandsView } from "/commands.js";
+import { createCronPanel } from "/cron-panel.js";
 import { doInit, doModelCommand, doSendPrompt, doStop, parseModelCommand, parseResumeCommand } from "/flow.js";
 import { addGroup, bucketByAge, decideStreamReconcile, displayLayout, moveToGroup, removeGroup, renameGroup, setGroupCollapsed } from "/hub-state-logic.js";
 import { createInput } from "/input.js";
@@ -861,7 +862,7 @@ import { formatStats } from "/utils.js";
   //  - no sessionId, cwd given → new session in that cwd.
   //  - no sessionId, no cwd    → new session inheriting the currently-viewed
   //    session's cwd (server falls back to homedir when there's no active one).
-  async function handleNew(sessionId, cwd) {
+  async function handleNew(sessionId, cwd, name) {
     // Already open (exact id, or the 8-char prefix shown in the sidebar)?
     // Just switch to it instead of spawning a duplicate.
     if (sessionId) {
@@ -873,7 +874,7 @@ import { formatStats } from "/utils.js";
     let body;
     if (sessionId) {
       endpoint = "/api/open-session";
-      body = JSON.stringify({ sessionId });
+      body = JSON.stringify(name ? { sessionId, name } : { sessionId });
     } else {
       endpoint = "/api/new-session";
       const inheritCwd = cwd || sessions.find((s) => s.sessionId === activeSessionId)?.cwd;
@@ -1231,4 +1232,11 @@ import { formatStats } from "/utils.js";
   loadSessions();
   subscribeEvents();
   setInterval(loadSessions, 3000);
+  createCronPanel({
+    $section: document.getElementById("cron-section"),
+    $chat,
+    overlays,
+    onSelect: (sessionId) => switchTo(sessionId),
+    onOpen: (sessionId, name) => handleNew(sessionId, undefined, name),
+  });
 })();
