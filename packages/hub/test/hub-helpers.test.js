@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession, updateUnread } from "../src/hub-helpers.js";
+import { buildSessionList, diffBusyTransitions, lastMessageTimestamp, parseProxyPath, pickSession, updateUnread } from "../src/hub-helpers.js";
 
 describe("parseProxyPath", () => {
   const cases = [
@@ -185,5 +185,32 @@ describe("updateUnread", () => {
     const prev = new Set(["a"]);
     updateUnread(prev, [{ sessionId: "b" }], ["a", "b"]);
     assert.deepEqual([...prev], ["a"]);
+  });
+});
+
+describe("lastMessageTimestamp", () => {
+  const msg = (ts) => JSON.stringify({ type: "message", timestamp: ts, message: { role: "assistant" } });
+  const info = (ts) => JSON.stringify({ type: "session_info", timestamp: ts, name: "x" });
+
+  test("ignores later non-conversation entries (rename/resume must not look like activity)", () => {
+    const text = [msg("2026-11-17T02:19:44.017Z"), info("2026-11-19T00:44:31.874Z"), ""].join("\n");
+    assert.equal(lastMessageTimestamp(text, true), Date.parse("2026-11-17T02:19:44.017Z"));
+  });
+  test("takes the last message, skipping blank and corrupt lines", () => {
+    const text = [msg("2026-01-01T00:00:00Z"), msg("2026-01-02T00:00:00Z"), "{not json", "", ""].join("\n");
+    assert.equal(lastMessageTimestamp(text, true), Date.parse("2026-01-02T00:00:00Z"));
+  });
+  test("skips an entry whose timestamp does not parse", () => {
+    const text = [msg("2026-01-01T00:00:00Z"), msg("garbage")].join("\n");
+    assert.equal(lastMessageTimestamp(text, true), Date.parse("2026-01-01T00:00:00Z"));
+  });
+  test("null when there is no conversation entry", () => {
+    assert.equal(lastMessageTimestamp(info("2026-01-01T00:00:00Z"), true), null);
+    assert.equal(lastMessageTimestamp("", true), null);
+  });
+  test("a tail starting mid-file drops its partial first line", () => {
+    const partial = `${msg("2026-05-05T00:00:00Z").slice(20)}\n${info("2026-06-01T00:00:00Z")}`;
+    assert.equal(lastMessageTimestamp(partial, false), null); // the cut message is not trusted
+    assert.equal(lastMessageTimestamp(`${partial}\n${msg("2026-05-06T00:00:00Z")}`, false), Date.parse("2026-05-06T00:00:00Z"));
   });
 });

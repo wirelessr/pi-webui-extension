@@ -31,12 +31,12 @@ export function pickSession(sessions, id) {
  * Build the browser-facing session list from raw discovery-file contents.
  * Keeps only live sessions (pid alive), dedupes by sessionId keeping the
  * newest (highest startedAt), sorts most-recently-active first (port breaks
- * ties). Activity = mtime of the session's JSONL (pi appends on every entry),
- * falling back to startedAt for a session with no file yet.
+ * ties). Activity = time of the session's last conversation entry (see
+ * lastMessageTimestamp), falling back to startedAt for a session with no file.
  *
  * @param {Array<object>} discoveries — parsed discovery file objects
  * @param {(pid: number) => boolean} isPidAlive
- * @param {(file: string) => number|null} [fileMtimeMs] — mtime in ms, null if unreadable
+ * @param {(file: string) => number|null} [fileMtimeMs] — last activity in ms, null if unreadable
  * @returns {Array<{sessionId, sessionName, port, pid, cwd, lastActiveAt}>}
  */
 export function buildSessionList(discoveries, isPidAlive, fileMtimeMs = () => null) {
@@ -98,6 +98,35 @@ export function diffBusyTransitions(prevBusy, current) {
     }
   }
   return { done, nextBusy };
+}
+
+/**
+ * Time (ms) of the last conversation entry in a chunk of session JSONL, or
+ * null if the chunk has none. The file's mtime is NOT usable for this: pi also
+ * appends session_info / model_change / custom entries on resume, rename and
+ * reload, which would make an idle session look freshly active.
+ *
+ * @param {string} text — JSONL text, possibly the tail of a larger file
+ * @param {boolean} startsAtFileStart — false when `text` begins mid-file, so
+ *   its first (partial) line is dropped
+ * @returns {number|null}
+ */
+export function lastMessageTimestamp(text, startsAtFileStart) {
+  const lines = text.split("\n");
+  if (!startsAtFileStart) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    let entry;
+    try {
+      entry = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (entry?.type !== "message") continue;
+    const t = Date.parse(entry.timestamp);
+    if (!Number.isNaN(t)) return t;
+  }
+  return null;
 }
 
 /**

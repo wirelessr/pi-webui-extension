@@ -8,7 +8,7 @@
  * Usage: node scripts/e2e-session-order.mjs
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ const CDP_PORT = 9225;
 const HUB_PORT = 8799;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const procs = [];
+const msgLine = (sec) => JSON.stringify({ type: "message", timestamp: new Date(sec * 1000).toISOString(), message: { role: "assistant" } });
 let iso;
 const cleanup = () => { for (const p of procs) { try { p.kill("SIGKILL"); } catch {} } try { if (iso) rmSync(iso, { recursive: true, force: true }); } catch {} };
 process.on("SIGINT", () => { cleanup(); process.exit(1); });
@@ -41,7 +42,10 @@ async function main() {
   const spec = [["A", 7001, 300], ["B", 7002, 200], ["C", 7003, 100], ["D", 7004, 400], ["E", 7005, 3 * 86400], ["F", 7006, 10 * 86400]]; // [name, port, age in s]
   for (const [name, port, age] of spec) {
     const sleeper = spawn("sleep", ["600"], { stdio: "ignore" }); procs.push(sleeper);
-    const f = join(iso, `${name}.jsonl`); writeFileSync(f, "{}\n"); utimesSync(f, now - age, now - age); files[name] = f;
+    // A conversation entry at (now - age), then a later session_info and an mtime of "now":
+    // like a resumed/renamed idle session, whose mtime must NOT count as activity.
+    const f = join(iso, `${name}.jsonl`); files[name] = f;
+    writeFileSync(f, `${msgLine(now - age)}\n{"type":"session_info","timestamp":"${new Date().toISOString()}","name":"x"}\n`);
     writeFileSync(join(iso, `${name}.json`), JSON.stringify({ port, sessionId: name, sessionName: `sess-${name}`, cwd: "/tmp", pid: sleeper.pid, piPid: sleeper.pid, startedAt: 1, sessionFile: f }));
   }
   // expected newest-first: C(100s) B(200s) A(300s) D(400s) E(3d) F(10d)
@@ -95,8 +99,8 @@ async function main() {
     return out;
   `);
 
-  // 7) touching D's file moves it to the top after the next poll
-  utimesSync(files.D, Date.now() / 1000, Date.now() / 1000);
+  // 7) a new conversation entry in D moves it up after the next poll
+  appendFileSync(files.D, `${msgLine(Date.now() / 1000)}\n`); // new conversation entry
   await sleep(3500); // page polls every 3s
   result.tops.afterTouchD = await page(cdp, `const l=document.getElementById("sessions-list")||document.querySelector("[id*=sessions]"); const ids=(r)=>[...r.querySelectorAll(":scope > .session-item")].map(e=>e.dataset.sid); return [...l.children].filter(c=>!c.classList.contains("sidebar-divider")).map(c=>c.classList.contains("group")?"g:"+c.dataset.gid+"["+ids(c.querySelector(".group-body")).join("")+"]":c.dataset.sid).join(",");`);
 
@@ -109,7 +113,7 @@ async function main() {
     "age dividers: 2 days / 7 days / older": JSON.stringify(result.dividers) === '["Last 2 days","Last 7 days","Older"]',
     "no-op drag leaves order": t.afterNoop === t.afterDragOut,
     "empty group first": t.emptyGroup.startsWith("g:gE[]"),
-    "touching D moves its group up": t.afterTouchD.includes("g:g1[DA]") && t.afterTouchD.indexOf("g:g1") < t.afterTouchD.indexOf("C"),
+    "a new message in D moves its group up": t.afterTouchD.includes("g:g1[DA]") && t.afterTouchD.indexOf("g:g1") < t.afterTouchD.indexOf("C"),
   };
   console.log(JSON.stringify({ tops: t, checks }, null, 2));
   const ok = Object.values(checks).every(Boolean);

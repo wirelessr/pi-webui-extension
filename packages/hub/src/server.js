@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
@@ -19,7 +19,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildForkSessionCommand, buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { normalizeState, pruneState } from "../public/hub-state-logic.js";
-import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession, updateUnread } from "./hub-helpers.js";
+import { buildSessionList, diffBusyTransitions, lastMessageTimestamp, parseProxyPath, pickSession, updateUnread } from "./hub-helpers.js";
 
 const require = createRequire(import.meta.url);
 const HUB_DIR = dirname(fileURLToPath(import.meta.url));
@@ -69,13 +69,45 @@ function listSessions() {
       // skip unreadable
     }
   }
-  return buildSessionList(discoveries, isPidAlive, (f) => {
+  return buildSessionList(discoveries, isPidAlive, sessionActivityMs);
+}
+
+// Last conversation time of a session file. Cached on (mtime, size) so the tail
+// is only re-read when the file changed; listSessions runs on every request.
+const activityCache = new Map();
+const TAIL_START = 64 * 1024;
+const TAIL_MAX = 16 * 1024 * 1024;
+function sessionActivityMs(file) {
+  let st;
+  try {
+    st = statSync(file);
+  } catch {
+    return null;
+  }
+  const hit = activityCache.get(file);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.at;
+  let at = null;
+  try {
+    const fd = openSync(file, "r");
     try {
-      return statSync(f).mtimeMs;
-    } catch {
-      return null;
+      // A conversation entry can be huge (tool output), so widen the tail until
+      // one is found or the whole file has been read.
+      for (let len = TAIL_START; at == null; len *= 4) {
+        const n = Math.min(len, st.size);
+        const buf = Buffer.alloc(n);
+        readSync(fd, buf, 0, n, st.size - n);
+        at = lastMessageTimestamp(buf.toString("utf-8"), n === st.size);
+        if (n === st.size || len >= TAIL_MAX) break;
+      }
+    } finally {
+      closeSync(fd);
     }
-  });
+  } catch {
+    // unreadable: fall through to mtime
+  }
+  at ??= st.mtimeMs; // no conversation yet (fresh session): file creation time
+  activityCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, at });
+  return at;
 }
 
 // ── Hub state (sidebar order + groups) ──
