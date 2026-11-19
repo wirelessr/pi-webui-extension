@@ -1,0 +1,15 @@
+{
+  "name": "pi-webui-telegram",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram bot front-end for the pi WebUI hub: manage and drive sessions from one authorized chat",
+  "dependencies": {
+    "@wirelessr/pi-webui-components": "^0.7.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "lint": "biome check src/ test/"
+  }
+}

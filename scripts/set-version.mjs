@@ -22,6 +22,7 @@ const files = [
   "packages/components/package.json",
   "packages/extension/package.json",
   "packages/hub/package.json",
+  "packages/telegram/package.json",
 ];
 
 for (const f of files) {
