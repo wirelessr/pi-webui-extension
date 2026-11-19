@@ -113,11 +113,12 @@ function broadcast(obj) {
 async function fetchBusy(session) {
   try {
     const res = await fetch(`http://localhost:${session.port}/api/status`, { signal: AbortSignal.timeout(1500) });
-    if (!res.ok) return null;
+    if (!res.ok) return { sessionId: session.sessionId, sessionName: session.sessionName, busy: null };
     const data = await res.json();
     return { sessionId: session.sessionId, sessionName: session.sessionName, busy: !!data.busy };
   } catch {
-    return null; // unreachable / slow — treat as unknown, skip this round
+    // unreachable / slow — unknown, not idle; diffBusyTransitions keeps the last value
+    return { sessionId: session.sessionId, sessionName: session.sessionName, busy: null };
   }
 }
 
@@ -127,7 +128,7 @@ async function pollBusy() {
   polling = true;
   try {
     const sessions = listSessions();
-    const results = (await Promise.all(sessions.map(fetchBusy))).filter(Boolean);
+    const results = await Promise.all(sessions.map(fetchBusy));
     const { done, nextBusy } = diffBusyTransitions(busyState, results);
     busyState = nextBusy;
     for (const d of done) {

@@ -70,14 +70,22 @@ export function buildSessionList(discoveries, isPidAlive) {
 /**
  * Detect busy→idle transitions between polls (a session "finishing").
  *
+ * A null `busy` means the poll couldn't tell (status timed out): the last known
+ * value is carried over and no transition is reported, so a briefly unresponsive
+ * session neither flips to idle nor loses its busy history.
+ *
  * @param {Map<string, boolean>} prevBusy — sessionId → busy at the last poll
- * @param {Array<{sessionId: string, sessionName?: string|null, busy: boolean}>} current
+ * @param {Array<{sessionId: string, sessionName?: string|null, busy: boolean|null}>} current
  * @returns {{done: Array<{sessionId: string, sessionName: string|null}>, nextBusy: Map<string, boolean>}}
  */
 export function diffBusyTransitions(prevBusy, current) {
   const done = [];
   const nextBusy = new Map();
   for (const s of current) {
+    if (s.busy == null) {
+      if (prevBusy.has(s.sessionId)) nextBusy.set(s.sessionId, prevBusy.get(s.sessionId));
+      continue;
+    }
     nextBusy.set(s.sessionId, s.busy);
     // Only fire when we have a prior "busy" observation flipping to idle —
     // never on first sight (avoids a spurious notification on hub startup).

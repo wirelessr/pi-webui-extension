@@ -153,6 +153,10 @@ describe("decideStreamReconcile", () => {
     // stuck stream: bridge idle while we still think we stream → arm, then heal
     { name: "streaming, bridge idle, first tick → arm", in: { activeStreaming: true, bridgeBusy: false, stuckTicks: 0 }, out: { action: "none", stuckTicks: 1 } },
     { name: "streaming, bridge idle, second tick → heal", in: { activeStreaming: true, bridgeBusy: false, stuckTicks: 1 }, out: { action: "heal", stuckTicks: 0 } },
+    // unknown (bridge didn't answer): never idle, never a heal, ticks untouched
+    { name: "not streaming, bridge unknown → none", in: { activeStreaming: false, bridgeBusy: null, stuckTicks: 0 }, out: { action: "none", stuckTicks: 0 } },
+    { name: "streaming, bridge unknown → none, ticks kept", in: { activeStreaming: true, bridgeBusy: null, stuckTicks: 1 }, out: { action: "none", stuckTicks: 1 } },
+    { name: "streaming, bridge unknown, never heals", in: { activeStreaming: true, bridgeBusy: null, stuckTicks: 5 }, out: { action: "none", stuckTicks: 5 } },
     { name: "stuckTicks defaults to 0", in: { activeStreaming: true, bridgeBusy: false }, out: { action: "none", stuckTicks: 1 } },
   ];
   for (const c of cases) {

@@ -161,12 +161,15 @@ export function rebuildItems(state, layout) {
  *
  * @param {object} opts
  * @param {boolean} opts.activeStreaming — hub believes a live stream owns the pill
- * @param {boolean} opts.bridgeBusy — authoritative busy from the latest poll
+ * @param {boolean|null} opts.bridgeBusy — authoritative busy from the latest poll;
+ *   null = unknown (the bridge didn't answer in time, e.g. blocked replaying a
+ *   huge turn buffer). Unknown is not idle: change nothing.
  * @param {number} [opts.stuckTicks] — consecutive prior ticks of streaming-but-idle
  * @returns {{action: "sync"|"heal"|"none", busy?: boolean, stuckTicks: number}}
  */
 export function decideStreamReconcile({ activeStreaming, bridgeBusy, stuckTicks = 0 }) {
-  if (!activeStreaming) return { action: "sync", busy: !!bridgeBusy, stuckTicks: 0 };
+  if (bridgeBusy == null) return { action: "none", stuckTicks };
+  if (!activeStreaming) return { action: "sync", busy: bridgeBusy, stuckTicks: 0 };
   if (bridgeBusy) return { action: "none", stuckTicks: 0 };
   const next = stuckTicks + 1;
   if (next >= 2) return { action: "heal", stuckTicks: 0 };

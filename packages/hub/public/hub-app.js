@@ -462,7 +462,7 @@ import { formatStats } from "/utils.js";
     // loadSessions keeps it in sync and clears it when the turn ends.
     if (!activeStreaming && sessionId === activeSessionId) {
       const s = sessions.find((x) => x.sessionId === sessionId);
-      if (s) setBusy(!!s.busy);
+      if (s && s.busy != null) setBusy(!!s.busy);
     }
   }
 
@@ -826,7 +826,7 @@ import { formatStats } from "/utils.js";
     {
       const a = sessions.find((s) => s.sessionId === activeSessionId);
       if (a) {
-        const d = decideStreamReconcile({ activeStreaming, bridgeBusy: !!a.busy, stuckTicks: streamStuckTicks });
+        const d = decideStreamReconcile({ activeStreaming, bridgeBusy: a.busy, stuckTicks: streamStuckTicks });
         streamStuckTicks = d.stuckTicks;
         if (d.action === "sync") setBusy(d.busy);
         else if (d.action === "heal") healStuckStream();

@@ -120,6 +120,25 @@ describe("diffBusyTransitions", () => {
     assert.deepEqual(done, []);
   });
 
+  test("unknown (null) keeps the last value and reports no transition", () => {
+    const { done, nextBusy } = diffBusyTransitions(new Map([["a", true]]), [{ sessionId: "a", busy: null }]);
+    assert.deepEqual(done, []);
+    assert.equal(nextBusy.get("a"), true);
+  });
+
+  test("busy -> unknown -> idle still fires done once", () => {
+    let busy = new Map([["a", true]]);
+    busy = diffBusyTransitions(busy, [{ sessionId: "a", busy: null }]).nextBusy;
+    const { done } = diffBusyTransitions(busy, [{ sessionId: "a", sessionName: "A", busy: false }]);
+    assert.deepEqual(done, [{ sessionId: "a", sessionName: "A" }]);
+  });
+
+  test("unknown with no prior value is not recorded", () => {
+    const { done, nextBusy } = diffBusyTransitions(new Map(), [{ sessionId: "a", busy: null }]);
+    assert.deepEqual(done, []);
+    assert.equal(nextBusy.has("a"), false);
+  });
+
   test("null sessionName defaults to null", () => {
     const { done } = diffBusyTransitions(new Map([["a", true]]), [{ sessionId: "a", busy: false }]);
     assert.equal(done[0].sessionName, null);
