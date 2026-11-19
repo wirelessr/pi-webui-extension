@@ -298,6 +298,12 @@ body {
   white-space: nowrap;
 }
 
+.session-item.session-unread {
+  background: rgba(78, 201, 176, 0.12);
+  border-left: 2px solid var(--success);
+}
+.session-item.session-unread .item-name { color: var(--success); }
+
 .rename-input {
   font-weight: 600;
   font-size: 13px;

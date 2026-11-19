@@ -19,7 +19,7 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildForkSessionCommand, buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { normalizeState, pruneState } from "../public/hub-state-logic.js";
-import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "./hub-helpers.js";
+import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession, updateUnread } from "./hub-helpers.js";
 
 const require = createRequire(import.meta.url);
 const HUB_DIR = dirname(fileURLToPath(import.meta.url));
@@ -103,6 +103,9 @@ function saveHubState(rawState, liveIds) {
 // the single SPA notify for a session the user isn't currently viewing.
 
 let busyState = new Map();
+// Sessions whose turn finished while nobody was looking. In memory only (lost
+// on hub restart); cleared by the viewing client via POST /api/mark-seen.
+let unread = new Set();
 const eventClients = new Set();
 
 function broadcast(obj) {
@@ -137,6 +140,7 @@ async function pollBusy() {
     const results = await Promise.all(sessions.map(fetchBusy));
     const { done, nextBusy } = diffBusyTransitions(busyState, results);
     busyState = nextBusy;
+    unread = updateUnread(unread, done, sessions.map((s) => s.sessionId));
     for (const d of done) {
       broadcast({ type: "session_done", sessionId: d.sessionId, sessionName: d.sessionName });
     }
@@ -314,9 +318,17 @@ const server = createServer(async (req, res) => {
   }
 
   if (url === "/api/sessions") {
-    const sessions = listSessions().map((s) => ({ ...s, busy: currentBusy(s.sessionId) }));
+    const sessions = listSessions().map((s) => ({ ...s, busy: currentBusy(s.sessionId), unread: unread.has(s.sessionId) }));
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions }));
+    return;
+  }
+
+  if (url === "/api/mark-seen" && req.method === "POST") {
+    const body = await readJsonBody(req);
+    unread.delete(body?.sessionId);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 

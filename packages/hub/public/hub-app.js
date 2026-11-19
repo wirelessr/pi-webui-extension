@@ -337,11 +337,21 @@ import { formatStats } from "/utils.js";
     if (!document.hidden && document.hasFocus()) return;
     fireNotification(name);
   }
+  // The one place "unread" is cleared: the active session counts as seen only
+  // while the page is visible and focused (same gate as notifyActiveDone), so a
+  // turn that ends while you're away stays highlighted until you come back.
+  function syncSeen() {
+    if (document.hidden || !document.hasFocus()) return;
+    const a = sessions.find((s) => s.sessionId === activeSessionId);
+    if (!a?.unread) return;
+    setState({ sessions: sessions.map((s) => (s === a ? { ...s, unread: false } : s)) });
+    fetch("/api/mark-seen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: a.sessionId }) }).catch(() => {});
+  }
   function clearTitleAlert() {
     if (titleAlertActive) { titleAlertActive = false; document.title = originalTitle; }
   }
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) clearTitleAlert(); });
-  window.addEventListener("focus", clearTitleAlert);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { clearTitleAlert(); syncSeen(); } });
+  window.addEventListener("focus", () => { clearTitleAlert(); syncSeen(); });
   if ("Notification" in window && Notification.permission === "default") {
     const req = () => { Notification.requestPermission(); document.removeEventListener("click", req); };
     document.addEventListener("click", req);
@@ -426,6 +436,7 @@ import { formatStats } from "/utils.js";
     overlays.closeAll(); // overlays are per-session; never show the old session's
     chat.clearWatched(); // watched files are per-session; drop the previous session's
     setState({ activeSessionId: sessionId }); // → renders sidebar + queue
+    syncSeen();
     try { localStorage.setItem("pi-hub-active-session", sessionId); } catch {}
     $messages.innerHTML = "";
     setBusy(false);
@@ -655,9 +666,11 @@ import { formatStats } from "/utils.js";
     const pn = pendingSteers.get(s.sessionId)?.length || 0;
     let meta = `:${s.port}`;
     if (s.busy) meta += " · busy";
+    else if (s.unread) meta += " · done";
     if (pn) meta += ` · ${pn} pending`;
     el.querySelector(".item-meta").textContent = meta;
     if (s.busy) el.classList.add("session-busy");
+    if (s.unread) el.classList.add("session-unread");
     el.querySelector(".qr-btn").addEventListener("click", (e) => { e.stopPropagation(); handleReload(s); });
     el.querySelector(".close-btn").addEventListener("click", (e) => { e.stopPropagation(); handleClose(s); });
     el.addEventListener("click", () => { if (s.sessionId !== activeSessionId) switchTo(s.sessionId); });
@@ -788,6 +801,7 @@ import { formatStats } from "/utils.js";
     const liveIds = new Set(next.map((s) => s.sessionId));
     for (const sid of pendingSteers.keys()) if (!liveIds.has(sid)) pendingSteers.delete(sid);
     setState({ sessions: next, hubState: hs, activeSessionId: active }); // → renders sidebar + queue
+    syncSeen();
     // Reconcile the active header against the poll (authoritative bridge state).
     // A live stream owns the pill, but if the bridge says the turn ended while
     // we still think we're streaming, our SSE is stuck (agent disconnected

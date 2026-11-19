@@ -99,3 +99,22 @@ export function diffBusyTransitions(prevBusy, current) {
   }
   return { done, nextBusy };
 }
+
+/**
+ * Sessions that finished a turn and haven't been looked at yet. A completed
+ * turn marks its session unread; dead sessions are dropped. Clearing happens
+ * elsewhere (the viewing client reports it), so this only ever adds.
+ *
+ * @param {Set<string>} unread — current unread session ids
+ * @param {Array<{sessionId: string}>} done — from diffBusyTransitions
+ * @param {Iterable<string>} liveIds
+ * @returns {Set<string>}
+ */
+export function updateUnread(unread, done, liveIds) {
+  const live = new Set(liveIds);
+  const next = new Set();
+  for (const id of [...unread, ...done.map((d) => d.sessionId)]) {
+    if (live.has(id)) next.add(id);
+  }
+  return next;
+}

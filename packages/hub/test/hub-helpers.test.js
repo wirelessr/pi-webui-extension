@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession } from "../src/hub-helpers.js";
+import { buildSessionList, diffBusyTransitions, parseProxyPath, pickSession, updateUnread } from "../src/hub-helpers.js";
 
 describe("parseProxyPath", () => {
   const cases = [
@@ -171,3 +171,19 @@ describe("diffBusyTransitions", () => {
 
 // buildSpawnCommand / buildOpenSessionCommand now live in the shared
 // @wirelessr/pi-webui-components/session-spawn.js and are tested there.
+
+describe("updateUnread", () => {
+  test("a finished turn marks its session unread, keeping earlier ones", () => {
+    const next = updateUnread(new Set(["a"]), [{ sessionId: "b" }], ["a", "b", "c"]);
+    assert.deepEqual([...next].sort(), ["a", "b"]);
+  });
+  test("drops sessions that are no longer live", () => {
+    const next = updateUnread(new Set(["a", "gone"]), [{ sessionId: "dead" }], ["a"]);
+    assert.deepEqual([...next], ["a"]);
+  });
+  test("does not mutate the previous set", () => {
+    const prev = new Set(["a"]);
+    updateUnread(prev, [{ sessionId: "b" }], ["a", "b"]);
+    assert.deepEqual([...prev], ["a"]);
+  });
+});
