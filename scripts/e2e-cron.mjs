@@ -157,7 +157,9 @@ async function main() {
   const writeJobs = (enabled) => writeFileSync(join(cronDir, "cron-jobs.json"), JSON.stringify({ jobs: [{ ...job, enabled }] }, null, 2));
   writeJobs(true);
 
-  const env = { PI_BRIDGE_DIR: iso, PI_HUB_PORT: String(hubPort), PI_HUB_HOST: "127.0.0.1", PI_CRON_TICK_MS: "5000" };
+  // Sessions bind loopback and search for a port upward from their own base, away from the live range.
+  const sessionPortBase = await freePort();
+  const env = { PI_BRIDGE_DIR: iso, PI_HUB_PORT: String(hubPort), PI_HUB_HOST: "127.0.0.1", PI_HTTP_HOST: "127.0.0.1", PI_HTTP_PORT: String(sessionPortBase), PI_CRON_TICK_MS: "5000" };
   for (const k of ["HOME", "USER", "PATH", "LANG", "FIREWORKS_API_KEY", "AWS_PROFILE", "AWS_REGION"]) if (process.env[k] !== undefined) env[k] = process.env[k];
   const hubLog = openSync(join(iso, "hub.log"), "a");
   const hub = spawn("node", ["packages/hub/src/server.js"], { cwd: REPO, env, detached: true, stdio: ["ignore", hubLog, hubLog] });
