@@ -8,25 +8,68 @@
  * extension and hub. It is never loaded by browser code.
  */
 
-import { existsSync as fsExistsSync, readdirSync as fsReaddirSync, readFileSync as fsReadFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync as fsExistsSync, readdirSync as fsReaddirSync, readFileSync as fsReadFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 // Single-quote a value for sh: nothing inside '...' is expanded ($, `, \ are
 // literal), and an embedded ' is closed, escaped and reopened. Display names
 // can come from hand-edited files (cron job names), so they must not reach the
 // shell as double-quoted source.
-function shQuote(value) {
+export function shQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function isExecutableFile(path) {
+  try {
+    accessSync(path, fsConstants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Build the sh command string for spawning a brand-new pi session.
+ * argv to run a session command string (the build*Command strings below)
+ * through the user's shell: `zsh -c` when zsh is on PATH, else `sh -c`. A
+ * non-interactive `zsh -c` reads ~/.zshenv, so every spawned session (and
+ * everything it later spawns) gets the user's current environment instead of
+ * the spawning process's snapshot (the hub's pm2 env).
+ *
+ * zsh needs `setopt no_multios clobber` first. With MULTIOS (zsh's default)
+ * the commands' `2>&1 1>/dev/null | sed` sends pi's stdout to /dev/null AND the
+ * pipe, so the whole RPC event stream (conversation, tool output) would land in
+ * the log. With NOCLOBBER, `>> log` fails while the log does not exist yet, so
+ * sed never starts and pi's stderr goes to a broken pipe. It is a prefix of the
+ * -c string, so it runs after ~/.zshenv and wins over whatever that file sets.
+ *
+ * ~/.zshenv must hold env exports only: no alias, function, cd or setopt. An
+ * alias or function changes what the builder commands run, and a cd changes
+ * the cwd, which is load-bearing for resume. Its exports also override the env
+ * the spawner passes, so PI_BRIDGE_DIR must not be set there, and an exported
+ * PI_HTTP_PORT would make every spawned/opened/forked session claim the same
+ * port (reload is unaffected: it sets `PI_HTTP_PORT=${port} pi` inline).
+ * @param {string} cmd
+ * @param {object} [deps] — injectable for testing
+ * @param {string} [deps.pathEnv] — PATH to search (default process.env.PATH)
+ * @param {(path: string) => boolean} [deps.isExecutable]
+ * @returns {string[]} argv, executable first
+ */
+export function sessionShellArgv(cmd, deps = {}) {
+  const { pathEnv = process.env.PATH ?? "", isExecutable = isExecutableFile } = deps;
+  const hasZsh = pathEnv.split(delimiter).some((dir) => dir && isExecutable(join(dir, "zsh")));
+  return hasZsh ? ["zsh", "-c", `setopt no_multios clobber; ${cmd}`] : ["sh", "-c", cmd];
+}
+
+/**
+ * Build the shell command string for spawning a brand-new pi session. POSIX
+ * syntax; it runs through sessionShellArgv, so zsh executes it too (with
+ * no_multios and clobber).
  * @param {object} opts
  * @param {string} opts.logFile — shared stderr log file path
  * @param {number} [opts.port] — port for the default log prefix (`[<port>]`)
  * @param {string} [opts.prefix] — explicit log-line prefix, overrides port
- * @returns {string} sh command string
+ * @returns {string} shell command string
  */
 export function buildSpawnCommand({ logFile, port, prefix }) {
   const escapedLog = logFile.replace(/"/g, '\\"');
@@ -35,15 +78,16 @@ export function buildSpawnCommand({ logFile, port, prefix }) {
 }
 
 /**
- * Build the sh command string for opening (resuming) an existing session by
- * ID. The caller must spawn it from the session's original cwd (see
+ * Build the shell command string for opening (resuming) an existing session
+ * by ID. POSIX syntax; it runs through sessionShellArgv, so zsh executes it
+ * too (with no_multios and clobber). The caller must spawn it from the session's original cwd (see
  * findSessionCwd) — pi refuses to resume from the wrong project directory.
  * @param {object} opts
  * @param {string} opts.sessionId — session UUID or path
  * @param {string} [opts.name] — optional display name
  * @param {string} opts.logFile — stderr log file path
  * @param {string} [opts.prefix] — log-line prefix (default `[new]`)
- * @returns {string} sh command string
+ * @returns {string} shell command string
  */
 export function buildOpenSessionCommand({ sessionId, name, logFile, prefix = "[new]" }) {
   const escapedId = sessionId.replace(/"/g, '\\"');
@@ -53,8 +97,10 @@ export function buildOpenSessionCommand({ sessionId, name, logFile, prefix = "[n
 }
 
 /**
- * Build the sh command string for cloning a session — pi's `--fork` copies the
- * session's history into a brand-new session with its own id. Like resume, the
+ * Build the shell command string for cloning a session. POSIX syntax; it runs
+ * through sessionShellArgv, so zsh executes it too (with no_multios and
+ * clobber). pi's `--fork` copies the session's history into a brand-new
+ * session with its own id. Like resume, the
  * caller must spawn it from the source session's original cwd (fork reads the
  * project-bound session file; pi rejects the wrong project directory).
  * @param {object} opts
@@ -62,7 +108,7 @@ export function buildOpenSessionCommand({ sessionId, name, logFile, prefix = "[n
  * @param {string} [opts.name] — optional display name for the clone
  * @param {string} opts.logFile — stderr log file path
  * @param {string} [opts.prefix] — log-line prefix (default `[new]`)
- * @returns {string} sh command string
+ * @returns {string} shell command string
  */
 export function buildForkSessionCommand({ sessionId, name, logFile, prefix = "[new]" }) {
   const escapedId = sessionId.replace(/"/g, '\\"');

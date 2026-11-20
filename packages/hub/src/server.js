@@ -24,6 +24,7 @@ import {
   buildSpawnCommand,
   findSessionCwd,
   listSessionFileIds,
+  sessionShellArgv,
 } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { normalizeState, pruneState } from "../public/hub-state-logic.js";
 import { createCronRunner } from "./cron-runner.js";
@@ -205,7 +206,7 @@ function currentBusy(sessionId) {
 // file into the hub's BRIDGE_DIR via the env below.
 function spawnSession(cwd) {
   const cmd = buildSpawnCommand({ logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-new]" });
-  return spawnDetached(["sh", "-c", cmd], {
+  return spawnDetached(sessionShellArgv(cmd), {
     cwd: cwd || homedir(),
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
   });
@@ -216,7 +217,7 @@ function spawnSession(cwd) {
 // directory — pi refuses to resume from the wrong project directory.
 function openSession(sessionId, name) {
   const cmd = buildOpenSessionCommand({ sessionId, name, logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-open]" });
-  return spawnDetached(["sh", "-c", cmd], {
+  return spawnDetached(sessionShellArgv(cmd), {
     cwd: findSessionCwd(sessionId) || homedir(),
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
   });
@@ -227,7 +228,7 @@ function openSession(sessionId, name) {
 // it's auto-resolved with the shared findSessionCwd.
 function cloneSession(sessionId, name) {
   const cmd = buildForkSessionCommand({ sessionId, name, logFile: join(BRIDGE_DIR, "hub-spawn.log"), prefix: "[hub-clone]" });
-  return spawnDetached(["sh", "-c", cmd], {
+  return spawnDetached(sessionShellArgv(cmd), {
     cwd: findSessionCwd(sessionId) || homedir(),
     env: { ...process.env, PI_BRIDGE_DIR: BRIDGE_DIR },
   });

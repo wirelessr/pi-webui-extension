@@ -4,7 +4,12 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, test } from "node:test";
+import { sessionShellArgv } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { buildReloadCommand, dedupSessions, recoverStaleSessions } from "../session-helpers.js";
 
 // ── buildReloadCommand ─────────────────────────────────
@@ -17,7 +22,7 @@ describe("buildReloadCommand", () => {
       desc: "with name includes --name flag",
       opts: { ...baseOpts, name: "my-session" },
       checks: [
-        { label: "has --name", re: /--name "my-session"/ },
+        { label: "has --name", re: /--name 'my-session'/ },
         { label: "has --session", re: /--session "\/tmp\/session.jsonl"/ },
         { label: "has port env", re: /PI_HTTP_PORT=7331/ },
         { label: "has stderr redirect with port prefix", re: /2>&1 1>\/dev\/null \| sed -u "s\/\^\/\[7331\] \/" >> "\/tmp\/log.stderr.log"/ },
@@ -40,10 +45,10 @@ describe("buildReloadCommand", () => {
       ],
     },
     {
-      desc: "name with double quotes is escaped",
+      desc: "name with double quotes is single-quoted verbatim",
       opts: { ...baseOpts, name: 'he said "hi"' },
       checks: [
-        { label: "escaped quotes", re: /--name "he said \\"hi\\""/ },
+        { label: "single-quoted", re: /--name 'he said "hi"'/ },
       ],
     },
     {
@@ -280,4 +285,63 @@ describe("recoverStaleSessions", () => {
     assert.deepEqual(recovered.sort(), ["s1", "s2"]);
     assert.equal(deps.calls.opened.length, 2);
   });
+});
+
+// Run a session command string for real through the shell sessionShellArgv
+// picks, with stubs for `tail` (exits at once instead of blocking), `sleep`
+// and `pi` (one line to stdout, one to stderr) first on PATH and an isolated
+// ZDOTDIR (the user's own ~/.zshenv is never read). The command routes pi's
+// stderr to the log and must discard its stdout (the RPC event stream).
+function runSessionCommand(build, { shell, zshenv = "", piBody = "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2" }) {
+  const dir = mkdtempSync(join(tmpdir(), "session-cmd-"));
+  try {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    for (const [name, body] of [["tail", "exit 0"], ["sleep", "exit 0"], ["pi", piBody]]) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    writeFileSync(join(dir, ".zshenv"), zshenv);
+    const logFile = join(dir, "session.log");
+    const deps = shell === "sh" ? { isExecutable: () => false } : {};
+    const argv = sessionShellArgv(build(logFile), deps);
+    assert.equal(argv[0], shell);
+    const r = spawnSync(argv[0], argv.slice(1), { cwd: dir, env: { PATH: `${bin}:${process.env.PATH}`, ZDOTDIR: dir, HOME: dir }, encoding: "utf-8", timeout: 15000 });
+    assert.equal(r.status, 0, r.stderr);
+    return readFileSync(logFile, "utf-8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const HAS_ZSH = spawnSync("zsh", ["-c", "true"]).status === 0;
+
+describe("buildReloadCommand under the chosen shell: pi's stdout never reaches the log", () => {
+  const build = (logFile) => buildReloadCommand({ port: 7999, sessionPath: "/s.jsonl", name: "n", logFile });
+  const shells = [
+    { shell: "sh", label: "sh" },
+    { shell: "zsh", label: "zsh (MULTIOS on by default)" },
+    { shell: "zsh", label: "zsh with setopt multios in .zshenv", zshenv: "setopt multios\n" },
+    { shell: "zsh", label: "zsh with setopt noclobber in .zshenv, log not created yet", zshenv: "setopt noclobber\n" },
+  ];
+  for (const c of shells) {
+    const skip = c.shell === "zsh" && !HAS_ZSH && "zsh not installed";
+    test(`reload via ${c.label}`, { skip }, () => {
+      assert.equal(runSessionCommand(build, c), "[7999] STDERR-LINE\n");
+    });
+  }
+});
+
+describe("buildReloadCommand --name reaches pi verbatim (no shell expansion)", () => {
+  // the stub pi echoes its --name argument to stderr, which the command logs
+  const piBody = 'while [ $# -gt 0 ]; do [ "$1" = --name ] && printf "%s\\n" "$2" >&2; shift; done';
+  const names = ["a $(echo EXPANDED) b", "back `echo EXPANDED` tick", "it's here", "trailing\\", `mixed '"$HOME"' \\ end`];
+  for (const shell of ["sh", "zsh"]) {
+    for (const name of names) {
+      const skip = shell === "zsh" && !HAS_ZSH && "zsh not installed";
+      test(`${shell}: ${JSON.stringify(name)}`, { skip }, () => {
+        const log = runSessionCommand((logFile) => buildReloadCommand({ port: 7999, sessionPath: "/s.jsonl", name, logFile }), { shell, piBody });
+        assert.equal(log, `[7999] ${name}\n`);
+      });
+    }
+  }
 });

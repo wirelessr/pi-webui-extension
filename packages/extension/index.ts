@@ -18,7 +18,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd } from "@wirelessr/pi-webui-components/session-spawn.js";
+import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd, sessionShellArgv } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./helpers.js";
 import { generateSessionName, resolveAutoNameConfig } from "./name-generator.js";
@@ -246,7 +246,8 @@ export default function (pi: ExtensionAPI) {
 
 	function spawnNewSession(cwd?: string): { pid: number } {
 		const cmd = buildSpawnCommand({ logFile: bridgeLogPath() });
-		const child = spawn("sh", ["-c", cmd], {
+		const [shell, ...shellArgs] = sessionShellArgv(cmd);
+		const child = spawn(shell, shellArgs, {
 			cwd: cwd || process.cwd(),
 			detached: true,
 			stdio: "ignore",
@@ -259,7 +260,8 @@ export default function (pi: ExtensionAPI) {
 	function openSession(sessionId: string, name?: string, cwd?: string): { pid: number } {
 		const resolvedCwd = cwd || findSessionCwd(sessionId);
 		const cmd = buildOpenSessionCommand({ sessionId, name, logFile: bridgeLogPath() });
-		const child = spawn("sh", ["-c", cmd], {
+		const [shell, ...shellArgs] = sessionShellArgv(cmd);
+		const child = spawn(shell, shellArgs, {
 			cwd: resolvedCwd || process.cwd(),
 			detached: true,
 			stdio: "ignore",
@@ -340,7 +342,8 @@ export default function (pi: ExtensionAPI) {
 		if (!sessionPath) return;
 		const logFile = bridgeLogPath();
 		const cmd = buildReloadCommand({ port: actualPort, sessionPath, name: sessionName, logFile });
-		spawn("sh", ["-c", cmd], {
+		const [shell, ...shellArgs] = sessionShellArgv(cmd);
+		spawn(shell, shellArgs, {
 			detached: true,
 			stdio: "ignore",
 		});

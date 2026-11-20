@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -12,6 +12,7 @@ import {
   findSessionCwd,
   listSessionFileIds,
   sessionFileExists,
+  sessionShellArgv,
 } from "../src/session-spawn.js";
 
 describe("buildSpawnCommand", () => {
@@ -256,4 +257,100 @@ describe("sessionFileExists", () => {
     const tree = { p: ["2026_a.jsonl", "2026_b.jsonl", "notes.txt", "nounderscore.jsonl"], q: ["2026_c.jsonl"], "f.jsonl": null };
     assert.deepEqual([...listSessionFileIds(deps(tree))].sort(), ["a", "b", "c"]);
   });
+});
+
+describe("sessionShellArgv", () => {
+  const cases = [
+    { name: "zsh on PATH → zsh -c", pathEnv: "/a:/opt/zsh-bin:/b", exe: ["/opt/zsh-bin/zsh"], want: "zsh" },
+    { name: "no zsh on PATH → sh -c", pathEnv: "/a:/b", exe: ["/a/sh"], want: "sh" },
+    { name: "empty PATH entries are skipped", pathEnv: "::", exe: ["zsh"], want: "sh" },
+    { name: "empty PATH → sh -c", pathEnv: "", exe: [], want: "sh" },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      const isExecutable = (p) => c.exe.includes(p);
+      const cmd = "tail -f /dev/null | pi";
+      // zsh gets no_multios and clobber first (see sessionShellArgv); sh runs the string as is
+      const want = c.want === "zsh" ? ["zsh", "-c", `setopt no_multios clobber; ${cmd}`] : ["sh", "-c", cmd];
+      assert.deepEqual(sessionShellArgv(cmd, { pathEnv: c.pathEnv, isExecutable }), want);
+    });
+  }
+
+  test("default probe: finds a real executable, ignores directories and non-executables", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shell-argv-"));
+    try {
+      const bin = join(dir, "bin");
+      const notExec = join(dir, "noexec");
+      const isDir = join(dir, "isdir");
+      for (const d of [bin, notExec, isDir]) mkdirSync(d);
+      mkdirSync(join(isDir, "zsh"));
+      writeFileSync(join(notExec, "zsh"), "");
+      writeFileSync(join(bin, "zsh"), "#!/bin/sh\n");
+      chmodSync(join(bin, "zsh"), 0o755);
+      assert.equal(sessionShellArgv("x", { pathEnv: [notExec, isDir].join(":") })[0], "sh");
+      assert.equal(sessionShellArgv("x", { pathEnv: [notExec, isDir, bin].join(":") })[0], "zsh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults to process.env.PATH", () => {
+    const saved = process.env.PATH;
+    try {
+      delete process.env.PATH;
+      assert.equal(sessionShellArgv("x")[0], "sh");
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+});
+
+// Run a session command string for real through the shell sessionShellArgv
+// picks, with stubs for `tail` (exits at once instead of blocking), `sleep`
+// and `pi` (one line to stdout, one to stderr) first on PATH and an isolated
+// ZDOTDIR (the user's own ~/.zshenv is never read). The command routes pi's
+// stderr to the log and must discard its stdout (the RPC event stream).
+function runSessionCommand(build, { shell, zshenv = "" }) {
+  const dir = mkdtempSync(join(tmpdir(), "session-cmd-"));
+  try {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    for (const [name, body] of [["tail", "exit 0"], ["sleep", "exit 0"], ["pi", "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2"]]) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    writeFileSync(join(dir, ".zshenv"), zshenv);
+    const logFile = join(dir, "session.log");
+    const deps = shell === "sh" ? { isExecutable: () => false } : {};
+    const argv = sessionShellArgv(build(logFile), deps);
+    assert.equal(argv[0], shell);
+    const r = spawnSync(argv[0], argv.slice(1), { cwd: dir, env: { PATH: `${bin}:${process.env.PATH}`, ZDOTDIR: dir, HOME: dir }, encoding: "utf-8", timeout: 15000 });
+    assert.equal(r.status, 0, r.stderr);
+    return readFileSync(logFile, "utf-8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const HAS_ZSH = spawnSync("zsh", ["-c", "true"]).status === 0;
+
+describe("session commands under the chosen shell: pi's stdout never reaches the log", () => {
+  const builders = {
+    spawn: (logFile) => buildSpawnCommand({ logFile, prefix: "[t]" }),
+    open: (logFile) => buildOpenSessionCommand({ sessionId: "abc", name: "n", logFile, prefix: "[t]" }),
+    fork: (logFile) => buildForkSessionCommand({ sessionId: "abc", name: "n", logFile, prefix: "[t]" }),
+  };
+  const shells = [
+    { shell: "sh", label: "sh" },
+    { shell: "zsh", label: "zsh (MULTIOS on by default)" },
+    { shell: "zsh", label: "zsh with setopt multios in .zshenv", zshenv: "setopt multios\n" },
+    { shell: "zsh", label: "zsh with setopt noclobber in .zshenv, log not created yet", zshenv: "setopt noclobber\n" },
+  ];
+  for (const [kind, build] of Object.entries(builders)) {
+    for (const c of shells) {
+      const skip = c.shell === "zsh" && !HAS_ZSH && "zsh not installed";
+      test(`${kind} via ${c.label}`, { skip }, () => {
+        assert.equal(runSessionCommand(build, c), "[t] STDERR-LINE\n");
+      });
+    }
+  }
 });
