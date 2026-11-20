@@ -3,6 +3,8 @@ import { describe, test } from "node:test";
 import {
   deferBanners,
   extractSubagentViews,
+  historyRevDecision,
+  INTERRUPTED_PROBE_LIMIT,
   isBannerEntry,
   isSkillRead,
   isTranscriptInterrupted,
@@ -74,6 +76,40 @@ describe("deferBanners", () => {
     const out = deferBanners(h);
     assert.equal(out.length, h.length);
     assert.deepEqual([...out].sort((x, y) => x.id.localeCompare(y.id)), [...h].sort((x, y) => x.id.localeCompare(y.id)));
+  });
+});
+
+// ── historyRevDecision (banner live reload) ──────────
+
+describe("historyRevDecision", () => {
+  const cases = [
+    { name: "first poll records the rev, no reload", args: [null, 3, false], expected: { reload: false, nextRev: 3 } },
+    { name: "unchanged rev", args: [3, 3, false], expected: { reload: false, nextRev: 3 } },
+    { name: "changed while idle: reload and advance", args: [3, 4, false], expected: { reload: true, nextRev: 4 } },
+    { name: "changed while busy: keep the old rev so a later idle poll still reloads", args: [3, 4, true], expected: { reload: false, nextRev: 3 } },
+    { name: "no rev from the server", args: [3, undefined, false], expected: { reload: false, nextRev: 3 } },
+  ];
+  for (const c of cases) test(c.name, () => assert.deepEqual(historyRevDecision(...c.args), c.expected));
+
+  test("a change seen during a busy poll is reloaded on the next idle poll (regression: it used to be consumed)", () => {
+    let last = null;
+    const polls = [[1, false], [2, true], [2, true], [2, false]];
+    const reloads = [];
+    for (const [rev, busy] of polls) {
+      const d = historyRevDecision(last, rev, busy);
+      reloads.push(d.reload);
+      last = d.nextRev;
+    }
+    assert.deepEqual(reloads, [false, false, false, true]);
+  });
+});
+
+describe("interrupted probe window", () => {
+  test("a 1-entry window that ends in a banner cannot see the aborted turn (why the window is larger)", () => {
+    const aborted = [{ role: "assistant", toolCalls: [{ name: "bash" }] }, { role: "toolResult", text: "Command aborted" }, { role: "system", banner: true, text: "not evaluated: aborted" }];
+    assert.equal(isTranscriptInterrupted(aborted.slice(-1)), false);
+    assert.equal(isTranscriptInterrupted(aborted.slice(-INTERRUPTED_PROBE_LIMIT)), true);
+    assert.ok(INTERRUPTED_PROBE_LIMIT >= 3);
   });
 });
 

@@ -21,7 +21,7 @@ import { createInput } from "/input.js";
 import { createMobileNav } from "/mobile-nav.js";
 import { createModelView } from "/model-view.js";
 import { createOverlayManager } from "/overlay-manager.js";
-import { isTranscriptInterrupted } from "/parsers.js";
+import { historyRevDecision, INTERRUPTED_PROBE_LIMIT, isTranscriptInterrupted } from "/parsers.js";
 import { pendingCaption, pendingDrainIndex } from "/pending-steers.js";
 import { createStore } from "/store.js";
 import { createTreeView } from "/tree-view.js";
@@ -504,8 +504,9 @@ import { formatStats } from "/utils.js";
   // call this so the pill reflects a cut-off turn.
   async function refreshActiveInterrupted(id) {
     try {
-      // Only the last entry decides "interrupted" — don't pull the transcript.
-      const data = await getHistory(scopedFetch(id), { limit: 1 });
+      // Only the last non-banner entry decides "interrupted" — don't pull the transcript.
+      // A banner can follow the turn (an aborted run gets a grey one), so look past trailing banners.
+      const data = await getHistory(scopedFetch(id), { limit: INTERRUPTED_PROBE_LIMIT });
       if (id !== activeSessionId) return;
       activeInterrupted = isTranscriptInterrupted(data.history || []);
       if (!activeStreaming) setBusy(false);
@@ -1242,11 +1243,16 @@ import { formatStats } from "/utils.js";
       const status = await getStatus(scopedFetch(id));
       if (id !== activeSessionId || status.historyRev == null) return;
       const prev = lastHistoryRev.id === id ? lastHistoryRev.rev : null;
-      lastHistoryRev = { id, rev: status.historyRev };
-      if (prev != null && status.historyRev !== prev && !status.busy && !activeStreaming) {
+      const rv = historyRevDecision(prev, status.historyRev, !!status.busy || activeStreaming);
+      if (rv.reload) {
         const data = await getHistoryPage(scopedFetch(id));
-        if (id === activeSessionId && data.history?.length) chat.loadHistory(data.history, data.start);
+        if (id === activeSessionId && data.history?.length) {
+          chat.loadHistory(data.history, data.start);
+          activeInterrupted = isTranscriptInterrupted(data.history);
+          if (!activeStreaming) setBusy(false);
+        }
       }
+      lastHistoryRev = { id, rev: rv.nextRev };
     } catch {
       // Best effort — the next tick retries
     }

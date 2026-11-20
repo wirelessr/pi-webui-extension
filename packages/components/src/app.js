@@ -19,6 +19,7 @@ import { createInput } from "./input.js";
 import { createMobileNav } from "./mobile-nav.js";
 import { createModelView } from "./model-view.js";
 import { createOverlayManager } from "./overlay-manager.js";
+import { historyRevDecision } from "./parsers.js";
 import { pendingCaption, pendingDrainIndex } from "./pending-steers.js";
 import { initResize } from "./resize.js";
 import { createSessionsView } from "./sessions.js";
@@ -545,14 +546,12 @@ import { formatStats } from "./utils.js";
       updateHeader(status);
       // An extension appended a banner entry while this page was idle: the
       // stream is closed, so history is the only way to see it.
-      if (status.historyRev != null) {
-        const changed = lastHistoryRev != null && status.historyRev !== lastHistoryRev;
-        lastHistoryRev = status.historyRev;
-        if (changed && !status.busy && !$busyIndicator.classList.contains("busy")) {
-          const data = await getHistoryPage();
-          if (data.history?.length) chat.loadHistory(data.history, data.start);
-        }
+      const rv = historyRevDecision(lastHistoryRev, status.historyRev, !!status.busy || $busyIndicator.classList.contains("busy"));
+      if (rv.reload) {
+        const data = await getHistoryPage();
+        if (data.history?.length) chat.loadHistory(data.history, data.start);
       }
+      lastHistoryRev = rv.nextRev;
     } catch {
       // Server might be temporarily unavailable
     }

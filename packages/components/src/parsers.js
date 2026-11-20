@@ -72,6 +72,28 @@ export function deferBanners(history) {
 }
 
 /**
+ * Decide whether an idle page should reload history for a changed historyRev
+ * (bumped when an extension appends a banner after the stream closed). A
+ * change seen while the session or the page is busy must NOT be consumed:
+ * it stays pending until a later idle poll reloads, otherwise that banner
+ * would never appear live.
+ * @param {number|null} lastRev — rev the page last rendered (null = first poll)
+ * @param {number|null|undefined} rev — rev from /api/status
+ * @param {boolean} busy — session busy or page streaming
+ * @returns {{reload: boolean, nextRev: number|null}}
+ */
+export function historyRevDecision(lastRev, rev, busy) {
+  if (rev == null) return { reload: false, nextRev: lastRev };
+  if (lastRev == null) return { reload: false, nextRev: rev };
+  if (rev === lastRev) return { reload: false, nextRev: lastRev };
+  if (busy) return { reload: false, nextRev: lastRev };
+  return { reload: true, nextRev: rev };
+}
+
+/** History entries to fetch for the "interrupted" pill: enough to look past trailing banners (up to 2 per run). */
+export const INTERRUPTED_PROBE_LIMIT = 10;
+
+/**
  * Detect if a tool call is a read of a SKILL.md file.
  * @param {string} toolName
  * @param {object} args — tool call arguments
