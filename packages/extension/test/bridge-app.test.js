@@ -139,6 +139,20 @@ test("OPTIONS preflight returns 204 with CORS headers", async () => {
 	assert.strictEqual(res.headers.get("Access-Control-Allow-Headers"), "Content-Type");
 });
 
+test("GET /api/status carries historyRev from deps (0 when the dep is absent)", async () => {
+	let rev = 0;
+	const app = createBridgeApp({ ...createMockDeps(), getHistoryRev: () => rev });
+	let body = await (await app.fetch(req("/api/status"))).json();
+	assert.strictEqual(body.historyRev, 0);
+	rev = 3;
+	body = await (await app.fetch(req("/api/status"))).json();
+	assert.strictEqual(body.historyRev, 3);
+	const bare = createMockDeps();
+	delete bare.getHistoryRev;
+	body = await (await createBridgeApp(bare).fetch(req("/api/status"))).json();
+	assert.strictEqual(body.historyRev, 0);
+});
+
 test("CORS headers present on all responses", async () => {
 	const app = createBridgeApp(createMockDeps());
 	const res = await app.fetch(req("/api/status"));

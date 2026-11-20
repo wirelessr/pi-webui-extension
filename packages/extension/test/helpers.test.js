@@ -570,4 +570,32 @@ describe("parseHistoryEntries", () => {
   test("empty input gives empty history", () => {
     assert.deepEqual(parseHistoryEntries([]), []);
   });
+
+  test("maps a self-consistency-guard scg-status custom entry to a system banner", () => {
+    const [b] = parseHistoryEntries([
+      { type: "custom", id: "c1", timestamp: "t", customType: "scg-status", data: { state: "red", label: "contradiction found, nudge sent: X", claim: "X", quote: "Q", snapshot_id: "s", leaf_for: "l" } },
+    ]);
+    assert.deepEqual(b, { id: "c1", timestamp: "t", role: "system", banner: true, level: "red", text: "contradiction found, nudge sent: X", claim: "X", quote: "Q" });
+  });
+
+  test("other custom entries and an scg-status entry without data are not shown", () => {
+    const h = parseHistoryEntries([
+      { type: "custom", id: "c1", customType: "my-state", data: { count: 1 } },
+      { type: "custom", id: "c2", customType: "scg-status" },
+    ]);
+    assert.deepEqual(h, []);
+  });
+
+  test("a banner persisted between a tool call and its tool result keeps every entry", () => {
+    const h = parseHistoryEntries([
+      { type: "message", id: "1", message: { role: "user", content: "run it" } },
+      { type: "message", id: "2", message: { role: "assistant", content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: { command: "sleep 9" } }] } },
+      { type: "custom", id: "3", customType: "scg-status", data: { state: "red", label: "late banner" } },
+      { type: "message", id: "4", message: { role: "toolResult", toolCallId: "tc1", toolName: "bash", content: [{ type: "text", text: "done" }], isError: false } },
+      { type: "message", id: "5", message: { role: "assistant", content: [{ type: "text", text: "finished" }] } },
+    ]);
+    assert.deepEqual(h.map((e) => e.role), ["user", "assistant", "system", "toolResult", "assistant"]);
+    assert.equal(h[2].banner, true);
+    assert.equal(h[3].toolCallId, "tc1");
+  });
 });

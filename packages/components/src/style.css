@@ -1474,3 +1474,22 @@ pre:hover .copy-code-btn {
   overflow-x: auto;
   max-width: 100%;
 }
+
+/* ── Self-consistency-guard status banner ─────────── */
+.scg-banner {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin: 2px 0 6px;
+  border-radius: 4px;
+  border-left: 3px solid var(--text-dim);
+  color: var(--text-dim);
+}
+.scg-banner::before { margin-right: 6px; font-weight: 700; }
+.scg-banner.scg-green { border-left-color: #3fb950; }
+.scg-banner.scg-green::before { content: "\2713"; color: #3fb950; }
+.scg-banner.scg-yellow { border-left-color: #d29922; }
+.scg-banner.scg-yellow::before { content: "\25CF"; color: #d29922; }
+.scg-banner.scg-red { border-left-color: #f85149; color: #f85149; }
+.scg-banner.scg-red::before { content: "\25CF"; color: #f85149; }
+.scg-banner.scg-grey::before { content: "\2013"; }

@@ -9,7 +9,7 @@ import { extractFilePaths, fileName, isMarkdownPath } from "./artifacts.js";
 import { diffLines } from "./diff.js";
 import { renderMarkdown } from "./markdown.js";
 import { createOverlayManager } from "./overlay-manager.js";
-import { extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
+import { deferBanners, extractSubagentViews, isSkillRead, parseSkillBlock, parseSkillFrontmatter, parseSubagentMessages } from "./parsers.js";
 import { createScrollFollow } from "./scroll-follow.js";
 import { createStreamAccumulator } from "./stream-accumulator.js";
 import { doCopy } from "./ui-behaviors.js";
@@ -999,7 +999,9 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
       return turnEl;
     };
 
-    for (const entry of history) {
+    // Banners (guard status lines) arrive after their turn has closed (see
+    // deferBanners), so a banner never ends a turn early and drops its later tool results.
+    for (const entry of deferBanners(history)) {
       if (entry.role === "user") {
         closeTurn();
         addMessage("user", entry.text, out);
@@ -1013,6 +1015,13 @@ export function createChat({ $messages, $chat, $scrollBottom, isToolsExpanded, i
             if (!turnPaths.includes(p)) turnPaths.push(p);
           }
         }
+      } else if (entry.role === "system" && entry.banner) {
+        const el = document.createElement("div");
+        el.className = `scg-banner scg-${entry.level || "grey"}`;
+        el.textContent = entry.text;
+        if (entry.claim) el.title = `${entry.claim}${entry.quote ? `\n"${entry.quote}"` : ""}`;
+        closeTurn();
+        out.appendChild(el);
       } else if (entry.role === "system") {
         closeTurn();
         if (entry.text?.startsWith("--- Compacted")) {

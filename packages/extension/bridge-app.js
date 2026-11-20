@@ -90,6 +90,9 @@ const StatusResponse = z.object({
 	port: z.number(),
 	pid: z.number(),
 	startedAt: z.number(),
+	// Bumped when an extension appends a banner entry (scg:status), so clients
+	// holding an idle page know to reload history.
+	historyRev: z.number().optional(),
 	model: z.string().nullable(),
 	cwd: z.string(),
 	usage: UsageStats,
@@ -652,6 +655,7 @@ export function createBridgeApp(deps) {
 			port: deps.getActualPort(),
 			pid: deps.getPid(),
 			startedAt: deps.getStartedAt(),
+			historyRev: deps.getHistoryRev?.() ?? 0,
 			model: deps.getSessionCtx()?.model?.id ?? null,
 			cwd: deps.getCwd(),
 			usage: deps.computeUsageStats(),

@@ -1232,6 +1232,25 @@ import { formatStats } from "/utils.js";
   loadSessions();
   subscribeEvents();
   setInterval(loadSessions, 3000);
+  // An extension appended a banner entry after the stream closed: reload the
+  // active session's history when its historyRev changes (idle pages only).
+  let lastHistoryRev = { id: null, rev: null };
+  setInterval(async () => {
+    const id = activeSessionId;
+    if (!id) return;
+    try {
+      const status = await getStatus(scopedFetch(id));
+      if (id !== activeSessionId || status.historyRev == null) return;
+      const prev = lastHistoryRev.id === id ? lastHistoryRev.rev : null;
+      lastHistoryRev = { id, rev: status.historyRev };
+      if (prev != null && status.historyRev !== prev && !status.busy && !activeStreaming) {
+        const data = await getHistoryPage(scopedFetch(id));
+        if (id === activeSessionId && data.history?.length) chat.loadHistory(data.history, data.start);
+      }
+    } catch {
+      // Best effort — the next tick retries
+    }
+  }, 5000);
   createCronPanel({
     $section: document.getElementById("cron-section"),
     $chat,

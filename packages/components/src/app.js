@@ -538,9 +538,21 @@ import { formatStats } from "./utils.js";
   init();
 
   // Periodic status poll — detects auto-name changes and other updates
+  let lastHistoryRev = null;
   setInterval(async () => {
     try {
-      updateHeader(await getStatus());
+      const status = await getStatus();
+      updateHeader(status);
+      // An extension appended a banner entry while this page was idle: the
+      // stream is closed, so history is the only way to see it.
+      if (status.historyRev != null) {
+        const changed = lastHistoryRev != null && status.historyRev !== lastHistoryRev;
+        lastHistoryRev = status.historyRev;
+        if (changed && !status.busy && !$busyIndicator.classList.contains("busy")) {
+          const data = await getHistoryPage();
+          if (data.history?.length) chat.loadHistory(data.history, data.start);
+        }
+      }
     } catch {
       // Server might be temporarily unavailable
     }

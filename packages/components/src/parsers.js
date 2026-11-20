@@ -17,10 +17,58 @@
  */
 export function isTranscriptInterrupted(history) {
   if (!Array.isArray(history) || history.length === 0) return false;
-  const last = history[history.length - 1];
+  // Banners are appended after a run settles (an aborted run gets one too), so
+  // they must not hide how the turn itself ended.
+  let i = history.length - 1;
+  while (i > 0 && isBannerEntry(history[i])) i--;
+  const last = history[i];
+  if (isBannerEntry(last)) return false;
   if (!last || typeof last !== "object") return false;
   if (last.role === "assistant" && typeof last.text === "string" && last.text.trim() !== "") return false;
   return last.role === "assistant" || last.role === "toolResult";
+}
+
+/**
+ * Whether a history entry is an extension status banner (e.g. the
+ * self-consistency-guard `scg-status` entry mapped by parseHistoryEntry).
+ * @param {object} entry
+ * @returns {boolean}
+ */
+export function isBannerEntry(entry) {
+  return !!entry && entry.role === "system" && entry.banner === true;
+}
+
+/**
+ * Reorder banners so none splits an assistant turn. A banner can be persisted
+ * between an assistant tool call and its tool result (it is written when the
+ * check finishes, possibly while the next run is busy). One that arrives while
+ * a turn is open moves to where that turn closes: just before the next user or
+ * non-banner system entry, or the end. Everything else keeps its order.
+ * @param {Array<object>} history
+ * @returns {Array<object>}
+ */
+export function deferBanners(history) {
+  if (!Array.isArray(history)) return [];
+  const out = [];
+  let held = [];
+  let open = false;
+  for (const e of history) {
+    if (isBannerEntry(e)) {
+      if (open) held.push(e);
+      else out.push(e);
+      continue;
+    }
+    if (e?.role === "user" || e?.role === "system") {
+      out.push(...held);
+      held = [];
+      open = false;
+    } else if (e?.role === "assistant") {
+      open = true;
+    }
+    out.push(e);
+  }
+  out.push(...held);
+  return out;
 }
 
 /**

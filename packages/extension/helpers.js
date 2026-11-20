@@ -92,6 +92,19 @@ export function parseHistoryEntry(obj) {
         text: `--- Compacted (${obj.tokensBefore ?? "?"} tokens before) ---\n\n${obj.summary}`,
       };
     }
+    // Self-consistency-guard banner: a persisted, LLM-invisible status line.
+    if (obj.type === "custom" && obj.customType === "scg-status" && obj.data) {
+      return {
+        id: obj.id,
+        timestamp: obj.timestamp,
+        role: "system",
+        banner: true,
+        level: obj.data.state,
+        text: obj.data.label ?? "",
+        claim: obj.data.claim,
+        quote: obj.data.quote,
+      };
+    }
     return null;
   }
   const msg = obj.message;

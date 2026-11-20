@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  deferBanners,
   extractSubagentViews,
+  isBannerEntry,
   isSkillRead,
   isTranscriptInterrupted,
   parseSkillBlock,
@@ -22,12 +24,57 @@ describe("isTranscriptInterrupted", () => {
     { name: "ends with system message → false", history: [{ role: "system", text: "--- Compacted" }], expected: false },
     { name: "last entry null → false", history: [{ role: "assistant", text: "x" }, null], expected: false },
     { name: "assistant text of only whitespace → true", history: [{ role: "assistant", text: "   " }], expected: true },
+    { name: "aborted turn followed by a guard banner → still true", history: [{ role: "assistant", toolCalls: [{ name: "bash" }] }, { role: "system", banner: true, level: "grey", text: "not evaluated: aborted" }], expected: true },
+    { name: "finished turn followed by a guard banner → false", history: [{ role: "assistant", text: "done" }, { role: "system", banner: true, level: "yellow", text: "verified" }], expected: false },
+    { name: "only a banner → false", history: [{ role: "system", banner: true, text: "x" }], expected: false },
   ];
   for (const c of cases) {
     test(c.name, () => {
       assert.equal(isTranscriptInterrupted(c.history), c.expected);
     });
   }
+});
+
+// ── isBannerEntry / deferBanners ─────────────────────
+
+describe("isBannerEntry", () => {
+  const cases = [
+    [{ role: "system", banner: true }, true],
+    [{ role: "system", text: "--- Compacted" }, false],
+    [{ role: "assistant", banner: true }, false],
+    [null, false],
+  ];
+  for (const [entry, expected] of cases) {
+    test(JSON.stringify(entry), () => assert.equal(isBannerEntry(entry), expected));
+  }
+});
+
+describe("deferBanners", () => {
+  const u = (id) => ({ id, role: "user", text: id });
+  const a = (id) => ({ id, role: "assistant", text: id });
+  const r = (id) => ({ id, role: "toolResult", toolCallId: id, text: id });
+  const b = (id) => ({ id, role: "system", banner: true, level: "red", text: id });
+  const sys = (id) => ({ id, role: "system", text: id });
+  const ids = (h) => deferBanners(h).map((e) => e.id);
+  const cases = [
+    { name: "banner after a finished turn stays put", history: [u("u1"), a("a1"), r("r1"), a("a2"), b("B"), u("u2")], expected: ["u1", "a1", "r1", "a2", "B", "u2"] },
+    { name: "banner between a tool call and its result moves to the turn end (before the next user)", history: [u("u1"), a("a1"), u("u2"), a("call"), b("B"), r("res"), a("final"), u("u3")], expected: ["u1", "a1", "u2", "call", "res", "final", "B", "u3"] },
+    { name: "banner inside the last open turn moves to the end", history: [u("u1"), a("call"), b("B1"), r("res"), b("B2"), a("final")], expected: ["u1", "call", "res", "final", "B1", "B2"] },
+    { name: "banner before any assistant entry is not deferred", history: [u("u1"), b("B"), a("a1")], expected: ["u1", "B", "a1"] },
+    { name: "a compaction entry closes the turn and releases held banners first", history: [a("call"), b("B"), r("res"), sys("C"), a("x")], expected: ["call", "res", "B", "C", "x"] },
+    { name: "no banners: identity", history: [u("u1"), a("a1"), r("r1")], expected: ["u1", "a1", "r1"] },
+    { name: "non-array → []", history: null, expected: [] },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.deepEqual(ids(c.history), c.expected));
+  }
+
+  test("keeps every entry exactly once", () => {
+    const h = [u("u1"), a("call"), b("B"), r("res1"), r("res2"), a("final"), b("B2"), u("u2")];
+    const out = deferBanners(h);
+    assert.equal(out.length, h.length);
+    assert.deepEqual([...out].sort((x, y) => x.id.localeCompare(y.id)), [...h].sort((x, y) => x.id.localeCompare(y.id)));
+  });
 });
 
 // ── parseSkillBlock ──────────────────────────────────

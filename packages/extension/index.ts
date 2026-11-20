@@ -68,6 +68,8 @@ export default function (pi: ExtensionAPI) {
 	// SSE ~5s in while the compaction kept running for a minute (its done then
 	// died on a closed stream — silent, no feedback).
 	let compacting = false;
+	let historyRev = 0;
+	(pi as any).events?.on?.("scg:status", () => { historyRev++; });
 	// The web-initiated prompt text, captured at the input event and recorded
 	// into the replay buffer at the next agent_start — so a viewer that attaches
 	// later (queued dispatch, another tab) renders the user bubble too, not just
@@ -114,6 +116,7 @@ export default function (pi: ExtensionAPI) {
 		getActualPort: () => actualPort,
 		getPid: () => process.pid,
 		getStartedAt: () => sessionStartTime,
+		getHistoryRev: () => historyRev,
 	getCwd: () => sessionCtx?.cwd ?? process.cwd(),
 		getIsBusy: () => lifecycle.isBusy() || compacting,
 		getSessionFile: () => sessionFile,
