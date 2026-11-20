@@ -14,8 +14,9 @@ import { delimiter, join } from "node:path";
 
 // Single-quote a value for sh: nothing inside '...' is expanded ($, `, \ are
 // literal), and an embedded ' is closed, escaped and reopened. Display names
-// can come from hand-edited files (cron job names), so they must not reach the
-// shell as double-quoted source.
+// (cron job names come from a hand-edited file), session ids (request bodies,
+// discovery files), session paths and log paths (BRIDGE_DIR from the
+// environment) must all reach the shell this way, never as double-quoted source.
 export function shQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -72,9 +73,8 @@ export function sessionShellArgv(cmd, deps = {}) {
  * @returns {string} shell command string
  */
 export function buildSpawnCommand({ logFile, port, prefix }) {
-  const escapedLog = logFile.replace(/"/g, '\\"');
   const p = prefix || (port != null ? `[${port}]` : "[new]");
-  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed -u "s/^/${p} /" >> "${escapedLog}"`;
+  return `tail -f /dev/null | pi --mode rpc 2>&1 1>/dev/null | sed -u "s/^/${p} /" >> ${shQuote(logFile)}`;
 }
 
 /**
@@ -90,10 +90,8 @@ export function buildSpawnCommand({ logFile, port, prefix }) {
  * @returns {string} shell command string
  */
 export function buildOpenSessionCommand({ sessionId, name, logFile, prefix = "[new]" }) {
-  const escapedId = sessionId.replace(/"/g, '\\"');
-  const escapedLog = logFile.replace(/"/g, '\\"');
   const nameArg = name ? ` --name ${shQuote(name)}` : "";
-  return `tail -f /dev/null | pi --mode rpc${nameArg} --session "${escapedId}" 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> "${escapedLog}"`;
+  return `tail -f /dev/null | pi --mode rpc${nameArg} --session ${shQuote(sessionId)} 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> ${shQuote(logFile)}`;
 }
 
 /**
@@ -111,10 +109,8 @@ export function buildOpenSessionCommand({ sessionId, name, logFile, prefix = "[n
  * @returns {string} shell command string
  */
 export function buildForkSessionCommand({ sessionId, name, logFile, prefix = "[new]" }) {
-  const escapedId = sessionId.replace(/"/g, '\\"');
-  const escapedLog = logFile.replace(/"/g, '\\"');
   const nameArg = name ? ` --name ${shQuote(name)}` : "";
-  return `tail -f /dev/null | pi --mode rpc${nameArg} --fork "${escapedId}" 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> "${escapedLog}"`;
+  return `tail -f /dev/null | pi --mode rpc${nameArg} --fork ${shQuote(sessionId)} 2>&1 1>/dev/null | sed -u "s/^/${prefix} /" >> ${shQuote(logFile)}`;
 }
 
 // zsh (not sh) so every run reads ~/.zshenv and gets credentials fresh from the

@@ -13,14 +13,17 @@ import { shQuote } from "@wirelessr/pi-webui-components/session-spawn.js";
 /**
  *
  * Behavioral spec:
- * 1. Always includes `pi --mode rpc --session "<sessionPath>"`
+ * 1. Always includes `pi --mode rpc --session '<sessionPath>'`, single-quoted
+ *    (shQuote) like the name and the log path: the path comes from pi's session
+ *    manager and contains the user's directory names, so $(...), `...` and \
+ *    must reach pi literally
  * 2. Includes `--name '<name>'` only when name is provided, single-quoted
  *    (shQuote): names are generated from the conversation, so $(...), `...`
  *    and \ must reach pi literally, never be expanded by the shell
  * 3. Includes `PI_HTTP_PORT=<port>` env var
  * 4. Stderr redirected to logFile with `[port] ` prefix per line via a wrapper function
  * 5. Uses `sleep 1 && tail -f /dev/null |` as stdin keepalive
- * 6. Escapes double quotes in paths
+ * 6. The log path is single-quoted (shQuote) too
  *
  * @param {object} opts
  * @param {number} opts.port
@@ -31,10 +34,8 @@ import { shQuote } from "@wirelessr/pi-webui-components/session-spawn.js";
  *   sessionShellArgv, so zsh executes it too, with no_multios and clobber)
  */
 export function buildReloadCommand({ port, sessionPath, name, logFile }) {
-  const escapedPath = sessionPath.replace(/"/g, '\\"');
-  const escapedLog = logFile.replace(/"/g, '\\"');
   const nameArg = name ? ` --name ${shQuote(name)}` : "";
-  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session "${escapedPath}" 2>&1 1>/dev/null | sed -u "s/^/[${port}] /" >> "${escapedLog}"`;
+  return `sleep 1 && tail -f /dev/null | PI_HTTP_PORT=${port} pi --mode rpc${nameArg} --session ${shQuote(sessionPath)} 2>&1 1>/dev/null | sed -u "s/^/[${port}] /" >> ${shQuote(logFile)}`;
 }
 
 /**

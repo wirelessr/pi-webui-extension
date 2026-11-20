@@ -19,7 +19,7 @@ describe("buildSpawnCommand", () => {
   test("default prefix is [new]", () => {
     const cmd = buildSpawnCommand({ logFile: "/tmp/b.log" });
     assert.match(cmd, /pi --mode rpc /);
-    assert.match(cmd, /sed -u "s\/\^\/\[new\] \/" >> "\/tmp\/b.log"/);
+    assert.match(cmd, /sed -u "s\/\^\/\[new\] \/" >> '\/tmp\/b.log'/);
   });
   test("port drives the prefix when no explicit prefix", () => {
     const cmd = buildSpawnCommand({ logFile: "/tmp/b.log", port: 7331 });
@@ -29,47 +29,57 @@ describe("buildSpawnCommand", () => {
     const cmd = buildSpawnCommand({ logFile: "/tmp/b.log", port: 7331, prefix: "[hub-new]" });
     assert.match(cmd, /sed -u "s\/\^\/\[hub-new\] \/"/);
   });
-  test("escapes double quotes in the log path", () => {
-    const cmd = buildSpawnCommand({ logFile: '/tmp/"x".log' });
-    assert.match(cmd, />> "\/tmp\/\\"x\\".log"/);
+  test("the log path is single-quoted verbatim", () => {
+    assert.match(buildSpawnCommand({ logFile: '/tmp/"x".log' }), />> '\/tmp\/"x".log'/);
+    assert.match(buildSpawnCommand({ logFile: "/tmp/it's.log" }), />> '\/tmp\/it'\\''s.log'/);
   });
 });
 
 describe("buildOpenSessionCommand", () => {
   test("default prefix [new], includes --session, no --name", () => {
     const cmd = buildOpenSessionCommand({ sessionId: "abc", logFile: "/tmp/b.log" });
-    assert.match(cmd, /pi --mode rpc --session "abc"/);
+    assert.match(cmd, /pi --mode rpc --session 'abc'/);
     assert.match(cmd, /sed -u "s\/\^\/\[new\] \/"/);
     assert.doesNotMatch(cmd, /--name/);
   });
   test("custom prefix and name (name before --session)", () => {
     const cmd = buildOpenSessionCommand({ sessionId: "abc", name: "my sesh", logFile: "/tmp/b.log", prefix: "[hub-open]" });
-    assert.match(cmd, /--name 'my sesh' --session "abc"/);
+    assert.match(cmd, /--name 'my sesh' --session 'abc'/);
     assert.match(cmd, /sed -u "s\/\^\/\[hub-open\] \/"/);
   });
-  test("escapes double quotes in id and log; name is single-quoted", () => {
+  test("id, name and log are single-quoted verbatim", () => {
     const cmd = buildOpenSessionCommand({ sessionId: 'a"b', name: 'n"m', logFile: '/tmp/"x".log' });
-    assert.match(cmd, /--name 'n"m' --session "a\\"b"/);
-    assert.match(cmd, />> "\/tmp\/\\"x\\".log"/);
+    assert.match(cmd, /--name 'n"m' --session 'a"b'/);
+    assert.match(cmd, />> '\/tmp\/"x".log'/);
+  });
+  test("a single quote in the id or log path is closed, escaped and reopened", () => {
+    const cmd = buildOpenSessionCommand({ sessionId: "it's", logFile: "/tmp/it's.log" });
+    assert.match(cmd, /--session 'it'\\''s'/);
+    assert.match(cmd, />> '\/tmp\/it'\\''s.log'/);
   });
 });
 
 describe("buildForkSessionCommand", () => {
   test("default prefix [new], includes --fork, no --name", () => {
     const cmd = buildForkSessionCommand({ sessionId: "abc", logFile: "/tmp/b.log" });
-    assert.match(cmd, /pi --mode rpc --fork "abc"/);
+    assert.match(cmd, /pi --mode rpc --fork 'abc'/);
     assert.match(cmd, /sed -u "s\/\^\/\[new\] \/"/);
     assert.doesNotMatch(cmd, /--name/);
   });
   test("custom prefix and name (name before --fork)", () => {
     const cmd = buildForkSessionCommand({ sessionId: "abc", name: "my sesh (copy)", logFile: "/tmp/b.log", prefix: "[hub-clone]" });
-    assert.match(cmd, /--name 'my sesh \(copy\)' --fork "abc"/);
+    assert.match(cmd, /--name 'my sesh \(copy\)' --fork 'abc'/);
     assert.match(cmd, /sed -u "s\/\^\/\[hub-clone\] \/"/);
   });
-  test("escapes double quotes in id and log; name is single-quoted", () => {
+  test("id, name and log are single-quoted verbatim", () => {
     const cmd = buildForkSessionCommand({ sessionId: 'a"b', name: 'n"m', logFile: '/tmp/"x".log' });
-    assert.match(cmd, /--name 'n"m' --fork "a\\"b"/);
-    assert.match(cmd, />> "\/tmp\/\\"x\\".log"/);
+    assert.match(cmd, /--name 'n"m' --fork 'a"b'/);
+    assert.match(cmd, />> '\/tmp\/"x".log'/);
+  });
+  test("a single quote in the id or log path is closed, escaped and reopened", () => {
+    const cmd = buildForkSessionCommand({ sessionId: "it's", logFile: "/tmp/it's.log" });
+    assert.match(cmd, /--fork 'it'\\''s'/);
+    assert.match(cmd, />> '\/tmp\/it'\\''s.log'/);
   });
 });
 
@@ -84,7 +94,7 @@ describe("open/fork --name is shell-safe", () => {
         const dir = mkdtempSync(join(tmpdir(), "name-quote-"));
         try {
           const cmd = build({ sessionId: "abc", name, logFile: "/tmp/b.log" });
-          const word = cmd.match(/ --name (.*) --(?:session|fork) "abc"/)[1];
+          const word = cmd.match(/ --name (.*) --(?:session|fork) 'abc'/)[1];
           const r = spawnSync("sh", ["-c", `printf %s ${word}`], { cwd: dir, encoding: "utf-8" });
           assert.equal(r.status, 0);
           assert.equal(r.stdout, name);
@@ -310,23 +320,28 @@ describe("sessionShellArgv", () => {
 // and `pi` (one line to stdout, one to stderr) first on PATH and an isolated
 // ZDOTDIR (the user's own ~/.zshenv is never read). The command routes pi's
 // stderr to the log and must discard its stdout (the RPC event stream).
-function runSessionCommand(build, { shell, zshenv = "" }) {
+// piBody replaces the stub pi; logDir is a directory name created under the temp
+// dir to hold the log (any name, e.g. hostile ones); inspect(dir) runs before the
+// temp dir is deleted and, when given, the result is { log, inspected }.
+function runSessionCommand(build, { shell, zshenv = "", piBody = "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2", logDir, inspect }) {
   const dir = mkdtempSync(join(tmpdir(), "session-cmd-"));
   try {
     const bin = join(dir, "bin");
     mkdirSync(bin);
-    for (const [name, body] of [["tail", "exit 0"], ["sleep", "exit 0"], ["pi", "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2"]]) {
+    for (const [name, body] of [["tail", "exit 0"], ["sleep", "exit 0"], ["pi", piBody]]) {
       writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
       chmodSync(join(bin, name), 0o755);
     }
     writeFileSync(join(dir, ".zshenv"), zshenv);
-    const logFile = join(dir, "session.log");
+    if (logDir) mkdirSync(join(dir, logDir));
+    const logFile = join(dir, logDir ?? "", "session.log");
     const deps = shell === "sh" ? { isExecutable: () => false } : {};
     const argv = sessionShellArgv(build(logFile), deps);
     assert.equal(argv[0], shell);
     const r = spawnSync(argv[0], argv.slice(1), { cwd: dir, env: { PATH: `${bin}:${process.env.PATH}`, ZDOTDIR: dir, HOME: dir }, encoding: "utf-8", timeout: 15000 });
     assert.equal(r.status, 0, r.stderr);
-    return readFileSync(logFile, "utf-8");
+    const log = readFileSync(logFile, "utf-8");
+    return inspect ? { log, inspected: inspect(dir) } : log;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -352,5 +367,67 @@ describe("session commands under the chosen shell: pi's stdout never reaches the
         assert.equal(runSessionCommand(build, c), "[t] STDERR-LINE\n");
       });
     }
+  }
+});
+
+// The id and the log path reach the shell as source. Run the generated command
+// through each real shell with a stub pi that prints the id it received, and
+// check the value arrives byte-for-byte and nothing in it is expanded or run.
+const HOSTILE_VALUES = [
+  "a $(echo EXPANDED) b",
+  "back `echo EXPANDED` tick",
+  "$HOME",
+  `mixed '"$HOME"' \\ end`,
+  "trailing\\",
+  'a\\"b',
+  "it's here",
+  'with "double" quotes',
+  "two  spaces",
+  "/plain/path.jsonl",
+];
+const HOSTILE_LOG_DIR = "h $(touch M1) `touch M2` it's \"q\"";
+const SHELLS = [
+  { shell: "sh", skip: false },
+  { shell: "zsh", skip: !HAS_ZSH && "zsh not installed" },
+];
+const PI_ECHOES_ARG = 'while [ $# -gt 0 ]; do case "$1" in --session|--fork) printf "%s\\n" "$2" >&2;; esac; shift; done';
+
+describe("open/fork: the session id and the log path are shell-safe", () => {
+  const builders = {
+    open: (extra) => (logFile) => buildOpenSessionCommand({ logFile, prefix: "[t]", ...extra }),
+    fork: (extra) => (logFile) => buildForkSessionCommand({ logFile, prefix: "[t]", ...extra }),
+  };
+  for (const [kind, make] of Object.entries(builders)) {
+    for (const { shell, skip } of SHELLS) {
+      for (const sessionId of HOSTILE_VALUES) {
+        test(`${kind} id via ${shell}: ${JSON.stringify(sessionId)}`, { skip }, () => {
+          assert.equal(runSessionCommand(make({ sessionId }), { shell, piBody: PI_ECHOES_ARG }), `[t] ${sessionId}\n`);
+        });
+      }
+      test(`${kind} log path via ${shell}: hostile directory name`, { skip }, () => {
+        const { log, inspected } = runSessionCommand(make({ sessionId: "abc" }), {
+          shell,
+          piBody: PI_ECHOES_ARG,
+          logDir: HOSTILE_LOG_DIR,
+          inspect: (dir) => ["M1", "M2"].filter((m) => existsSync(join(dir, m))),
+        });
+        assert.equal(log, "[t] abc\n");
+        assert.deepEqual(inspected, []);
+      });
+    }
+  }
+});
+
+describe("spawn: the log path is shell-safe", () => {
+  for (const { shell, skip } of SHELLS) {
+    test(`spawn log path via ${shell}: hostile directory name`, { skip }, () => {
+      const { log, inspected } = runSessionCommand((logFile) => buildSpawnCommand({ logFile, prefix: "[t]" }), {
+        shell,
+        logDir: HOSTILE_LOG_DIR,
+        inspect: (dir) => ["M1", "M2"].filter((m) => existsSync(join(dir, m))),
+      });
+      assert.equal(log, "[t] STDERR-LINE\n");
+      assert.deepEqual(inspected, []);
+    });
   }
 });

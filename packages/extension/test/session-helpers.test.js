@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -23,9 +23,9 @@ describe("buildReloadCommand", () => {
       opts: { ...baseOpts, name: "my-session" },
       checks: [
         { label: "has --name", re: /--name 'my-session'/ },
-        { label: "has --session", re: /--session "\/tmp\/session.jsonl"/ },
+        { label: "has --session", re: /--session '\/tmp\/session.jsonl'/ },
         { label: "has port env", re: /PI_HTTP_PORT=7331/ },
-        { label: "has stderr redirect with port prefix", re: /2>&1 1>\/dev\/null \| sed -u "s\/\^\/\[7331\] \/" >> "\/tmp\/log.stderr.log"/ },
+        { label: "has stderr redirect with port prefix", re: /2>&1 1>\/dev\/null \| sed -u "s\/\^\/\[7331\] \/" >> '\/tmp\/log.stderr.log'/ },
         { label: "has tail keepalive", re: /tail -f \/dev\/null/ },
       ],
     },
@@ -34,7 +34,7 @@ describe("buildReloadCommand", () => {
       opts: { ...baseOpts, name: undefined },
       checks: [
         { label: "no --name", re: /^((?!--name).)*$/s },
-        { label: "has --session", re: /--session "\/tmp\/session.jsonl"/ },
+        { label: "has --session", re: /--session '\/tmp\/session.jsonl'/ },
       ],
     },
     {
@@ -52,17 +52,25 @@ describe("buildReloadCommand", () => {
       ],
     },
     {
-      desc: "sessionPath with double quotes is escaped",
+      desc: "sessionPath with double quotes is single-quoted verbatim",
       opts: { ...baseOpts, name: undefined, sessionPath: '/tmp/"weird".jsonl' },
       checks: [
-        { label: "escaped path", re: /--session "\/tmp\/\\"weird\\".jsonl"/ },
+        { label: "verbatim path", re: /--session '\/tmp\/"weird".jsonl'/ },
       ],
     },
     {
-      desc: "logFile with double quotes is escaped",
+      desc: "logFile with double quotes is single-quoted verbatim",
       opts: { ...baseOpts, name: undefined, logFile: '/tmp/"log".txt' },
       checks: [
-        { label: "escaped log", re: /sed -u "s\/\^\/\[7331\] \/" >> "\/tmp\/\\"log\\".txt"/ },
+        { label: "verbatim log", re: /sed -u "s\/\^\/\[7331\] \/" >> '\/tmp\/"log".txt'/ },
+      ],
+    },
+    {
+      desc: "a single quote in the path or log is closed, escaped and reopened",
+      opts: { ...baseOpts, name: undefined, sessionPath: "/tmp/it's.jsonl", logFile: "/tmp/it's.log" },
+      checks: [
+        { label: "path", re: /--session '\/tmp\/it'\\''s.jsonl'/ },
+        { label: "log", re: />> '\/tmp\/it'\\''s.log'/ },
       ],
     },
   ];
@@ -292,7 +300,10 @@ describe("recoverStaleSessions", () => {
 // and `pi` (one line to stdout, one to stderr) first on PATH and an isolated
 // ZDOTDIR (the user's own ~/.zshenv is never read). The command routes pi's
 // stderr to the log and must discard its stdout (the RPC event stream).
-function runSessionCommand(build, { shell, zshenv = "", piBody = "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2" }) {
+// logDir is a directory name created under the temp dir to hold the log (any
+// name, e.g. hostile ones); inspect(dir) runs before the temp dir is deleted
+// and, when given, the result is { log, inspected }.
+function runSessionCommand(build, { shell, zshenv = "", piBody = "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2", logDir, inspect }) {
   const dir = mkdtempSync(join(tmpdir(), "session-cmd-"));
   try {
     const bin = join(dir, "bin");
@@ -302,13 +313,15 @@ function runSessionCommand(build, { shell, zshenv = "", piBody = "echo STDOUT-EV
       chmodSync(join(bin, name), 0o755);
     }
     writeFileSync(join(dir, ".zshenv"), zshenv);
-    const logFile = join(dir, "session.log");
+    if (logDir) mkdirSync(join(dir, logDir));
+    const logFile = join(dir, logDir ?? "", "session.log");
     const deps = shell === "sh" ? { isExecutable: () => false } : {};
     const argv = sessionShellArgv(build(logFile), deps);
     assert.equal(argv[0], shell);
     const r = spawnSync(argv[0], argv.slice(1), { cwd: dir, env: { PATH: `${bin}:${process.env.PATH}`, ZDOTDIR: dir, HOME: dir }, encoding: "utf-8", timeout: 15000 });
     assert.equal(r.status, 0, r.stderr);
-    return readFileSync(logFile, "utf-8");
+    const log = readFileSync(logFile, "utf-8");
+    return inspect ? { log, inspected: inspect(dir) } : log;
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -343,5 +356,43 @@ describe("buildReloadCommand --name reaches pi verbatim (no shell expansion)", (
         assert.equal(log, `[7999] ${name}\n`);
       });
     }
+  }
+});
+
+// The session path and the log path reach the shell as source: the stub pi
+// prints the path it received and nothing in either value may be expanded or run.
+describe("buildReloadCommand --session and the log path are shell-safe", () => {
+  const values = [
+    "a $(echo EXPANDED) b",
+    "back `echo EXPANDED` tick",
+    "$HOME",
+    `mixed '"$HOME"' \\ end`,
+    "trailing\\",
+    'a\\"b',
+    "it's here",
+    'with "double" quotes',
+    "two  spaces",
+    "/plain/path.jsonl",
+  ];
+  const logDir = "h $(touch M1) `touch M2` it's \"q\"";
+  const piBody = 'while [ $# -gt 0 ]; do [ "$1" = --session ] && printf "%s\\n" "$2" >&2; shift; done';
+  for (const shell of ["sh", "zsh"]) {
+    const skip = shell === "zsh" && !HAS_ZSH && "zsh not installed";
+    for (const sessionPath of values) {
+      test(`${shell} path: ${JSON.stringify(sessionPath)}`, { skip }, () => {
+        const log = runSessionCommand((logFile) => buildReloadCommand({ port: 7999, sessionPath, name: "n", logFile }), { shell, piBody });
+        assert.equal(log, `[7999] ${sessionPath}\n`);
+      });
+    }
+    test(`${shell} log path: hostile directory name`, { skip }, () => {
+      const { log, inspected } = runSessionCommand((logFile) => buildReloadCommand({ port: 7999, sessionPath: "/s.jsonl", name: "n", logFile }), {
+        shell,
+        piBody,
+        logDir,
+        inspect: (dir) => ["M1", "M2"].filter((m) => existsSync(join(dir, m))),
+      });
+      assert.equal(log, "[7999] /s.jsonl\n");
+      assert.deepEqual(inspected, []);
+    });
   }
 });
