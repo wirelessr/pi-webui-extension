@@ -265,7 +265,7 @@ export async function doModelCommand(opts) {
  * @returns {Promise<{action: string, reason: string}>}
  */
 export async function doSelectCommand(opts) {
-  const { cmd, chat, input, executeCommandFn } = opts;
+  const { cmd, chat, executeCommandFn } = opts;
 
   if (cmd.source === "builtin" && cmd.executable) {
     try {

@@ -183,13 +183,6 @@ describe("generateSessionName", () => {
 });
 
 describe("generateSessionName with custom provider", () => {
-  function makeFetch(responseContent) {
-    return async () => ({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: responseContent } }] }),
-    });
-  }
-
   test("uses custom apiUrl and model", async () => {
     let captured = null;
     const fetchFn = async (url, opts) => {

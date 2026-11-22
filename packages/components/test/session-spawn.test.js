@@ -115,7 +115,7 @@ function fakeDeps(tree, { rootExists = true, throwRoot = false, throwDirs = [] }
   return {
     sessionsRoot: ROOT,
     existsSync: (p) => (p === ROOT ? rootExists : true),
-    readdirSync: (p, opts) => {
+    readdirSync: (p) => {
       if (p === ROOT) {
         if (throwRoot) throw new Error("root boom");
         return Object.keys(tree).map((name) => ({ name, isDirectory: () => tree[name] !== null }));

@@ -1120,7 +1120,7 @@ import { formatStats } from "/utils.js";
   function ensureActiveAttached() {
     if (!activeSessionId || activeStreaming || attachingActive) return;
     const active = sessions.find((s) => s.sessionId === activeSessionId);
-    if (!active || !active.busy) return;
+    if (!active?.busy) return;
     attachingActive = true;
     const id = activeSessionId;
     const attach = new AbortController();

@@ -49,7 +49,7 @@ export function buildSessionList(discoveries, isPidAlive, fileMtimeMs = () => nu
     // hub then fails to proxy). Prefer piPid; fall back to pid for legacy files
     // written before piPid existed.
     const livenessPid = d?.piPid ?? d?.pid;
-    if (!d || !d.sessionId || !livenessPid || !isPidAlive(livenessPid)) continue;
+    if (!d?.sessionId || !livenessPid || !isPidAlive(livenessPid)) continue;
     const existing = byId.get(d.sessionId);
     if (!existing || (d.startedAt ?? 0) > (existing.startedAt ?? 0)) {
       byId.set(d.sessionId, d);

@@ -528,7 +528,7 @@ describe("doInit — initialization sequence", () => {
       loadHistoryFn: () => {},
       autoResizeFn: () => {},
       onStatusFn: () => {},
-      attachStreamFn: (onEvent) => { attachCalled = true; return Promise.resolve(true); },
+      attachStreamFn: () => { attachCalled = true; return Promise.resolve(true); },
       onStreamEventFn: () => {},
       setBusyFn: (v) => { busyCalled = v; },
       setStreamingFn: (v) => { streamingCalled = v; },

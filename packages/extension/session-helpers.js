@@ -96,7 +96,7 @@ export function recoverStaleSessions({
   const recovered = [];
   for (const file of listDiscoveryFiles()) {
     const content = readDiscovery(file);
-    if (!content || !content.pid || isPidAlive(content.pid)) continue;
+    if (!content?.pid || isPidAlive(content.pid)) continue;
 
     // Dead session. Drop (don't recover) if it's our own stale file, or its
     // underlying session file is gone.
