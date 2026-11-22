@@ -83,6 +83,20 @@ describe("loadSidebarWidth", () => {
   test("returns default when getItem is undefined", () => {
     assert.equal(loadSidebarWidth(undefined), 220);
   });
+
+  test("honors a custom default when nothing usable is saved", () => {
+    assert.equal(loadSidebarWidth(() => null, 383), 383);
+    assert.equal(loadSidebarWidth(() => "abc", 383), 383);
+    assert.equal(loadSidebarWidth(undefined, 383), 383);
+  });
+
+  test("a saved value wins over the custom default", () => {
+    assert.equal(loadSidebarWidth(() => "300", 383), 300);
+  });
+
+  test("clamps a custom default into range", () => {
+    assert.equal(loadSidebarWidth(() => null, 900), 500);
+  });
 });
 
 describe("saveSidebarWidth", () => {

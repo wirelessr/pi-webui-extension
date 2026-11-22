@@ -23,6 +23,7 @@ import { createModelView } from "/model-view.js";
 import { createOverlayManager } from "/overlay-manager.js";
 import { historyRevDecision, INTERRUPTED_PROBE_LIMIT, isTranscriptInterrupted } from "/parsers.js";
 import { pendingCaption, pendingDrainIndex } from "/pending-steers.js";
+import { initResize } from "/resize.js";
 import { createStore } from "/store.js";
 import { createTreeView } from "/tree-view.js";
 import { formatStats } from "/utils.js";
@@ -169,6 +170,9 @@ import { formatStats } from "/utils.js";
   });
 
   const mobileNav = createMobileNav({ $app });
+
+  // Desktop only: draggable sessions/cron sidebar (no-op on mobile, <=700px).
+  initResize({ $sidebar: document.getElementById("sidebar-left"), $handle: document.getElementById("sidebar-resize"), defaultWidth: 383 });
 
   // Expand/collapse all tool + thinking blocks (persisted).
   const $expandToolsBtn = document.getElementById("expand-tools-btn");

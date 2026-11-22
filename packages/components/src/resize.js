@@ -39,10 +39,11 @@ export function computeResizeWidth(startX, startW, currentX) {
  * @param {function} getItem — injectable localStorage.getItem
  * @returns {number} saved width or default 220
  */
-export function loadSidebarWidth(getItem) {
+export function loadSidebarWidth(getItem, defaultWidth = 220) {
   const raw = getItem?.(STORAGE_KEY);
-  if (raw == null) return 220;
+  if (raw == null) return clampSidebarWidth(defaultWidth);
   const w = Number(raw);
+  if (Number.isNaN(w)) return clampSidebarWidth(defaultWidth);
   return clampSidebarWidth(w);
 }
 
@@ -63,8 +64,9 @@ export function saveSidebarWidth(w, setItem) {
  * @param {object} opts
  * @param {HTMLElement} opts.$sidebar — the left sidebar element
  * @param {HTMLElement} opts.$handle — the resize handle element
+ * @param {number} [opts.defaultWidth] — width used until the user drags (default 220)
  */
-export function initResize({ $sidebar, $handle }) {
+export function initResize({ $sidebar, $handle, defaultWidth = 220 }) {
   if (!$sidebar || !$handle) return;
 
   function isMobile() {
@@ -72,7 +74,7 @@ export function initResize({ $sidebar, $handle }) {
   }
 
   // Restore saved width
-  const savedW = loadSidebarWidth(localStorage.getItem.bind(localStorage));
+  const savedW = loadSidebarWidth(localStorage.getItem.bind(localStorage), defaultWidth);
   if (!isMobile()) {
     $sidebar.style.width = `${savedW}px`;
   }
@@ -138,7 +140,7 @@ export function initResize({ $sidebar, $handle }) {
     if (isMobile()) {
       $sidebar.style.width = "";
     } else {
-      const w = loadSidebarWidth(localStorage.getItem.bind(localStorage));
+      const w = loadSidebarWidth(localStorage.getItem.bind(localStorage), defaultWidth);
       $sidebar.style.width = `${w}px`;
     }
   });
