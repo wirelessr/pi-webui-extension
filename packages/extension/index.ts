@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildOpenSessionCommand, buildSpawnCommand, findSessionCwd, sessionShellArgv } from "@wirelessr/pi-webui-components/session-spawn.js";
 import { createBridgeApp } from "./bridge-app.js";
 import * as helpers from "./helpers.js";
-import { generateSessionName, resolveAutoNameConfig } from "./name-generator.js";
+import { createRetitleTracker, generateRetitle, generateSessionName, placeholderName, resolveAutoNameConfig } from "./name-generator.js";
 import { buildReloadCommand, dedupSessions, recoverStaleSessions as planRecoverStaleSessions } from "./session-helpers.js";
 import { createSseBroadcast } from "./sse-broadcast.js";
 import { buildUserTree } from "./tree-logic.js";
@@ -96,6 +96,7 @@ export default function (pi: ExtensionAPI) {
 	let sessionCtx: any = null;
 	let sessionStartTime = Date.now();
 	let autoNameAttempted = false;
+	const retitle = createRetitleTracker();
 
 	// Built-in commands loaded from pi's internal module
 	let builtinCommands: { name: string; description: string }[] = [];
@@ -478,7 +479,40 @@ export default function (pi: ExtensionAPI) {
 		const endedOnError = lastAssistantEndedOnError(event?.messages ?? []);
 		const { scheduled, graceMs } = lifecycle.agentEnd(event, { willRetry, endedOnError });
 		if (scheduled) serverLog(`agent_end: scheduling finalize in ${graceMs}ms (endedOnError=${endedOnError})`);
+		retitle.onAgentEnd(event?.messages);
 	});
+
+	// agent_settled, not agent_end: it fires only after retries, compaction and
+	// queued follow-ups are done, so the first run's reply is final.
+	pi.on("agent_settled", (_event: any, ctx: any) => {
+		if (isForeignAgentEvent(ctx)) return;
+		applyRetitleDecision(retitle.onSettled(sessionName));
+	});
+
+	// Only decided outcomes (retitle/drop) log; wait/none fire on every settle.
+	function applyRetitleDecision(d: any): void {
+		if (d.action === "drop") {
+			serverLog(`retitle: dropped (${d.reason})`);
+			return;
+		}
+		if (d.action !== "retitle") return;
+		const cfg = resolveAutoNameConfig();
+		generateRetitle(d.userText, d.assistantText, cfg.apiKey, { apiUrl: cfg.apiUrl, model: cfg.model }).then((title) => {
+			if (!title) {
+				serverLog("retitle: null-title");
+				return;
+			}
+			if (!retitle.canApply(sessionName)) {
+				serverLog("retitle: skipped-renamed");
+				return;
+			}
+			// session_info_changed stores the normalized name and writes discovery.
+			pi.setSessionName(title);
+			serverLog(`retitle: applied: ${title}`);
+		}).catch((err) => {
+			serverLog(`retitle: error: ${err.message}`);
+		});
+	}
 
 	pi.on("input", (event: any) => {
 		if (waitingForExtensionInput && event.source === "extension") {
@@ -501,20 +535,42 @@ export default function (pi: ExtensionAPI) {
 		// Auto-name session on first user prompt (fire-and-forget)
 		if (!autoNameAttempted && !sessionName && typeof event.text === "string" && event.text.trim().length > 0) {
 			autoNameAttempted = true;
+			retitle.onPrompt(event.text);
 			const nameCfg = resolveAutoNameConfig();
 			if (!nameCfg.enabled) {
 				serverLog(`auto-name: disabled via PI_AUTO_NAME=0`);
+				retitle.onNoPlaceholder();
 			} else {
 				serverLog(`auto-name: attempting (apiKey=${nameCfg.apiKey ? "yes" : "no"}, model=${nameCfg.model}, textLen=${event.text.length})`);
 				generateSessionName(event.text, nameCfg.apiKey, { apiUrl: nameCfg.apiUrl, model: nameCfg.model }).then((name) => {
-					if (!name) {
-						name = event.text.slice(0, 120).replace(/\n/g, " ").trim();
-						serverLog(`auto-name: skipped, using prompt prefix fallback`);
+					if (sessionName) {
+						serverLog(`auto-name: skipped, already named`);
+						retitle.onNoPlaceholder();
+						return;
 					}
-					sessionName = name;
-					pi.setSessionName(name);
-					serverLog(`auto-named session: ${name}`);
+					if (name) {
+						sessionName = name;
+						pi.setSessionName(name);
+						serverLog(`auto-named session: ${name}`);
+						try { writeDiscovery(); } catch { /* best effort */ }
+						retitle.onNoPlaceholder();
+						return;
+					}
+					const placeholder = placeholderName(event.text);
+					pi.setSessionName(placeholder);
+					// Read back pi's stored (normalized) name: the tracker compares it
+					// verbatim. Not sessionCtx, which is null in --no-session processes.
+					const stored = pi.getSessionName();
+					sessionName = stored;
+					serverLog(`auto-name: skipped, using placeholder`);
+					serverLog(`auto-named session: ${stored}`);
 					try { writeDiscovery(); } catch { /* best effort */ }
+					if (nameCfg.apiKey) {
+						applyRetitleDecision(retitle.onPlaceholder(stored));
+					} else {
+						// No key: the title call never ran, so neither can a retitle.
+						retitle.onNoPlaceholder();
+					}
 				}).catch((err) => {
 					serverLog(`auto-name error: ${err.message}`);
 				});
