@@ -153,7 +153,14 @@ async function startSession(label) {
 
 const status = async (s) => (await fetch(`${s.url}/api/status`)).json();
 const post = async (s, path, body) => (await fetch(`${s.url}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json().catch(() => ({}));
-const prompt = (s, message) => post(s, "/api/prompt", { message, timeout: 240000 });
+// Caught at creation: the turn is awaited only after polling, and a rejection
+// in that window would be unhandled (Node exits without cleanup).
+const prompt = (s, message) => post(s, "/api/prompt", { message, timeout: 240000 }).catch((e) => ({ fetchError: e.message }));
+const awaitTurn = async (label, turn) => {
+  const r = await turn;
+  if (r?.fetchError) report("fail", `${label}: prompt request failed`, `(${r.fetchError})`);
+  return r;
+};
 
 async function stopSession(s) {
   try { await post(s, "/api/kill-session", { pid: s.pgid }); } catch {}
@@ -172,7 +179,7 @@ async function scenarioSkip() {
   const placeholder = await waitFor(() => autoNamed(s.port), 60000);
   check("1 skip: auto-named", !!placeholder, `(${JSON.stringify(placeholder)})`);
   check("1 skip: placeholder has no URL", !!placeholder && !hasUrl(placeholder), `(${JSON.stringify(placeholder)})`);
-  await turn;
+  await awaitTurn("1 skip", turn);
   const d = await waitDecision(s.port);
   check("1 skip: retitle applied", d?.m[1] === "applied", `(${d ? d.m[0] : "no retitle: line"})`);
   const name = d?.m[1] === "applied"
@@ -186,7 +193,7 @@ async function scenarioDescriptive() {
   const s = await startSession("descriptive");
   const turn = prompt(s, DESCRIPTIVE_PROMPT);
   const title = await waitFor(() => autoNamed(s.port), 60000);
-  await turn;
+  await awaitTurn("2 descriptive", turn);
   check("2 descriptive: titled", !!title && !hasUrl(title) && title !== DESCRIPTIVE_PROMPT, `(${JSON.stringify(title)})`);
   // Both the title decision and the first settle are past: the tracker is done
   // (or never left wait), so a retitle line could only come from a bug.
@@ -201,14 +208,14 @@ async function scenarioRenamed() {
   const placeholder = await waitFor(() => autoNamed(s.port), 60000);
   if (!placeholder) {
     check("3 renamed: auto-named", false, "(no auto-named line)");
-    await turn;
+    await awaitTurn("3 renamed", turn);
     await stopSession(s);
     return;
   }
   const beforeSend = logLines(s.port).length;
   await post(s, "/api/rename-session", { name: MANUAL_NAME });
   const afterReturn = logLines(s.port).length;
-  await turn;
+  await awaitTurn("3 renamed", turn);
   const d = await waitDecision(s.port);
   const name = (await status(s)).sessionName;
   const kind = d?.m[1];
@@ -228,7 +235,7 @@ async function scenarioAborted() {
   const turn = prompt(s, SKIP_PROMPT);
   const started = await waitFor(() => logLines(s.port).some((l) => l.startsWith("agent_start fired") && l.includes("foreign=false")), 60000);
   if (started) await post(s, "/api/abort", {});
-  await turn;
+  await awaitTurn("4 aborted", turn);
   const placeholder = await waitFor(() => autoNamed(s.port), 60000);
   const d = await waitDecision(s.port);
   const name = (await status(s)).sessionName;
@@ -296,12 +303,18 @@ async function main() {
   }
 }
 
+function finish() {
+  cleanup();
+  const verdict = results.includes("fail") ? "RED" : results.includes("inconclusive") ? "INCONCLUSIVE" : "GREEN";
+  console.log(`VERDICT ${verdict}`);
+  process.exit(verdict === "GREEN" ? 0 : verdict === "RED" ? 1 : 3);
+}
+
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { cleanup(); process.exit(130); });
+// A stray rejection or throw must still end our process groups before exiting.
+for (const ev of ["unhandledRejection", "uncaughtException"]) {
+  process.on(ev, (e) => { report("fail", `harness ${ev}`, e?.message ?? String(e)); finish(); });
+}
 main()
   .catch((e) => { report("fail", "harness error", e.message); })
-  .finally(() => {
-    cleanup();
-    const verdict = results.includes("fail") ? "RED" : results.includes("inconclusive") ? "INCONCLUSIVE" : "GREEN";
-    console.log(`VERDICT ${verdict}`);
-    process.exit(verdict === "GREEN" ? 0 : verdict === "RED" ? 1 : 3);
-  });
+  .finally(finish);

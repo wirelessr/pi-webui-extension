@@ -217,7 +217,10 @@ export async function generateRetitle(userText, assistantText, apiKey, opts = {}
 // Same cap as the old prompt-prefix fallback.
 const MAX_PLACEHOLDER_LENGTH = 120;
 
-const URL_RE = /https?:\/\/[^\s<>]+/g;
+// Printable ASCII minus `<>`: a URL glued to CJK text ends at the first
+// non-ASCII char instead of swallowing the sentence.
+const URL_RE = /https?:\/\/[!-;=?-~]+/g;
+const URL_TRAILING_PUNCT_RE = /[)\]}.,;:!?'"]+$/;
 
 function urlLabel(raw) {
   let url;
@@ -250,7 +253,12 @@ function urlLabel(raw) {
  */
 export function placeholderName(text) {
   return text
-    .replace(URL_RE, (u) => urlLabel(u))
+    .replace(URL_RE, (match, offset, str) => {
+      // Sentence punctuation after a URL stays in the text, not in the URL.
+      const tail = match.match(URL_TRAILING_PUNCT_RE)?.[0] ?? "";
+      const glued = tail === "" && /\P{ASCII}/u.test(str[offset + match.length] ?? "");
+      return `${urlLabel(match.slice(0, match.length - tail.length))}${tail}${glued ? " " : ""}`;
+    })
     .replace(/\s+/g, " ")
     .slice(0, MAX_PLACEHOLDER_LENGTH)
     .trim();

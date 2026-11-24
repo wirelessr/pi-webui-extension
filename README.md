@@ -100,14 +100,16 @@ data: {"type":"done","text":"...","messages":[...]}
 | `PI_AUTO_NAME_API_URL` | Fireworks chat-completions URL | extension | OpenAI-compatible chat-completions endpoint |
 | `PI_AUTO_NAME_MODEL` | `accounts/fireworks/models/deepseek-v4p1-flash` | extension | model id for title generation |
 
-Auto-naming titles a session from its first prompt. When that prompt is only a
-link plus a vague verb (the title model answers `SKIP`), the session gets a short
-placeholder instead of the raw URL (`Slack 他在問什麼`, `service#107231 看一下`,
-`ENG-12345 ...`, otherwise the link's hostname). After the first turn finishes,
-the session is retitled once from the prompt plus the assistant's reply, unless
-the name was changed in the meantime. The reply (truncated to about 1500
-characters) is sent to the same title provider that already receives the prompt.
-Without an API key the placeholder is kept and no retitle happens.
+Auto-naming titles a session from its first prompt. When the title model answers
+`SKIP` (typically a prompt that is only a link plus a vague verb) or the title
+call fails, the session gets a short placeholder instead of the raw URL
+(`Slack 他在問什麼`, `service#107231 看一下`, `ENG-12345 ...`, otherwise the link's
+hostname). After the first turn finishes, the session is retitled once from the
+prompt plus the assistant's reply, unless the name was changed in the meantime.
+The reply (truncated to about 1500 characters) is sent to the same title
+provider that already receives the prompt. Without an API key the title call
+never runs: every first prompt gets a placeholder-style name and no retitle
+happens.
 
 ## Security
 

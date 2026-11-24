@@ -573,6 +573,8 @@ export default function (pi: ExtensionAPI) {
 					}
 				}).catch((err) => {
 					serverLog(`auto-name error: ${err.message}`);
+					// The first turn must not wait forever for a placeholder that never comes.
+					try { retitle.onNoPlaceholder(); } catch { /* best effort */ }
 				});
 			}
 		}

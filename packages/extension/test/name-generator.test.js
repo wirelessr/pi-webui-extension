@@ -262,6 +262,10 @@ describe("placeholderName", () => {
     ["URL-only prompt", "https://netskope.slack.com/archives/C0CJ/p17954", "Slack"],
     ["multiple URLs", "https://github.com/o/r/pull/1 vs https://netskope.atlassian.net/browse/OBS-9", "r#1 vs OBS-9"],
     ["unparseable URL", "https://[bad 看一下", "link 看一下"],
+    ["CJK glued to slack link", "https://netskope.slack.com/archives/C0CJ/p17954他在問什麼", "Slack 他在問什麼"],
+    ["CJK glued to bare host", "https://example.com看一下", "example.com 看一下"],
+    ["closing paren stays", "(see https://docs.example.com/x)", "(see docs.example.com)"],
+    ["trailing period stays", "look at https://github.com/o/r/pull/7.", "look at r#7."],
     ["whitespace/newline collapse", "  https://x.example.com/p\n\n  看一下\t這個  ", "x.example.com 看一下 這個"],
   ];
   for (const [name, input, expected] of cases) {
