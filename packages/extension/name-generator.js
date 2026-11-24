@@ -220,7 +220,21 @@ const MAX_PLACEHOLDER_LENGTH = 120;
 // Printable ASCII minus `<>`: a URL glued to CJK text ends at the first
 // non-ASCII char instead of swallowing the sentence.
 const URL_RE = /https?:\/\/[!-;=?-~]+/g;
-const URL_TRAILING_PUNCT_RE = /[)\]}.,;:!?'"]+$/;
+const URL_TRAILING_PUNCT = ")]}.,;:!?'\"";
+
+// Length of `url` without trailing sentence punctuation. A `)` is only
+// punctuation when unbalanced, so `/wiki/Foo_(bar)` keeps its paren.
+function urlEnd(url) {
+  let end = url.length;
+  while (end > 0 && URL_TRAILING_PUNCT.includes(url[end - 1])) {
+    if (url[end - 1] === ")") {
+      const head = url.slice(0, end);
+      if (head.split("(").length >= head.split(")").length) break;
+    }
+    end--;
+  }
+  return end;
+}
 
 function urlLabel(raw) {
   let url;
@@ -255,9 +269,11 @@ export function placeholderName(text) {
   return text
     .replace(URL_RE, (match, offset, str) => {
       // Sentence punctuation after a URL stays in the text, not in the URL.
-      const tail = match.match(URL_TRAILING_PUNCT_RE)?.[0] ?? "";
-      const glued = tail === "" && /\P{ASCII}/u.test(str[offset + match.length] ?? "");
-      return `${urlLabel(match.slice(0, match.length - tail.length))}${tail}${glued ? " " : ""}`;
+      const end = urlEnd(match);
+      const tail = match.slice(end);
+      const next = str[offset + match.length] ?? "";
+      const glued = tail === "" && /\P{ASCII}/u.test(next) && !/\p{P}/u.test(next);
+      return `${urlLabel(match.slice(0, end))}${tail}${glued ? " " : ""}`;
     })
     .replace(/\s+/g, " ")
     .slice(0, MAX_PLACEHOLDER_LENGTH)
