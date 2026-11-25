@@ -182,8 +182,9 @@ Scheduled `pi -p` jobs. Files live under `BRIDGE_DIR/cron/`, outside git: `cron-
   bridge for the whole turn and replayed per joiner on `/api/stream/attach`. Buffer
   resets at `agent_start`. `GET /api/stream/attach` answering 409 is benign (idle, nothing
   buffered); it is probed on every session init.
-- **Queued messages**: hub-side in-memory FIFO per session (no persistence). A message
-  leaves the queue when its turn STARTS; a failed dispatch is put back and pauses the queue.
+- **Busy-time sends**: no hub-side queue. A send while busy is proxied to the bridge's
+  `/api/steer` (Option/Cmd/Ctrl+Enter sends a follow-up); the "waiting" chips are
+  per-tab browser state. A failed send drops the chip and alerts.
 - **Hub addressing**: `/s/<id>/api/...`; the shell hands components a session-scoped
   fetch. Switching aborts the old session's streams and ignores stale events. The header
   busy state tracks the polled `/api/sessions` value.
@@ -207,5 +208,5 @@ Scheduled `pi -p` jobs. Files live under `BRIDGE_DIR/cron/`, outside git: `cron-
 - PM2: `pi-webui-hub` runs from the dev repo; `pm2 save` done, `pm2 startup` NOT run (no
   auto-start on reboot).
 - The hub is otherwise stateless (sessions from discovery files, history from pi's JSONL,
-  busy + queues in memory). Add persistence only when a feature needs it, smallest tool
+  busy in memory). Add persistence only when a feature needs it, smallest tool
   first: a JSON file, never SQLite.

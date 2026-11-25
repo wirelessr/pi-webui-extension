@@ -5,8 +5,8 @@ A WebUI + HTTP bridge for [pi](https://pi.dev) coding-agent sessions.
 - **Per-session** — an in-process extension gives each pi session its own HTTP
   bridge + WebUI (curl-friendly JSON API and an SSE-streaming browser UI).
 - **Central hub** (optional) — one browser entry point that reverse-proxies and
-  aggregates every session, switches between them in-page, queues messages per
-  session, and notifies you when a session you're *not* looking at finishes.
+  aggregates every session, switches between them in-page, steers or follows up
+  on a running turn, and notifies you when a session you're *not* looking at finishes.
 
 The hub is additive: install just the extension for per-session mode, or run the
 hub in front of it for a single-pane, cross-session experience.
@@ -15,19 +15,18 @@ hub in front of it for a single-pane, cross-session experience.
 
 | Area | What you get | Where |
 |------|--------------|-------|
-| Chat | Streaming markdown, tool calls, thinking and subagent blocks, diffs, syntax highlighting, image and file upload, file viewer, QR code for mobile | extension + components |
+| Chat | Streaming markdown, tool calls, thinking and subagent blocks, diffs, syntax highlighting, paste-to-upload images, file viewer, QR code for mobile (per-session UI) | extension + components |
 | Long sessions | History pages in by turn ("Load earlier"); a joining tab replays the in-flight turn | extension |
 | Session tree | Browse the branch tree and switch branches | extension + hub |
 | Models and commands | Model picker, slash-command palette, `/compact` | extension |
-| Steering | Send a message mid-turn (steer), or queue a follow-up with Option/Cmd/Ctrl+Enter | hub + extension |
+| Steering | A message sent while the session is busy is injected into the running turn (steer); Option/Cmd/Ctrl+Enter queues a follow-up instead. Pending messages show as chips in the tab that sent them | hub + extension |
 | Session management | New (cwd or resume by id), open, clone, rename, kill and reload sessions from the browser | hub |
 | Session sidebar | Ordered by last activity, grouped (last 2 days / last 7 days / older), user groups, unread marker for turns you have not seen, resizable | hub |
-| Message queue | Per-session FIFO for messages sent while busy; dispatched when the turn ends | hub |
 | Notifications | Browser notification when a background session finishes a turn | hub |
 | Cron | Scheduled headless `pi -p` jobs from `cron-jobs.json`, Cron panel with run history, logs, Run now and Open | hub |
 | Telegram | Drive sessions from a private Telegram chat, completion pushes | telegram |
 | Auto-naming | Session title from the first prompt, retitled once after the first turn | extension |
-| Self-consistency banners | Guard status banners shown in history | components |
+| Self-consistency banners | Status banners shown in history; needs the separate self-consistency-guard extension that emits them | extension + components |
 
 ## Packages
 
@@ -35,7 +34,7 @@ hub in front of it for a single-pane, cross-session experience.
 |---------|------|
 | `packages/components` | Shared browser UI and pure modules (`@wirelessr/pi-webui-components`) |
 | `packages/extension` | In-process pi bridge: one HTTP + SSE server per session |
-| `packages/hub` | Reverse proxy and aggregator, single-page UI, queue, cron |
+| `packages/hub` | Reverse proxy and aggregator, single-page UI, spawn, cron |
 | `packages/telegram` | Telegram bot, a client of the hub's HTTP API |
 
 ## Stability
@@ -45,12 +44,14 @@ them needs a major version:
 
 - The bridge REST/SSE API (`/api/openapi.json` is the source of truth).
 - The hub routes: `/api/sessions`, `/api/events`, `/api/hub-state`,
-  `/api/cron/*`, `/s/<sessionId>/...`.
+  `/api/mark-seen`, `/api/new-session`, `/api/open-session`,
+  `/api/clone-session`, `/api/cron/*`, `/s/<sessionId>/...`.
 - On-disk formats under `PI_BRIDGE_DIR`: discovery files, `hub-state.json`,
   `cron/cron-jobs.json`, `cron/runs/<runId>/run.json`.
-- A newer hub against an older bridge degrades (for example history paging
-  falls back to a full render) rather than breaking, but new features need the
-  matching extension release. Update both together.
+- Some newer hub features degrade against an older bridge (history paging
+  falls back to a full render), but new features need the matching extension
+  release. Run the hub from the same release tag as the extension
+  (`git checkout v<x.y.z>`) and update both together.
 
 ## Why the hub can't replace the per-session bridges
 
@@ -99,6 +100,7 @@ discovery dir exists).
 
 ```bash
 git clone https://github.com/wirelessr/pi-webui-extension && cd pi-webui-extension
+git checkout v1.0.0     # match the extension release you installed
 npm install
 pm2 start packages/hub/ecosystem.config.cjs   # or: node packages/hub/src/server.js
 ```
@@ -154,11 +156,13 @@ happens.
 
 ## Security
 
-There is no built-in authentication. Binding to `0.0.0.0` exposes the bridge
-and hub to your network, and anyone who can reach the port can drive your
-agent. Put the hub behind an authenticating proxy (for example an ngrok tunnel
-with OAuth), or set the host to `127.0.0.1` for local-only use. The Telegram
-bot reaches the hub over localhost and only obeys one chat id.
+There is no built-in authentication, and both the hub (`PI_HUB_HOST`) and every
+session bridge (`PI_HTTP_HOST`) default to `0.0.0.0`. Anyone who can reach
+either port can drive your agent. For remote access, bind both to `127.0.0.1`
+and put an authenticating proxy (for example an ngrok tunnel with OAuth) in
+front of the hub only; a proxy alone leaves the hub and the bridge ports open
+on your LAN. The hub reaches bridges over localhost. The Telegram bot reaches
+the hub over localhost and only obeys one chat id.
 
 ## Development
 
@@ -181,7 +185,7 @@ publishes it to the `release` branch + a GitHub Release. No npm registry.
 ## Limitations
 
 - One turn at a time per session at the bridge (a concurrent direct request gets
-  HTTP 409; the hub layers a per-session queue on top).
+  HTTP 409; the UI sends a steer instead when the session is busy).
 - Bridge exposes `/compact`; other TUI `/commands` aren't available over HTTP.
 - Cross-session busy→idle detection is poll-based (~2s).
 - No built-in authentication (see Security).

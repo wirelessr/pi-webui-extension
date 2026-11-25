@@ -49,14 +49,18 @@ The hub has no authentication; see the root README (Security).
 - **Sidebar.** Sessions are ordered by last activity (derived from the last
   message, not the file mtime), bucketed into last 2 days, last 7 days and
   older, optionally put into named groups, and marked unread when a turn
-  finished that you have not viewed. Width is resizable. Layout is persisted in
-  `hub-state.json`.
+  finished that you have not viewed. Groups and collapsed state are persisted
+  in `hub-state.json`; the sidebar width is per-browser (`localStorage`).
 - **Spawning.** `+` starts a session: an id resumes it (from its original cwd),
   a cwd starts a new one there, neither inherits the viewed session's cwd.
-  Sessions start through the user's `zsh -c` so they get a fresh environment.
-- **Queue.** Messages sent while a session is busy wait in an in-memory FIFO
-  per session and are injected when the turn ends. A failed dispatch is put
-  back and pauses the queue. Not persisted across hub restarts.
+  Sessions start through `zsh -c` when zsh is on PATH (falling back to
+  `sh -c`), so they get the user's current environment rather than the hub's
+  frozen one.
+- **Busy-time sends.** The hub keeps no message queue. A message sent while a
+  session is busy is proxied to the bridge's `/api/steer` and injected into the
+  running turn; Option/Cmd/Ctrl+Enter sends a follow-up instead. The "waiting"
+  chips are browser state of the tab that sent them; a failed send removes the
+  chip and shows an alert.
 - **Notifications.** The hub polls each session's busy state (~2 s) and emits
   `session_done` on `/api/events` when one goes busy to idle; the page notifies
   for sessions you are not viewing. The viewed session is notified by its own
@@ -79,7 +83,10 @@ history, logs, Run now, and Open (resume the run's session).
 - Runs are kept under `cron/runs/<runId>/` (`run.json`, `out.log`, `exit`),
   30 per job. One hub per `PI_BRIDGE_DIR` owns the scheduler (`scheduler.lock`);
   others only read. A bad file or job degrades, it does not stop the hub.
-- Jobs run under `zsh -c`, so credentials and tools must come from `~/.zshenv`.
+- Jobs run under `zsh -c` (zsh is required; there is no fallback) with the
+  hub's environment, overlaid by `~/.zshenv`. Keep `~/.zshenv` env-only
+  (exports, no aliases, `cd` or `setopt`) and never set `PI_BRIDGE_DIR`,
+  `PI_HTTP_PORT` or `PI_HTTP_HOST` there.
 
 ## Not in scope
 

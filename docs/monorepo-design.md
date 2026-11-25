@@ -7,13 +7,13 @@ and `CLAUDE.md`.
 
 ## What shipped differently
 
-- **Distribution (§7, §8, §10, D1):** no GitHub Packages. The extension is a
+- **Distribution (§7, §8, §9, §10, D1):** no GitHub Packages. The extension is a
   flat build with `components` vendored under `vendor/`; a `v*.*.*` tag
   publishes it to the `release` branch (`npm run release <x.y.z>`). The local
   install is a build output deployed with `scripts/deploy-local.sh`.
 - **Hub addressing (D2):** path prefix `/s/<id>/...`, as recommended.
 - **Beyond the original scope:** the hub gained session spawn/resume/clone,
-  per-session message queue, grouped and activity-ordered sidebar with unread
+  busy-time steering, grouped and activity-ordered sidebar with unread
   markers, and a cron scheduler; a fourth package, `packages/telegram`, is a
   Telegram client of the hub API. Authentication is intentionally left to an
   external proxy.
