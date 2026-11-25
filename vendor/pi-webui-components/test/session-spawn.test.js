@@ -1,0 +1,433 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, test } from "node:test";
+import {
+  buildCronRunArgv,
+  buildForkSessionCommand,
+  buildOpenSessionCommand,
+  buildSpawnCommand,
+  findSessionCwd,
+  listSessionFileIds,
+  sessionFileExists,
+  sessionShellArgv,
+} from "../src/session-spawn.js";
+
+describe("buildSpawnCommand", () => {
+  test("default prefix is [new]", () => {
+    const cmd = buildSpawnCommand({ logFile: "/tmp/b.log" });
+    assert.match(cmd, /pi --mode rpc /);
+    assert.match(cmd, /sed -u "s\/\^\/\[new\] \/" >> '\/tmp\/b.log'/);
+  });
+  test("port drives the prefix when no explicit prefix", () => {
+    const cmd = buildSpawnCommand({ logFile: "/tmp/b.log", port: 7331 });
+    assert.match(cmd, /sed -u "s\/\^\/\[7331\] \/"/);
+  });
+  test("explicit prefix overrides port", () => {
+    const cmd = buildSpawnCommand({ logFile: "/tmp/b.log", port: 7331, prefix: "[hub-new]" });
+    assert.match(cmd, /sed -u "s\/\^\/\[hub-new\] \/"/);
+  });
+  test("the log path is single-quoted verbatim", () => {
+    assert.match(buildSpawnCommand({ logFile: '/tmp/"x".log' }), />> '\/tmp\/"x".log'/);
+    assert.match(buildSpawnCommand({ logFile: "/tmp/it's.log" }), />> '\/tmp\/it'\\''s.log'/);
+  });
+});
+
+describe("buildOpenSessionCommand", () => {
+  test("default prefix [new], includes --session, no --name", () => {
+    const cmd = buildOpenSessionCommand({ sessionId: "abc", logFile: "/tmp/b.log" });
+    assert.match(cmd, /pi --mode rpc --session 'abc'/);
+    assert.match(cmd, /sed -u "s\/\^\/\[new\] \/"/);
+    assert.doesNotMatch(cmd, /--name/);
+  });
+  test("custom prefix and name (name before --session)", () => {
+    const cmd = buildOpenSessionCommand({ sessionId: "abc", name: "my sesh", logFile: "/tmp/b.log", prefix: "[hub-open]" });
+    assert.match(cmd, /--name 'my sesh' --session 'abc'/);
+    assert.match(cmd, /sed -u "s\/\^\/\[hub-open\] \/"/);
+  });
+  test("id, name and log are single-quoted verbatim", () => {
+    const cmd = buildOpenSessionCommand({ sessionId: 'a"b', name: 'n"m', logFile: '/tmp/"x".log' });
+    assert.match(cmd, /--name 'n"m' --session 'a"b'/);
+    assert.match(cmd, />> '\/tmp\/"x".log'/);
+  });
+  test("a single quote in the id or log path is closed, escaped and reopened", () => {
+    const cmd = buildOpenSessionCommand({ sessionId: "it's", logFile: "/tmp/it's.log" });
+    assert.match(cmd, /--session 'it'\\''s'/);
+    assert.match(cmd, />> '\/tmp\/it'\\''s.log'/);
+  });
+});
+
+describe("buildForkSessionCommand", () => {
+  test("default prefix [new], includes --fork, no --name", () => {
+    const cmd = buildForkSessionCommand({ sessionId: "abc", logFile: "/tmp/b.log" });
+    assert.match(cmd, /pi --mode rpc --fork 'abc'/);
+    assert.match(cmd, /sed -u "s\/\^\/\[new\] \/"/);
+    assert.doesNotMatch(cmd, /--name/);
+  });
+  test("custom prefix and name (name before --fork)", () => {
+    const cmd = buildForkSessionCommand({ sessionId: "abc", name: "my sesh (copy)", logFile: "/tmp/b.log", prefix: "[hub-clone]" });
+    assert.match(cmd, /--name 'my sesh \(copy\)' --fork 'abc'/);
+    assert.match(cmd, /sed -u "s\/\^\/\[hub-clone\] \/"/);
+  });
+  test("id, name and log are single-quoted verbatim", () => {
+    const cmd = buildForkSessionCommand({ sessionId: 'a"b', name: 'n"m', logFile: '/tmp/"x".log' });
+    assert.match(cmd, /--name 'n"m' --fork 'a"b'/);
+    assert.match(cmd, />> '\/tmp\/"x".log'/);
+  });
+  test("a single quote in the id or log path is closed, escaped and reopened", () => {
+    const cmd = buildForkSessionCommand({ sessionId: "it's", logFile: "/tmp/it's.log" });
+    assert.match(cmd, /--fork 'it'\\''s'/);
+    assert.match(cmd, />> '\/tmp\/it'\\''s.log'/);
+  });
+});
+
+// The name reaches sh as source: evaluate the generated --name word with a real
+// sh and check it comes back byte-for-byte, with nothing expanded or executed.
+describe("open/fork --name is shell-safe", () => {
+  const names = ["$(touch PWNED)", "`touch PWNED`", "trailing \\", "it's", "'", `a"b $HOME $${"{HOME}"} \\$x`, "cron: Gmail 2026-01-05 09:00"];
+  const builders = { open: buildOpenSessionCommand, fork: buildForkSessionCommand };
+  for (const [kind, build] of Object.entries(builders)) {
+    for (const name of names) {
+      test(`${kind}: ${name}`, () => {
+        const dir = mkdtempSync(join(tmpdir(), "name-quote-"));
+        try {
+          const cmd = build({ sessionId: "abc", name, logFile: "/tmp/b.log" });
+          const word = cmd.match(/ --name (.*) --(?:session|fork) 'abc'/)[1];
+          const r = spawnSync("sh", ["-c", `printf %s ${word}`], { cwd: dir, encoding: "utf-8" });
+          assert.equal(r.status, 0);
+          assert.equal(r.stdout, name);
+          assert.equal(existsSync(join(dir, "PWNED")), false);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
+// In-memory fs for findSessionCwd. `tree` maps dirName -> { fileName: content }.
+// Special content sentinels: a THROW_READ file throws on read; a dir listed in
+// throwDirs throws on readdirSync.
+function fakeDeps(tree, { rootExists = true, throwRoot = false, throwDirs = [] } = {}) {
+  const ROOT = "/sessions";
+  return {
+    sessionsRoot: ROOT,
+    existsSync: (p) => (p === ROOT ? rootExists : true),
+    readdirSync: (p) => {
+      if (p === ROOT) {
+        if (throwRoot) throw new Error("root boom");
+        return Object.keys(tree).map((name) => ({ name, isDirectory: () => tree[name] !== null }));
+      }
+      const dirName = p.slice(ROOT.length + 1);
+      if (throwDirs.includes(dirName)) throw new Error("dir boom");
+      return Object.keys(tree[dirName] || {});
+    },
+    readFileSync: (fp) => {
+      const parts = fp.split("/");
+      const file = parts.pop();
+      const dirName = parts.pop();
+      const content = tree[dirName]?.[file];
+      if (content === "THROW_READ") throw new Error("read boom");
+      return content;
+    },
+  };
+}
+
+const line = (obj) => `${JSON.stringify(obj)}\nmore\n`;
+
+describe("findSessionCwd", () => {
+  test("returns undefined when the sessions root is absent", () => {
+    assert.equal(findSessionCwd("x", fakeDeps({}, { rootExists: false })), undefined);
+  });
+
+  test("fast path: filename embeds the id → returns meta.cwd", () => {
+    const deps = fakeDeps({
+      "proj-a": { "2026_abc123.jsonl": line({ id: "abc123", cwd: "/work/a" }) },
+    });
+    assert.equal(findSessionCwd("abc123", deps), "/work/a");
+  });
+
+  test("authoritative path: filename uuid differs from the first-line id", () => {
+    const deps = fakeDeps({
+      "proj-b": { "2026_FILEUUID.jsonl": line({ id: "realid-999", cwd: "/work/b" }) },
+    });
+    assert.equal(findSessionCwd("realid-999", deps), "/work/b");
+  });
+
+  test("returns undefined when nothing matches", () => {
+    const deps = fakeDeps({
+      "proj-b": { "2026_x.jsonl": line({ id: "other", cwd: "/work/x" }) },
+    });
+    assert.equal(findSessionCwd("nope", deps), undefined);
+  });
+
+  test("skips non-directory entries, non-.jsonl files, and unreadable dirs", () => {
+    const deps = fakeDeps(
+      {
+        "a-file": null, // not a directory
+        "bad-dir": { "2026_zzz.jsonl": line({ id: "zzz", cwd: "/nope" }) },
+        "proj": { "notes.txt": "ignore me", "2026_target.jsonl": line({ id: "target", cwd: "/work/ok" }) },
+      },
+      { throwDirs: ["bad-dir"] },
+    );
+    assert.equal(findSessionCwd("target", deps), "/work/ok");
+  });
+
+  test("fast-path filename match but no cwd in meta → not returned", () => {
+    const deps = fakeDeps({
+      "proj": { "2026_hasid.jsonl": line({ id: "hasid" }) }, // no cwd
+    });
+    assert.equal(findSessionCwd("hasid", deps), undefined);
+  });
+
+  test("unparseable / unreadable session files are skipped in both passes", () => {
+    const deps = fakeDeps({
+      "proj": {
+        "2026_broken.jsonl": "{not json", // filename doesn't match query → scanned, parse fails
+        "2026_throw.jsonl": "THROW_READ", // read throws
+        "2026_good.jsonl": line({ id: "want", cwd: "/work/found" }),
+      },
+    });
+    assert.equal(findSessionCwd("want", deps), "/work/found");
+  });
+
+  test("outer readdir failure is swallowed → undefined", () => {
+    assert.equal(findSessionCwd("x", fakeDeps({}, { throwRoot: true })), undefined);
+  });
+});
+
+describe("buildCronRunArgv", () => {
+  test("zsh wrapper with every variable as a positional parameter, prompt after --", () => {
+    const argv = buildCronRunArgv({ sessionId: "sid", name: "cron: x", model: "m/p", prompt: "-do it", runDir: "/r" });
+    assert.equal(argv[0], "zsh");
+    assert.equal(argv[1], "-c");
+    assert.deepEqual(argv.slice(3), ["sh", "sid", "cron: x", "m/p", "-do it", "/r", "pi"]);
+    assert.match(argv[2], /"\$6" -p --session-id "\$1" --name "\$2" --model "\$3" -- "\$4" > "\$5\/out.log" 2>&1/);
+    assert.doesNotMatch(argv[2], /sid|cron: x|-do it/);
+  });
+
+  test("piBin overrides the executable", () => {
+    assert.equal(buildCronRunArgv({ sessionId: "s", name: "n", model: "m", prompt: "p", runDir: "/r", piBin: "/stub" }).at(-1), "/stub");
+  });
+
+  // Runs the real wrapper with a stub pi. ZDOTDIR points at the temp dir so the
+  // user's own ~/.zshenv is not sourced by the test.
+  const hasZsh = spawnSync("zsh", ["-c", "true"]).status === 0;
+  test("wrapper passes args verbatim, captures output, removes the discovery file, writes exit", { skip: !hasZsh && "zsh not installed" }, () => {
+    const dir = mkdtempSync(join(tmpdir(), "cron-argv-"));
+    try {
+      const stub = join(dir, "stub-pi");
+      writeFileSync(stub, '#!/bin/sh\nfor a in "$@"; do printf "[%s]\\n" "$a"; done\necho err >&2\nexit 3\n');
+      chmodSync(stub, 0o755);
+      writeFileSync(join(dir, "sid.json"), "{}");
+      const prompt = `it's "$(touch ${dir}/pwned)" \`x\` $HOME`;
+      const argv = buildCronRunArgv({ sessionId: "sid", name: "cron: n", model: "m", prompt, runDir: dir, piBin: stub });
+      const r = spawnSync(argv[0], argv.slice(1), { env: { PATH: process.env.PATH, ZDOTDIR: dir, PI_BRIDGE_DIR: dir } });
+      assert.equal(r.status, 0);
+      assert.equal(readFileSync(join(dir, "out.log"), "utf-8"), `[-p]\n[--session-id]\n[sid]\n[--name]\n[cron: n]\n[--model]\n[m]\n[--]\n[${prompt}]\nerr\n`);
+      assert.equal(readFileSync(join(dir, "exit"), "utf-8"), "3\n");
+      assert.equal(existsSync(join(dir, "sid.json")), false);
+      assert.equal(existsSync(join(dir, "exit.tmp")), false);
+      assert.equal(existsSync(join(dir, "pwned")), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("sessionFileExists", () => {
+  const ROOT = "/sessions";
+  const deps = (tree, { throwRoot = false, throwDirs = [] } = {}) => ({
+    sessionsRoot: ROOT,
+    readdirSync: (p) => {
+      if (p === ROOT) {
+        if (throwRoot) throw new Error("no root");
+        return Object.keys(tree).map((name) => ({ name, isDirectory: () => tree[name] !== null }));
+      }
+      const name = p.slice(ROOT.length + 1);
+      if (throwDirs.includes(name)) throw new Error("dir boom");
+      return tree[name];
+    },
+  });
+
+  const cases = [
+    { name: "matches the *_<id>.jsonl filename", tree: { p: ["2026-01-01T00-00-00-000Z_abc.jsonl"] }, id: "abc", want: true },
+    { name: "id must be the whole suffix after _", tree: { p: ["2026_xabc.jsonl", "2026_abc.jsonl.bak"] }, id: "abc", want: false },
+    { name: "skips files at the root and unreadable dirs", tree: { "f.jsonl": null, bad: [], q: ["t_abc.jsonl"] }, id: "abc", want: true, opts: { throwDirs: ["bad"] } },
+    { name: "missing root is false", tree: {}, id: "abc", want: false, opts: { throwRoot: true } },
+    { name: "no match is false", tree: { p: ["t_other.jsonl"] }, id: "abc", want: false },
+  ];
+  for (const c of cases) {
+    test(c.name, () => assert.equal(sessionFileExists(c.id, deps(c.tree, c.opts)), c.want));
+  }
+
+  test("listSessionFileIds collects every id in one pass", () => {
+    const tree = { p: ["2026_a.jsonl", "2026_b.jsonl", "notes.txt", "nounderscore.jsonl"], q: ["2026_c.jsonl"], "f.jsonl": null };
+    assert.deepEqual([...listSessionFileIds(deps(tree))].sort(), ["a", "b", "c"]);
+  });
+});
+
+describe("sessionShellArgv", () => {
+  const cases = [
+    { name: "zsh on PATH → zsh -c", pathEnv: "/a:/opt/zsh-bin:/b", exe: ["/opt/zsh-bin/zsh"], want: "zsh" },
+    { name: "no zsh on PATH → sh -c", pathEnv: "/a:/b", exe: ["/a/sh"], want: "sh" },
+    { name: "empty PATH entries are skipped", pathEnv: "::", exe: ["zsh"], want: "sh" },
+    { name: "empty PATH → sh -c", pathEnv: "", exe: [], want: "sh" },
+  ];
+  for (const c of cases) {
+    test(c.name, () => {
+      const isExecutable = (p) => c.exe.includes(p);
+      const cmd = "tail -f /dev/null | pi";
+      // zsh gets no_multios and clobber first (see sessionShellArgv); sh runs the string as is
+      const want = c.want === "zsh" ? ["zsh", "-c", `setopt no_multios clobber; ${cmd}`] : ["sh", "-c", cmd];
+      assert.deepEqual(sessionShellArgv(cmd, { pathEnv: c.pathEnv, isExecutable }), want);
+    });
+  }
+
+  test("default probe: finds a real executable, ignores directories and non-executables", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shell-argv-"));
+    try {
+      const bin = join(dir, "bin");
+      const notExec = join(dir, "noexec");
+      const isDir = join(dir, "isdir");
+      for (const d of [bin, notExec, isDir]) mkdirSync(d);
+      mkdirSync(join(isDir, "zsh"));
+      writeFileSync(join(notExec, "zsh"), "");
+      writeFileSync(join(bin, "zsh"), "#!/bin/sh\n");
+      chmodSync(join(bin, "zsh"), 0o755);
+      assert.equal(sessionShellArgv("x", { pathEnv: [notExec, isDir].join(":") })[0], "sh");
+      assert.equal(sessionShellArgv("x", { pathEnv: [notExec, isDir, bin].join(":") })[0], "zsh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults to process.env.PATH", () => {
+    const saved = process.env.PATH;
+    try {
+      delete process.env.PATH;
+      assert.equal(sessionShellArgv("x")[0], "sh");
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+});
+
+// Run a session command string for real through the shell sessionShellArgv
+// picks, with stubs for `tail` (exits at once instead of blocking), `sleep`
+// and `pi` (one line to stdout, one to stderr) first on PATH and an isolated
+// ZDOTDIR (the user's own ~/.zshenv is never read). The command routes pi's
+// stderr to the log and must discard its stdout (the RPC event stream).
+// piBody replaces the stub pi; logDir is a directory name created under the temp
+// dir to hold the log (any name, e.g. hostile ones); inspect(dir) runs before the
+// temp dir is deleted and, when given, the result is { log, inspected }.
+function runSessionCommand(build, { shell, zshenv = "", piBody = "echo STDOUT-EVENT-STREAM; echo STDERR-LINE >&2", logDir, inspect }) {
+  const dir = mkdtempSync(join(tmpdir(), "session-cmd-"));
+  try {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    for (const [name, body] of [["tail", "exit 0"], ["sleep", "exit 0"], ["pi", piBody]]) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    writeFileSync(join(dir, ".zshenv"), zshenv);
+    if (logDir) mkdirSync(join(dir, logDir));
+    const logFile = join(dir, logDir ?? "", "session.log");
+    const deps = shell === "sh" ? { isExecutable: () => false } : {};
+    const argv = sessionShellArgv(build(logFile), deps);
+    assert.equal(argv[0], shell);
+    const r = spawnSync(argv[0], argv.slice(1), { cwd: dir, env: { PATH: `${bin}:${process.env.PATH}`, ZDOTDIR: dir, HOME: dir }, encoding: "utf-8", timeout: 15000 });
+    assert.equal(r.status, 0, r.stderr);
+    const log = readFileSync(logFile, "utf-8");
+    return inspect ? { log, inspected: inspect(dir) } : log;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const HAS_ZSH = spawnSync("zsh", ["-c", "true"]).status === 0;
+
+describe("session commands under the chosen shell: pi's stdout never reaches the log", () => {
+  const builders = {
+    spawn: (logFile) => buildSpawnCommand({ logFile, prefix: "[t]" }),
+    open: (logFile) => buildOpenSessionCommand({ sessionId: "abc", name: "n", logFile, prefix: "[t]" }),
+    fork: (logFile) => buildForkSessionCommand({ sessionId: "abc", name: "n", logFile, prefix: "[t]" }),
+  };
+  const shells = [
+    { shell: "sh", label: "sh" },
+    { shell: "zsh", label: "zsh (MULTIOS on by default)" },
+    { shell: "zsh", label: "zsh with setopt multios in .zshenv", zshenv: "setopt multios\n" },
+    { shell: "zsh", label: "zsh with setopt noclobber in .zshenv, log not created yet", zshenv: "setopt noclobber\n" },
+  ];
+  for (const [kind, build] of Object.entries(builders)) {
+    for (const c of shells) {
+      const skip = c.shell === "zsh" && !HAS_ZSH && "zsh not installed";
+      test(`${kind} via ${c.label}`, { skip }, () => {
+        assert.equal(runSessionCommand(build, c), "[t] STDERR-LINE\n");
+      });
+    }
+  }
+});
+
+// The id and the log path reach the shell as source. Run the generated command
+// through each real shell with a stub pi that prints the id it received, and
+// check the value arrives byte-for-byte and nothing in it is expanded or run.
+const HOSTILE_VALUES = [
+  "a $(echo EXPANDED) b",
+  "back `echo EXPANDED` tick",
+  "$HOME",
+  `mixed '"$HOME"' \\ end`,
+  "trailing\\",
+  'a\\"b',
+  "it's here",
+  'with "double" quotes',
+  "two  spaces",
+  "/plain/path.jsonl",
+];
+const HOSTILE_LOG_DIR = "h $(touch M1) `touch M2` it's \"q\"";
+const SHELLS = [
+  { shell: "sh", skip: false },
+  { shell: "zsh", skip: !HAS_ZSH && "zsh not installed" },
+];
+const PI_ECHOES_ARG = 'while [ $# -gt 0 ]; do case "$1" in --session|--fork) printf "%s\\n" "$2" >&2;; esac; shift; done';
+
+describe("open/fork: the session id and the log path are shell-safe", () => {
+  const builders = {
+    open: (extra) => (logFile) => buildOpenSessionCommand({ logFile, prefix: "[t]", ...extra }),
+    fork: (extra) => (logFile) => buildForkSessionCommand({ logFile, prefix: "[t]", ...extra }),
+  };
+  for (const [kind, make] of Object.entries(builders)) {
+    for (const { shell, skip } of SHELLS) {
+      for (const sessionId of HOSTILE_VALUES) {
+        test(`${kind} id via ${shell}: ${JSON.stringify(sessionId)}`, { skip }, () => {
+          assert.equal(runSessionCommand(make({ sessionId }), { shell, piBody: PI_ECHOES_ARG }), `[t] ${sessionId}\n`);
+        });
+      }
+      test(`${kind} log path via ${shell}: hostile directory name`, { skip }, () => {
+        const { log, inspected } = runSessionCommand(make({ sessionId: "abc" }), {
+          shell,
+          piBody: PI_ECHOES_ARG,
+          logDir: HOSTILE_LOG_DIR,
+          inspect: (dir) => ["M1", "M2"].filter((m) => existsSync(join(dir, m))),
+        });
+        assert.equal(log, "[t] abc\n");
+        assert.deepEqual(inspected, []);
+      });
+    }
+  }
+});
+
+describe("spawn: the log path is shell-safe", () => {
+  for (const { shell, skip } of SHELLS) {
+    test(`spawn log path via ${shell}: hostile directory name`, { skip }, () => {
+      const { log, inspected } = runSessionCommand((logFile) => buildSpawnCommand({ logFile, prefix: "[t]" }), {
+        shell,
+        logDir: HOSTILE_LOG_DIR,
+        inspect: (dir) => ["M1", "M2"].filter((m) => existsSync(join(dir, m))),
+      });
+      assert.equal(log, "[t] STDERR-LINE\n");
+      assert.deepEqual(inspected, []);
+    });
+  }
+});
