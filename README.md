@@ -11,6 +11,47 @@ A WebUI + HTTP bridge for [pi](https://pi.dev) coding-agent sessions.
 The hub is additive: install just the extension for per-session mode, or run the
 hub in front of it for a single-pane, cross-session experience.
 
+## Features
+
+| Area | What you get | Where |
+|------|--------------|-------|
+| Chat | Streaming markdown, tool calls, thinking and subagent blocks, diffs, syntax highlighting, image and file upload, file viewer, QR code for mobile | extension + components |
+| Long sessions | History pages in by turn ("Load earlier"); a joining tab replays the in-flight turn | extension |
+| Session tree | Browse the branch tree and switch branches | extension + hub |
+| Models and commands | Model picker, slash-command palette, `/compact` | extension |
+| Steering | Send a message mid-turn (steer), or queue a follow-up with Option/Cmd/Ctrl+Enter | hub + extension |
+| Session management | New (cwd or resume by id), open, clone, rename, kill and reload sessions from the browser | hub |
+| Session sidebar | Ordered by last activity, grouped (last 2 days / last 7 days / older), user groups, unread marker for turns you have not seen, resizable | hub |
+| Message queue | Per-session FIFO for messages sent while busy; dispatched when the turn ends | hub |
+| Notifications | Browser notification when a background session finishes a turn | hub |
+| Cron | Scheduled headless `pi -p` jobs from `cron-jobs.json`, Cron panel with run history, logs, Run now and Open | hub |
+| Telegram | Drive sessions from a private Telegram chat, completion pushes | telegram |
+| Auto-naming | Session title from the first prompt, retitled once after the first turn | extension |
+| Self-consistency banners | Guard status banners shown in history | components |
+
+## Packages
+
+| Package | Role |
+|---------|------|
+| `packages/components` | Shared browser UI and pure modules (`@wirelessr/pi-webui-components`) |
+| `packages/extension` | In-process pi bridge: one HTTP + SSE server per session |
+| `packages/hub` | Reverse proxy and aggregator, single-page UI, queue, cron |
+| `packages/telegram` | Telegram bot, a client of the hub's HTTP API |
+
+## Stability
+
+From 1.0.0 these are the compatibility contract; a breaking change to any of
+them needs a major version:
+
+- The bridge REST/SSE API (`/api/openapi.json` is the source of truth).
+- The hub routes: `/api/sessions`, `/api/events`, `/api/hub-state`,
+  `/api/cron/*`, `/s/<sessionId>/...`.
+- On-disk formats under `PI_BRIDGE_DIR`: discovery files, `hub-state.json`,
+  `cron/cron-jobs.json`, `cron/runs/<runId>/run.json`.
+- A newer hub against an older bridge degrades (for example history paging
+  falls back to a full render) rather than breaking, but new features need the
+  matching extension release. Update both together.
+
 ## Why the hub can't replace the per-session bridges
 
 `pi.sendUserMessage` and the `agent_*` events are only reachable **inside** a pi
@@ -113,13 +154,15 @@ happens.
 
 ## Security
 
-Binding to `0.0.0.0` exposes the bridge/hub to your network with **no
-authentication** — anyone who can reach the port can drive your agent. Use only
-on trusted networks, or set the host to `127.0.0.1` for local-only.
+There is no built-in authentication. Binding to `0.0.0.0` exposes the bridge
+and hub to your network, and anyone who can reach the port can drive your
+agent. Put the hub behind an authenticating proxy (for example an ngrok tunnel
+with OAuth), or set the host to `127.0.0.1` for local-only use. The Telegram
+bot reaches the hub over localhost and only obeys one chat id.
 
 ## Development
 
-npm workspaces (`packages/{components,extension,hub}`), Node's built-in test
+npm workspaces (`packages/{components,extension,hub,telegram}`), Node's built-in test
 runner, no external framework.
 
 ```bash
@@ -141,4 +184,4 @@ publishes it to the `release` branch + a GitHub Release. No npm registry.
   HTTP 409; the hub layers a per-session queue on top).
 - Bridge exposes `/compact`; other TUI `/commands` aren't available over HTTP.
 - Cross-session busy→idle detection is poll-based (~2s).
-- No authentication.
+- No built-in authentication (see Security).

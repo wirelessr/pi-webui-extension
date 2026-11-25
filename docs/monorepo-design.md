@@ -1,9 +1,22 @@
 # pi-webui monorepo — design
 
-Status: proposed. Target branch: `refactor/monorepo`. Developed in a git
-worktree at `~/Workdir/pi-webui-monorepo`; the live extension at
-`~/.pi/agent/extensions/pi-webui-extension` stays on `main` and untouched
-until a deliberate cutover (see §10).
+Status: implemented (historical design record). This document captures the
+original proposal. Where it differs from what shipped, see "What shipped
+differently" below; for current behavior read the code, tests, `README.md`,
+and `CLAUDE.md`.
+
+## What shipped differently
+
+- **Distribution (§7, §8, §10, D1):** no GitHub Packages. The extension is a
+  flat build with `components` vendored under `vendor/`; a `v*.*.*` tag
+  publishes it to the `release` branch (`npm run release <x.y.z>`). The local
+  install is a build output deployed with `scripts/deploy-local.sh`.
+- **Hub addressing (D2):** path prefix `/s/<id>/...`, as recommended.
+- **Beyond the original scope:** the hub gained session spawn/resume/clone,
+  per-session message queue, grouped and activity-ordered sidebar with unread
+  markers, and a cron scheduler; a fourth package, `packages/telegram`, is a
+  Telegram client of the hub API. Authentication is intentionally left to an
+  external proxy.
 
 ## 1. Goal
 
