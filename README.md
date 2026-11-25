@@ -15,7 +15,7 @@ hub in front of it for a single-pane, cross-session experience.
 
 | Area | What you get | Where |
 |------|--------------|-------|
-| Chat | Streaming markdown, tool calls, thinking and subagent blocks, diffs, syntax highlighting, paste-to-upload images, file viewer, QR code for mobile (per-session UI) | extension + components |
+| Chat | Streaming markdown, tool calls, thinking and subagent blocks, diffs, syntax highlighting, paste-to-upload images, file viewer, QR code for mobile (per-session UI only) | extension + components |
 | Long sessions | History pages in by turn ("Load earlier"); a joining tab replays the in-flight turn | extension |
 | Session tree | Browse the branch tree and switch branches | extension + hub |
 | Models and commands | Model picker, slash-command palette, `/compact` | extension |
@@ -100,7 +100,7 @@ discovery dir exists).
 
 ```bash
 git clone https://github.com/wirelessr/pi-webui-extension && cd pi-webui-extension
-git checkout v1.0.0     # match the extension release you installed
+git checkout v<x.y.z>   # match the extension release you installed
 npm install
 pm2 start packages/hub/ecosystem.config.cjs   # or: node packages/hub/src/server.js
 ```
@@ -160,7 +160,8 @@ There is no built-in authentication, and both the hub (`PI_HUB_HOST`) and every
 session bridge (`PI_HTTP_HOST`) default to `0.0.0.0`. Anyone who can reach
 either port can drive your agent. For remote access, bind both to `127.0.0.1`
 and put an authenticating proxy (for example an ngrok tunnel with OAuth) in
-front of the hub only; a proxy alone leaves the hub and the bridge ports open
+front of the hub only (set `PI_HUB_HOST` in the hub's environment and
+`PI_HTTP_HOST` where sessions are started, for example `~/.zshenv`); a proxy alone leaves the hub and the bridge ports open
 on your LAN. The hub reaches bridges over localhost. The Telegram bot reaches
 the hub over localhost and only obeys one chat id.
 

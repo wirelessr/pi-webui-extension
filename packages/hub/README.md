@@ -85,8 +85,8 @@ history, logs, Run now, and Open (resume the run's session).
   others only read. A bad file or job degrades, it does not stop the hub.
 - Jobs run under `zsh -c` (zsh is required; there is no fallback) with the
   hub's environment, overlaid by `~/.zshenv`. Keep `~/.zshenv` env-only
-  (exports, no aliases, `cd` or `setopt`) and never set `PI_BRIDGE_DIR`,
-  `PI_HTTP_PORT` or `PI_HTTP_HOST` there.
+  (exports, no aliases, `cd` or `setopt`) and never set `PI_BRIDGE_DIR`
+  or `PI_HTTP_PORT` there.
 
 ## Not in scope
 
